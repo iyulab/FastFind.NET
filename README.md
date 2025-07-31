@@ -6,6 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![.NET](https://img.shields.io/badge/.NET-9.0-blue.svg)](https://dotnet.microsoft.com/)  
 [![Platform](https://img.shields.io/badge/platform-cross--platform-brightgreen.svg)](https://github.com/iyulab/FastFind.NET)
+[![.NET Build and NuGet Publish](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml/badge.svg)](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml)
 
 ## 🚀 Revolutionary Performance Features
 
