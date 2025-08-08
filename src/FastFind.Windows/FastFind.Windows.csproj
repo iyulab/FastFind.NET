@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Platforms>x64</Platforms>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
@@ -10,11 +9,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	<PackageId>FastFind.Windows</PackageId>
     <Title>FastFind.NET Windows</Title>
-    <!-- 성능 최적화 옵션 -->
-    <Optimize>true</Optimize>
-    <DebugType>portable</DebugType>
-    <TieredCompilation>true</TieredCompilation>
-    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

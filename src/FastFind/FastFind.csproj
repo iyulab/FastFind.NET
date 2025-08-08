@@ -2,11 +2,10 @@
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-	<PackageId>FastFind</PackageId>
-	<Title>FastFind</Title>
+	<PackageId>FastFind.Core</PackageId>
+	<Title>FastFind.NET Core</Title>
     <Platforms>AnyCPU;x64</Platforms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

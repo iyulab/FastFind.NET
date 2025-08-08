@@ -1,24 +1,25 @@
 <Project>
   <PropertyGroup>
     <LangVersion>preview</LangVersion>
-    <ImplicitUsings>disable</ImplicitUsings>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-	<PackageVersion>1.0.0</PackageVersion>
-	<Description>Lightning-fast cross-platform file search library - Core interfaces and models</Description>
-	<PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft</PackageTags>
-	<PackageLicenseExpression>MIT</PackageLicenseExpression>
-	<PackageProjectUrl>https://github.com/iyulab/FastFind.NET</PackageProjectUrl>
-	<RepositoryUrl>https://github.com/iyulab/FastFind.NET</RepositoryUrl>
-	<RepositoryType>git</RepositoryType>
-    <PackageIconUrl>https://raw.githubusercontent.com/iyulab-rnd/public/main/images/iyulab_128.png</PackageIconUrl>
-	<PackageReadmeFile>README.md</PackageReadmeFile>
+    
+    <!-- 패키지 정보 -->
+    <Version>1.0.1</Version>
+    <Description>Lightning-fast cross-platform file search library - Core interfaces and models</Description>
+    <PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft</PackageTags>
+    <PackageProjectUrl>https://github.com/iyulab/FastFind.NET</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/iyulab/FastFind.NET</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-	<AssemblyVersion>1.0.0.0</AssemblyVersion>
-	<FileVersion>1.0.0.0</FileVersion>
-	<Authors>iyulab</Authors>
-    <Copyright>Copyright (c) Iyulab Corporation 2025.</Copyright>
     <PackageIcon>logo.png</PackageIcon>
+    
+    <!-- 작성자 정보 -->
+    <Authors>iyulab</Authors>
+    <Copyright>Copyright (c) Iyulab Corporation 2025.</Copyright>
   </PropertyGroup>
+  
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="\" />
     <None Include="../logo.png" Pack="true" PackagePath="\" />

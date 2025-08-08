@@ -1,11 +1,18 @@
-# FastFind
+# FastFind.NET
 
-⚡ Ultra-high performance cross-platform file search library core with .NET 9 optimizations
+⚡ Ultra-high performance cross-platform file search library for .NET 9
 
-[![NuGet Version](https://img.shields.io/nuget/v/FastFind.svg)](https://www.nuget.org/packages/FastFind)  
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![.NET](https://img.shields.io/badge/.NET-9.0-blue.svg)](https://dotnet.microsoft.com/)  
-[![Platform](https://img.shields.io/badge/platform-cross--platform-brightgreen.svg)](https://github.com/iyulab/FastFind.NET)
+[![Build Status](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml/badge.svg)](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml)
+
+## 📦 Available Packages
+
+| Package | Status | Version | Platform | Description |
+|---------|--------|---------|----------|-------------|
+| **FastFind.Core** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Cross-Platform | Core interfaces and models |
+| **FastFind.Windows** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | Windows 10/11 | Windows-optimized implementation |
+| **FastFind.Unix** | 🚧 Roadmap | - | Linux/macOS | Unix implementation (coming Q2 2025) |
 
 ## 🚀 Revolutionary Performance Features
 
@@ -29,35 +36,46 @@
 
 ## 📦 Installation
 
-### NuGet Package Manager
+### Core Package (Required)
 ```bash
-Install-Package FastFind
+# .NET CLI
+dotnet add package FastFind.Core
+
+# Package Manager Console
+Install-Package FastFind.Core
 ```
 
-### .NET CLI
+### Platform-Specific Implementation
+
+#### Windows (Recommended)
 ```bash
-dotnet add package FastFind
+dotnet add package FastFind.Windows
 ```
 
-### PackageReference
-```xml
-<PackageReference Include="FastFind" Version="1.0.0" />
+#### Unix/Linux (🚧 Coming Soon)
+```bash
+# Will be available in Q2 2025
+dotnet add package FastFind.Unix
 ```
 
 ## 🎯 Quick Start
 
-### Basic Search Engine Creation
+### Basic Setup & Usage
 ```csharp
 using FastFind;
+using Microsoft.Extensions.Logging;
 
-// Create platform-optimized search engine
-var searchEngine = FastFinder.CreateSearchEngine();
+// Create logger (optional)
+using var loggerFactory = LoggerFactory.Create(builder =>
+    builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+var logger = loggerFactory.CreateLogger<Program>();
 
-// Validate system capabilities
+// Validate system and create search engine
 var validation = FastFinder.ValidateSystem();
 if (validation.IsReady)
 {
     Console.WriteLine($"✅ {validation.GetSummary()}");
+    var searchEngine = FastFinder.CreateSearchEngine(logger);
 }
 ```
 
@@ -349,28 +367,31 @@ searchEngine.FileChanged += (sender, args) =>
 };
 ```
 
-## 🌐 Cross-Platform Support
+## 🌐 Platform Support
+
+### Current Status
+
+| Platform | Status | Performance | Features |
+|----------|--------|-------------|----------|
+| Windows 10/11 | ✅ Production | Excellent | Full NTFS optimization |
+| Windows Server 2019+ | ✅ Production | Excellent | Enterprise ready |
+| Linux | 🚧 Roadmap (Q2 2025) | TBD | ext4, inotify |
+| macOS | 🚧 Roadmap (Q2 2025) | TBD | APFS, FSEvents |
 
 ### Platform Detection
 ```csharp
-// Automatic platform detection
 var validation = FastFinder.ValidateSystem();
 
+Console.WriteLine($"Platform: {validation.Platform}");
 if (validation.IsReady)
 {
-    Console.WriteLine($"✅ Platform: {validation.Platform}");
-    Console.WriteLine($"   Features: {validation.GetSummary()}");
+    Console.WriteLine($"✅ Ready: {validation.GetSummary()}");
 }
 else
 {
-    Console.WriteLine($"❌ Issues: {validation.GetSummary()}");
+    Console.WriteLine($"⚠️ Issues: {validation.GetSummary()}");
 }
 ```
-
-### Platform-Specific Optimizations
-- **Windows**: NTFS MFT access, Junction links, VSS integration
-- **macOS**: APFS optimizations, FSEvents monitoring
-- **Linux**: ext4 support, inotify integration
 
 ## 🔬 Extension Points
 
@@ -401,67 +422,57 @@ public interface IPerformanceCollector
 }
 ```
 
+## 📚 Documentation
+
+- **[Getting Started](docs/getting-started.md)** - Setup and basic usage
+- **[API Reference](docs/api-reference.md)** - Complete API documentation  
+- **[Roadmap](docs/roadmap.md)** - Platform support and future plans
+
 ## 🛠️ Dependencies
 
-### Core Dependencies
-- **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Structured logging
-- **System.Linq.Async** (6.0.3): Async LINQ operations
+### FastFind.Core
+- **.NET 9.0**: Target framework
+- **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Logging support
+- **System.Linq.Async** (6.0.3): Async enumerable operations
 
-### Platform-Specific Additions
-- **Windows**: System.Management, System.Threading.Channels
-- **Unix**: Native libraries for file system access
+### FastFind.Windows  
+- **FastFind.Core**: Core package dependency
+- **Microsoft.Extensions.Logging** (9.0.7): Logging implementation
+- **Microsoft.Extensions.DependencyInjection** (9.0.7): DI container
+- **System.Management** (9.0.7): Windows system access
+- **System.Threading.Channels** (9.0.7): High-performance channels
 
-## 📚 API Reference
+## 🏗️ Architecture
 
-### Core Models
-- **FileItem**: Standard file representation
-- **FastFileItem**: Memory-optimized struct version
-- **SearchOptimizedFileItem**: UI-optimized with lazy loading
-- **SearchQuery**: Comprehensive search parameters
-- **SearchResult**: Search results with metadata
-
-### Enumerations
-- **PlatformType**: Windows, Unix, Custom
-- **FileChangeType**: Created, Modified, Deleted, Renamed
-- **SearchPhase**: Initializing, SearchingIndex, Completed, Failed, Cancelled
-- **IndexingPhase**: Initializing, Indexing, Optimizing, Completed, Failed
-
-### Events
-- **IndexingProgressEventArgs**: Real-time indexing progress
-- **SearchProgressEventArgs**: Search operation progress
-- **FileChangeEventArgs**: File system change notifications
-
-## 🎯 Best Practices
-
-### Performance Optimization
-```csharp
-// 1. Use FastFileItem for memory-sensitive operations
-var fastItems = items.Select(i => i.ToFastFileItem());
-
-// 2. Leverage SIMD operations for search
-bool matches = fastItem.MatchesName(searchTerm);
-
-// 3. Configure appropriate batch sizes
-var options = new IndexingOptions { BatchSize = Environment.ProcessorCount * 100 };
-
-// 4. Monitor memory usage
-var poolStats = StringPool.GetStats();
-if (poolStats.MemoryUsageMB > 500) StringPool.Cleanup();
+### Package Structure
+```
+FastFind.NET/
+├── FastFind.Core/           # Cross-platform core
+│   ├── Interfaces/          # ISearchEngine, IFileSystemProvider
+│   └── Models/              # FileItem, SearchQuery, Statistics
+├── FastFind.Windows/        # Windows implementation
+│   └── Implementation/      # NTFS-optimized providers
+└── FastFind.Unix/          # 🚧 Future Unix implementation
 ```
 
-### Error Handling
-```csharp
-try
-{
-    var results = await searchEngine.SearchAsync(query);
-}
-catch (OperationCanceledException)
-{
-    // Handle cancellation gracefully
-}
-catch (ArgumentException ex)
-{
-    // Handle invalid query parameters
-    logger.LogWarning("Invalid search query: {Message}", ex.Message);
-}
-```
+### Core Interfaces
+- **ISearchEngine**: Primary search operations interface
+- **IFileSystemProvider**: Platform-specific file system access
+- **ISearchIndex**: Search index management
+
+## 🤝 Contributing
+
+- **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/iyulab/FastFind.NET/issues)
+- **Discussions**: Join conversations on [GitHub Discussions](https://github.com/iyulab/FastFind.NET/discussions) 
+- **Pull Requests**: Bug fixes and documentation improvements welcome
+- **Roadmap Input**: Help prioritize Unix/Linux implementation features
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- .NET Team for .NET 9 performance improvements
+- Community feedback and feature requests
+- Open source libraries that inspired this project
