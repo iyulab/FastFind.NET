@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FastFind\ㅊ.csproj" />
+    <ProjectReference Include="..\FastFind\FastFind.csproj" />
     <ProjectReference Include="..\FastFind.Windows\FastFind.Windows.csproj" />
   </ItemGroup>
 

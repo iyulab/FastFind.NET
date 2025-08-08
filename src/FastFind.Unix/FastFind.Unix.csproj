@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FastFind\ㅊ.csproj" />
+    <ProjectReference Include="..\FastFind\FastFind.csproj" />
   </ItemGroup>
 
 </Project>
