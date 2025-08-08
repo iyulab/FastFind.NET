@@ -16,7 +16,7 @@ public readonly struct SearchOptimizedFileItem
     private readonly int _nameId;          // 검색 필수  
     private readonly int _directoryPathId; // 검색 필수
     private readonly int _extensionId;     // 검색 필수
-    
+
     // ⚡ 원시 데이터만 저장 (표시용 변환은 lazy)
     public readonly long Size;           // 원시 데이터
     public readonly long CreatedTicks;   // 원시 데이터
@@ -24,17 +24,17 @@ public readonly struct SearchOptimizedFileItem
     public readonly FileAttributes Attributes;
     public readonly char DriveLetter;
     public readonly ulong FileRecordNumber;
-    
+
     public SearchOptimizedFileItem(string fullPath, string name, string directoryPath, string extension,
                                  long size, DateTime created, DateTime modified, DateTime accessed,
                                  FileAttributes attributes, char driveLetter, ulong? fileRecordNumber = null)
     {
-        // 🚀 특화된 인터닝으로 중복 제거율 극대화
+        // 특화된 인터닝으로 중복 제거율 극대화
         _fullPathId = StringPool.InternPath(fullPath);
         _nameId = StringPool.InternName(name);
         _directoryPathId = StringPool.InternPath(directoryPath);
         _extensionId = StringPool.InternExtension(extension);
-        
+
         Size = size;
         CreatedTicks = created.Ticks;
         ModifiedTicks = modified.Ticks;
@@ -42,113 +42,113 @@ public readonly struct SearchOptimizedFileItem
         DriveLetter = driveLetter;
         FileRecordNumber = fileRecordNumber ?? 0;
     }
-    
-    // 🚀 즉시 필요한 검색용 속성들 (인라인 최적화)
+
+    // 즉시 필요한 검색용 속성들 (인라인 최적화)
     public string FullPath
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => StringPool.Get(_fullPathId);
     }
-    
+
     public string Name
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => StringPool.Get(_nameId);
     }
-    
+
     public string DirectoryPath
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => StringPool.Get(_directoryPathId);
     }
-    
+
     public string Extension
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => StringPool.Get(_extensionId);
     }
-    
+
     public bool IsDirectory
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (Attributes & FileAttributes.Directory) != 0;
     }
-    
+
     public bool IsHidden
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (Attributes & FileAttributes.Hidden) != 0;
     }
-    
+
     public bool IsSystem
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (Attributes & FileAttributes.System) != 0;
     }
-    
+
     // 💡 Lazy 표시용 속성들 - UI 요청시에만 계산 (더 효율적인 캐싱)
     public string SizeFormatted
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => LazyFormatCache.GetSizeFormatted(Size);
     }
-    
+
     public DateTime ModifiedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new DateTime(ModifiedTicks);
     }
-    
+
     public DateTime CreatedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new DateTime(CreatedTicks);
     }
-    
+
     public string FileType
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => IsDirectory ? "Folder" : LazyFormatCache.GetFileTypeDescription(Extension);
     }
-    
-    // 🚀 SIMD 최적화된 검색 메서드들
+
+    // SIMD 최적화된 검색 메서드들
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MatchesName(string searchTerm)
     {
         return SIMDStringMatcher.ContainsVectorized(Name.AsSpan(), searchTerm.AsSpan());
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MatchesPath(string searchTerm)
     {
         return SIMDStringMatcher.ContainsVectorized(FullPath.AsSpan(), searchTerm.AsSpan());
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MatchesWildcard(string pattern)
     {
         return SIMDStringMatcher.MatchesWildcard(Name.AsSpan(), pattern.AsSpan());
     }
-    
-    // 🚀 비트 연산 최적화된 속성 체크들
+
+    // 비트 연산 최적화된 속성 체크들
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasAttributes(FileAttributes attrs)
     {
         return (Attributes & attrs) != 0;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLargerThan(long sizeBytes)
     {
         return Size > sizeBytes;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsNewerThan(DateTime date)
     {
         return ModifiedTicks > date.Ticks;
     }
-    
+
     // 기존 FileItem과의 호환성을 위한 변환
     public FileItem ToFileItem()
     {
@@ -167,23 +167,23 @@ public readonly struct SearchOptimizedFileItem
             FileRecordNumber = FileRecordNumber
         };
     }
-    
-    // 🚀 고성능 비교 연산자들
+
+    // 고성능 비교 연산자들
     public override bool Equals(object? obj)
     {
         return obj is SearchOptimizedFileItem other && _fullPathId == other._fullPathId;
     }
-    
+
     public override int GetHashCode()
     {
         return _fullPathId; // ID 기반 해시는 매우 빠름
     }
-    
+
     public static bool operator ==(SearchOptimizedFileItem left, SearchOptimizedFileItem right)
     {
         return left._fullPathId == right._fullPathId;
     }
-    
+
     public static bool operator !=(SearchOptimizedFileItem left, SearchOptimizedFileItem right)
     {
         return left._fullPathId != right._fullPathId;
@@ -198,24 +198,24 @@ public static class LazyFormatCache
     // 💡 계층화된 캐시 - 자주 사용되는 크기들 우선 처리
     private static readonly ConcurrentDictionary<long, string> _commonSizes = new(Environment.ProcessorCount * 2, 1024);
     private static readonly ConcurrentDictionary<long, string> _largeSizes = new(Environment.ProcessorCount, 512);
-    
+
     // 💡 파일 타입 캐시 (확장자별) - 매우 효율적
     private static readonly ConcurrentDictionary<string, string> _fileTypes = new(Environment.ProcessorCount, 256);
-    
+
     // 💡 날짜 포맷 캐시 (동일 날짜 파일들이 많음)
     private static readonly ConcurrentDictionary<long, string> _dateFormats = new(Environment.ProcessorCount, 512);
-    
-    // 🚀 성능 통계 - 원자적 카운터
+
+    // 성능 통계 - 원자적 카운터
     private static long _cacheHits = 0;
     private static long _cacheMisses = 0;
     private static long _totalRequests = 0;
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string GetSizeFormatted(long bytes)
     {
         Interlocked.Increment(ref _totalRequests);
-        
-        // 🚀 계층화된 캐시 - 작은 파일(100MB 이하)은 별도 캐시
+
+        // 계층화된 캐시 - 작은 파일(100MB 이하)은 별도 캐시
         if (bytes < 104_857_600) // 100MB
         {
             if (_commonSizes.TryGetValue(bytes, out var cached))
@@ -223,7 +223,7 @@ public static class LazyFormatCache
                 Interlocked.Increment(ref _cacheHits);
                 return cached;
             }
-            
+
             Interlocked.Increment(ref _cacheMisses);
             return _commonSizes.GetOrAdd(bytes, FormatFileSizeFast);
         }
@@ -234,29 +234,29 @@ public static class LazyFormatCache
                 Interlocked.Increment(ref _cacheHits);
                 return cached;
             }
-            
+
             Interlocked.Increment(ref _cacheMisses);
             return _largeSizes.GetOrAdd(bytes, FormatFileSizeFast);
         }
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string GetFileTypeDescription(string extension)
     {
         Interlocked.Increment(ref _totalRequests);
-        
+
         if (_fileTypes.TryGetValue(extension, out var cached))
         {
             Interlocked.Increment(ref _cacheHits);
             return cached;
         }
-        
+
         Interlocked.Increment(ref _cacheMisses);
-        
+
         var result = _fileTypes.GetOrAdd(extension.ToLowerInvariant(), ext => ext switch
         {
             ".txt" => "Text Document",
-            ".pdf" => "PDF Document", 
+            ".pdf" => "PDF Document",
             ".doc" or ".docx" => "Word Document",
             ".xls" or ".xlsx" => "Excel Spreadsheet",
             ".ppt" or ".pptx" => "PowerPoint Presentation",
@@ -289,62 +289,62 @@ public static class LazyFormatCache
             "" => "File",
             _ => $"{ext.TrimStart('.').ToUpperInvariant()} File"
         });
-        
+
         return result;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string GetDateFormatted(DateTime date)
     {
         Interlocked.Increment(ref _totalRequests);
-        
+
         // 💡 날짜를 일 단위로 캐싱 (시간 부분 무시)
         var dayTicks = date.Date.Ticks;
-        
+
         if (_dateFormats.TryGetValue(dayTicks, out var cached))
         {
             Interlocked.Increment(ref _cacheHits);
             return cached;
         }
-        
+
         Interlocked.Increment(ref _cacheMisses);
         return _dateFormats.GetOrAdd(dayTicks, _ => date.ToString("yyyy-MM-dd HH:mm"));
     }
-    
-    // 🚀 최적화된 크기 포맷팅 (비트 시프트 + 룩업 테이블)
+
+    // 최적화된 크기 포맷팅 (비트 시프트 + 룩업 테이블)
     private static readonly string[] SizeUnits = { "bytes", "KB", "MB", "GB", "TB", "PB" };
     private static readonly long[] SizeThresholds = { 1L << 10, 1L << 20, 1L << 30, 1L << 40, 1L << 50 };
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string FormatFileSizeFast(long bytes)
     {
         if (bytes == 0) return "0 bytes";
         if (bytes < 0) return "Invalid size";
-        
-        // 🚀 비트 스캔으로 단위 결정 (매우 빠름)
+
+        // 비트 스캔으로 단위 결정 (매우 빠름)
         var unitIndex = 0;
         var value = (double)bytes;
-        
+
         while (unitIndex < SizeThresholds.Length && bytes >= SizeThresholds[unitIndex])
         {
             value /= 1024.0;
             unitIndex++;
         }
-        
-        // 🚀 정밀도 최적화 - 작은 값은 정수, 큰 값은 소수점 1자리
-        return unitIndex == 0 
+
+        // 정밀도 최적화 - 작은 값은 정수, 큰 값은 소수점 1자리
+        return unitIndex == 0
             ? $"{bytes} {SizeUnits[unitIndex]}"
-            : value < 10.0 
+            : value < 10.0
                 ? $"{value:F1} {SizeUnits[unitIndex + 1]}"
                 : $"{value:F0} {SizeUnits[unitIndex + 1]}";
     }
-    
-    // 🚀 메모리 정리 - 적응형 정리 전략
+
+    // 메모리 정리 - 적응형 정리 전략
     public static void Cleanup()
     {
         var totalMemoryPressure = GC.GetTotalMemory(false);
         var shouldAggressiveClean = totalMemoryPressure > 500_000_000; // 500MB 이상
-        
+
         // 크기가 큰 캐시부터 정리
         if (_commonSizes.Count > (shouldAggressiveClean ? 5000 : 20000))
         {
@@ -354,7 +354,7 @@ public static class LazyFormatCache
                 _commonSizes.TryRemove(kvp.Key, out _);
             }
         }
-        
+
         if (_largeSizes.Count > (shouldAggressiveClean ? 2000 : 10000))
         {
             var toRemove = _largeSizes.Take(shouldAggressiveClean ? 1000 : 2500).ToList();
@@ -363,8 +363,8 @@ public static class LazyFormatCache
                 _largeSizes.TryRemove(kvp.Key, out _);
             }
         }
-        
-        if (_fileTypes.Count > 2000) 
+
+        if (_fileTypes.Count > 2000)
         {
             // 파일 타입은 상대적으로 적으므로 보수적으로 정리
             var toRemove = _fileTypes.Take(500).ToList();
@@ -373,7 +373,7 @@ public static class LazyFormatCache
                 _fileTypes.TryRemove(kvp.Key, out _);
             }
         }
-        
+
         if (_dateFormats.Count > (shouldAggressiveClean ? 1000 : 5000))
         {
             var toRemove = _dateFormats.Take(shouldAggressiveClean ? 500 : 1000).ToList();
@@ -382,7 +382,7 @@ public static class LazyFormatCache
                 _dateFormats.TryRemove(kvp.Key, out _);
             }
         }
-        
+
         // 통계 초기화 (선택적)
         if (shouldAggressiveClean)
         {
@@ -391,7 +391,7 @@ public static class LazyFormatCache
             Interlocked.Exchange(ref _totalRequests, 0);
         }
     }
-    
+
     // 통계 정보
     public static (long Hits, long Misses, long Total, double HitRatio) GetCacheStats()
     {
@@ -399,15 +399,15 @@ public static class LazyFormatCache
         var misses = Interlocked.Read(ref _cacheMisses);
         var total = Interlocked.Read(ref _totalRequests);
         var hitRatio = total > 0 ? (double)hits / total : 0;
-        
+
         return (hits, misses, total, hitRatio);
     }
-    
+
     // 상세 통계
     public static LazyFormatCacheStats GetDetailedStats()
     {
         var (hits, misses, total, hitRatio) = GetCacheStats();
-        
+
         return new LazyFormatCacheStats(
             hits, misses, total, hitRatio,
             _commonSizes.Count, _largeSizes.Count,
@@ -415,7 +415,7 @@ public static class LazyFormatCache
             EstimateMemoryUsage()
         );
     }
-    
+
     private static long EstimateMemoryUsage()
     {
         // 대략적인 메모리 사용량 계산
@@ -423,7 +423,7 @@ public static class LazyFormatCache
         var largeSizesMemory = _largeSizes.Count * (8 + 20);
         var fileTypesMemory = _fileTypes.Count * (10 + 15); // avg key + avg value
         var dateFormatsMemory = _dateFormats.Count * (8 + 16); // long key + date string
-        
+
         return commonSizesMemory + largeSizesMemory + fileTypesMemory + dateFormatsMemory;
     }
 }
@@ -443,9 +443,9 @@ public readonly struct LazyFormatCacheStats
     public readonly int FileTypesCount;
     public readonly int DateFormatsCount;
     public readonly long EstimatedMemoryUsage;
-    
+
     public LazyFormatCacheStats(long cacheHits, long cacheMisses, long totalRequests, double hitRatio,
-                               int commonSizesCount, int largeSizesCount, int fileTypesCount, 
+                               int commonSizesCount, int largeSizesCount, int fileTypesCount,
                                int dateFormatsCount, long estimatedMemoryUsage)
     {
         CacheHits = cacheHits;
@@ -458,7 +458,7 @@ public readonly struct LazyFormatCacheStats
         DateFormatsCount = dateFormatsCount;
         EstimatedMemoryUsage = estimatedMemoryUsage;
     }
-    
+
     public double HitRatioPercentage => HitRatio * 100.0;
     public double MemoryUsageMB => EstimatedMemoryUsage / (1024.0 * 1024.0);
 }
@@ -485,14 +485,14 @@ public static class SearchOptimizedFileItemExtensions
             item.FileRecordNumber
         );
     }
-    
-    // 🚀 배치 변환 - 더 효율적
+
+    // 배치 변환 - 더 효율적
     public static IEnumerable<SearchOptimizedFileItem> ToSearchOptimizedBatch(this IEnumerable<FileItem> items)
     {
         return items.Select(item => item.ToSearchOptimized());
     }
-    
-    // 🚀 병렬 배치 변환 - 대용량 데이터용
+
+    // 병렬 배치 변환 - 대용량 데이터용
     public static ParallelQuery<SearchOptimizedFileItem> ToSearchOptimizedParallel(this IEnumerable<FileItem> items)
     {
         return items.AsParallel()

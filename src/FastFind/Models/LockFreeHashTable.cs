@@ -17,12 +17,12 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
         public volatile bool HasValue;
         public volatile int Version; // ABA 문제 방지
     }
-    
+
     private readonly Entry[] _buckets;
     private readonly int _mask;
     private readonly int _maxProbes;
     private long _count; // volatile 제거
-    
+
     public LockFreeHashTable(int capacity = 1024 * 1024)
     {
         var size = NextPowerOfTwo(capacity);
@@ -30,9 +30,9 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
         _mask = size - 1;
         _maxProbes = Math.Min(32, (int)Math.Log2(size)); // 로그 기반 최대 탐사
     }
-    
+
     public long Count => Interlocked.Read(ref _count);
-    
+
     /// <summary>
     /// 무락 읽기 - 극도로 빠른 조회
     /// </summary>
@@ -41,28 +41,28 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
     {
         var hash = GetHashCode(key);
         var index = hash & _mask;
-        
-        // 🚀 선형 탐사 with 캐시 친화적 접근
+
+        // 선형 탐사 with 캐시 친화적 접근
         for (int i = 0; i < _maxProbes; i++)
         {
             ref var entry = ref _buckets[(index + i) & _mask];
-            
+
             // 메모리 배리어 없이 빠른 읽기
             if (entry.HasValue && entry.Key != null && entry.Key.Equals(key))
             {
                 value = entry.Value;
                 return true;
             }
-            
+
             // 빈 슬롯 발견 시 더 이상 탐사하지 않음
             if (!entry.HasValue)
                 break;
         }
-        
+
         value = default;
         return false;
     }
-    
+
     /// <summary>
     /// 무락 쓰기 - CAS 기반 안전한 삽입
     /// </summary>
@@ -71,16 +71,16 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
     {
         var hash = GetHashCode(key);
         var index = hash & _mask;
-        
-        // 🚀 선형 탐사로 빈 슬롯 찾기
+
+        // 선형 탐사로 빈 슬롯 찾기
         for (int i = 0; i < _maxProbes; i++)
         {
             ref var entry = ref _buckets[(index + i) & _mask];
-            
+
             // 이미 존재하는 키 확인
             if (entry.HasValue && entry.Key != null && entry.Key.Equals(key))
                 return false; // 중복 키
-            
+
             // 빈 슬롯 발견
             if (!entry.HasValue)
             {
@@ -92,7 +92,7 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
                     Version = entry.Version + 1,
                     HasValue = false // 마지막에 설정
                 };
-                
+
                 // 원자적 업데이트 시도
                 if (Interlocked.CompareExchange(ref entry.Version, newEntry.Version, entry.Version) == entry.Version)
                 {
@@ -100,17 +100,17 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
                     entry.Value = value;
                     Thread.MemoryBarrier(); // 순서 보장
                     entry.HasValue = true;
-                    
+
                     Interlocked.Increment(ref _count);
                     return true;
                 }
             }
         }
-        
+
         // 테이블이 가득 참 (리사이징 필요)
         return false;
     }
-    
+
     /// <summary>
     /// 업데이트 또는 추가
     /// </summary>
@@ -119,24 +119,24 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
     {
         var hash = GetHashCode(key);
         var index = hash & _mask;
-        
+
         for (int i = 0; i < _maxProbes; i++)
         {
             ref var entry = ref _buckets[(index + i) & _mask];
-            
+
             // 기존 키 업데이트
             if (entry.HasValue && entry.Key != null && entry.Key.Equals(key))
             {
                 entry.Value = value;
                 return;
             }
-            
+
             // 새 키 추가
             if (!entry.HasValue && TryAdd(key, value))
                 return;
         }
     }
-    
+
     /// <summary>
     /// 무락 제거 - 논리적 삭제
     /// </summary>
@@ -145,40 +145,40 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
     {
         var hash = GetHashCode(key);
         var index = hash & _mask;
-        
+
         for (int i = 0; i < _maxProbes; i++)
         {
             ref var entry = ref _buckets[(index + i) & _mask];
-            
+
             if (entry.HasValue && entry.Key != null && entry.Key.Equals(key))
             {
                 value = entry.Value;
-                
+
                 // 논리적 삭제 (HasValue만 false로)
                 entry.HasValue = false;
                 Thread.MemoryBarrier();
                 entry.Key = default;
                 entry.Value = default;
-                
+
                 Interlocked.Decrement(ref _count);
                 return true;
             }
-            
+
             if (!entry.HasValue)
                 break;
         }
-        
+
         value = default;
         return false;
     }
-    
+
     /// <summary>
     /// 모든 항목 열거 (스냅샷)
     /// </summary>
     public IEnumerable<KeyValuePair<TKey, TValue>> GetSnapshot()
     {
         var results = new List<KeyValuePair<TKey, TValue>>((int)Count);
-        
+
         for (int i = 0; i < _buckets.Length; i++)
         {
             ref var entry = ref _buckets[i];
@@ -187,10 +187,10 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
                 results.Add(new KeyValuePair<TKey, TValue>(entry.Key, entry.Value));
             }
         }
-        
+
         return results;
     }
-    
+
     /// <summary>
     /// 테이블 정리 (논리적으로 삭제된 항목 물리적 삭제)
     /// </summary>
@@ -208,7 +208,7 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
             }
         }
     }
-    
+
     /// <summary>
     /// 고성능 해시 함수
     /// </summary>
@@ -217,22 +217,22 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
     {
         // FNV-1a 해시 알고리즘 사용 (빠르고 분산이 좋음)
         var hash = key?.GetHashCode() ?? 0;
-        
+
         // 추가 혼합으로 클러스터링 방지
         hash ^= hash >> 16;
         hash *= 0x45d9f3b;
         hash ^= hash >> 16;
         hash *= 0x45d9f3b;
         hash ^= hash >> 16;
-        
+
         return hash;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int NextPowerOfTwo(int value)
     {
         if (value <= 1) return 2;
-        
+
         value--;
         value |= value >> 1;
         value |= value >> 2;
@@ -241,7 +241,7 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
         value |= value >> 16;
         return value + 1;
     }
-    
+
     /// <summary>
     /// 통계 정보
     /// </summary>
@@ -253,23 +253,23 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
         public int MaxProbeDistance;
         public double AverageProbeDistance;
     }
-    
+
     public Statistics GetStatistics()
     {
         var count = Count;
         var capacity = _buckets.Length;
         var loadFactor = (double)count / capacity;
-        
+
         int maxProbe = 0;
         int totalProbe = 0;
         int usedSlots = 0;
-        
+
         for (int i = 0; i < _buckets.Length; i++)
         {
             if (_buckets[i].HasValue)
             {
                 usedSlots++;
-                
+
                 // 이 항목의 탐사 거리 계산
                 var key = _buckets[i].Key;
                 if (key != null)
@@ -277,15 +277,15 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
                     var hash = GetHashCode(key);
                     var idealIndex = hash & _mask;
                     var actualDistance = (i - idealIndex + _buckets.Length) & _mask;
-                    
+
                     maxProbe = Math.Max(maxProbe, actualDistance);
                     totalProbe += actualDistance;
                 }
             }
         }
-        
+
         var avgProbe = usedSlots > 0 ? (double)totalProbe / usedSlots : 0;
-        
+
         return new Statistics
         {
             Count = count,
@@ -303,7 +303,7 @@ public class LockFreeHashTable<TKey, TValue> where TKey : IEquatable<TKey>
 public class StringHashTable<TValue> : LockFreeHashTable<string, TValue>
 {
     public StringHashTable(int capacity = 1024 * 1024) : base(capacity) { }
-    
+
     /// <summary>
     /// 문자열 전용 최적화된 해시 함수
     /// </summary>
@@ -312,27 +312,27 @@ public class StringHashTable<TValue> : LockFreeHashTable<string, TValue>
     {
         if (string.IsNullOrEmpty(str))
             return 0;
-        
+
         fixed (char* ptr = str)
         {
             var hash1 = 5381u;
             var hash2 = hash1;
-            
+
             var length = str.Length;
             var p = (uint*)ptr;
-            
+
             // 4바이트씩 처리
             for (int i = 0; i < length / 2; i++)
             {
                 hash1 = ((hash1 << 5) + hash1) ^ p[i];
             }
-            
+
             // 남은 2바이트 처리
             if ((length & 1) != 0)
             {
                 hash2 = ((hash2 << 5) + hash2) ^ ptr[length - 1];
             }
-            
+
             return (int)(hash1 + (hash2 * 1566083941));
         }
     }

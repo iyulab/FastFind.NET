@@ -50,7 +50,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         if (locationArray.Length == 0)
             yield break;
 
-        // 🚀 완전히 새로운 고성능 아키텍처 - TaskCanceledException 완전 방지
+        // 완전히 새로운 고성능 아키텍처 - TaskCanceledException 완전 방지
         var channel = Channel.CreateBounded<FileItem>(new BoundedChannelOptions(2000)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -60,7 +60,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         });
 
         // 생산자 작업을 별도 태스크로 실행
-        var producerTask = Task.Run(async () => 
+        var producerTask = Task.Run(async () =>
         {
             try
             {
@@ -80,7 +80,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                 try { channel.Writer.Complete(); } catch { }
             }
         }, cancellationToken);
-        
+
         try
         {
             // 소비자: 간단하고 빠른 읽기
@@ -103,7 +103,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 초고속 생산자 - 모든 성능 최적화 적용
+    // 초고속 생산자 - 모든 성능 최적화 적용
     private async Task ProduceFileItemsUltraFastAsync(
         string[] locations,
         IndexingOptions options,
@@ -129,15 +129,15 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                 {
                     // 로컬 버퍼로 배치 처리
                     var localBuffer = new List<FileItem>(1000);
-                    
+
                     // 동기 방식으로 직접 열거 (비동기 오버헤드 제거)
                     foreach (var item in EnumerateLocationSync(location, options, ct))
                     {
                         if (ct.IsCancellationRequested)
                             break;
-                        
+
                         localBuffer.Add(item);
-                        
+
                         // 1000개씩 배치로 채널에 쓰기
                         if (localBuffer.Count >= 1000)
                         {
@@ -145,7 +145,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                             localBuffer.Clear();
                         }
                     }
-                    
+
                     // 남은 항목들 처리
                     if (localBuffer.Count > 0)
                     {
@@ -172,7 +172,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 동기 파일 아이템 생성 - 최고 성능, FastFileItem 사용
+    // 동기 파일 아이템 생성 - 최고 성능, FastFileItem 사용
     private static FastFileItem? CreateFastFileItemSync(string filePath)
     {
         try
@@ -220,7 +220,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 완전 동기 열거 - 최고 성능, TaskCanceledException 불가능
+    // 완전 동기 열거 - 최고 성능, TaskCanceledException 불가능
     private IEnumerable<FastFileItem> EnumerateFastLocationSync(string location, IndexingOptions options, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested || !Directory.Exists(location))
@@ -260,7 +260,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 FastFileItem용 필터링 (성능 최적화)
+    // FastFileItem용 필터링 (성능 최적화)
     private static bool ShouldIncludeFastFile(FastFileItem file, IndexingOptions options)
     {
         // Check hidden files - 비트 연산으로 최적화
@@ -297,7 +297,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         return true;
     }
 
-    // 🚀 동기 방식으로 직접 열거 (비동기 오버헤드 제거)
+    // 동기 방식으로 직접 열거 (비동기 오버헤드 제거)
     private IEnumerable<FileItem> EnumerateLocationSync(string location, IndexingOptions options, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested || !Directory.Exists(location))
@@ -337,7 +337,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 동기 파일 아이템 생성 - 최고 성능
+    // 동기 파일 아이템 생성 - 최고 성능
     private static FileItem? CreateFileItemSync(string filePath)
     {
         try
@@ -387,7 +387,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 🚀 고효율 채널 쓰기
+    // 고효율 채널 쓰기
     private static async Task WriteBufferToChannelAsync(List<FileItem> buffer, ChannelWriter<FileItem> writer, CancellationToken cancellationToken)
     {
         try
@@ -396,7 +396,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
-                    
+
                 await writer.WriteAsync(item, cancellationToken);
             }
         }
@@ -414,7 +414,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
     public async Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         if (cancellationToken.IsCancellationRequested)
             return null;
 
@@ -724,7 +724,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
 
         // Check excluded extensions
-        if (!string.IsNullOrEmpty(file.Extension) && 
+        if (!string.IsNullOrEmpty(file.Extension) &&
             options.ExcludedExtensions.Contains(file.Extension, StringComparer.OrdinalIgnoreCase))
             return false;
 
@@ -792,7 +792,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         if (!_disposed)
         {
             _disposed = true;
-            
+
             _logger.LogDebug("Disposing WindowsFileSystemProvider");
 
             // Stop all file system watchers first
@@ -827,7 +827,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
             {
                 _logger.LogWarning("Encountered {ErrorCount} errors while disposing file system watchers", watcherDisposeErrors.Count);
             }
-            
+
             _logger.LogDebug("WindowsFileSystemProvider disposal completed");
         }
     }

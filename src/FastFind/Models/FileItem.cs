@@ -23,6 +23,11 @@ public record FileItem
     public required string DirectoryPath { get; init; }
 
     /// <summary>
+    /// Alias for DirectoryPath for backward compatibility
+    /// </summary>
+    public string Directory => DirectoryPath;
+
+    /// <summary>
     /// File extension (including the dot, e.g., ".txt")
     /// </summary>
     public string Extension { get; init; } = string.Empty;

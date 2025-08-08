@@ -114,6 +114,26 @@ public static class FastFinder
     }
 
     /// <summary>
+    /// Creates a Windows-specific search engine
+    /// </summary>
+    /// <param name="loggerFactory">Optional logger factory</param>
+    /// <returns>Windows-optimized search engine</returns>
+    public static ISearchEngine CreateWindowsSearchEngine(ILoggerFactory? loggerFactory = null)
+    {
+        return CreateSearchEngine(PlatformType.Windows, loggerFactory);
+    }
+
+    /// <summary>
+    /// Creates a Unix/Linux-specific search engine
+    /// </summary>
+    /// <param name="loggerFactory">Optional logger factory</param>
+    /// <returns>Unix-optimized search engine</returns>
+    public static ISearchEngine CreateUnixSearchEngine(ILoggerFactory? loggerFactory = null)
+    {
+        return CreateSearchEngine(PlatformType.Unix, loggerFactory);
+    }
+
+    /// <summary>
     /// Validates the current system for FastFind compatibility
     /// </summary>
     /// <returns>Validation result</returns>
@@ -401,6 +421,16 @@ public record SystemValidationResult
     public PlatformType SupportedPlatform { get; init; }
 
     /// <summary>
+    /// Alias for SupportedPlatform for backward compatibility
+    /// </summary>
+    public PlatformType Platform => SupportedPlatform;
+
+    /// <summary>
+    /// Available features for this platform
+    /// </summary>
+    public IReadOnlyList<string> AvailableFeatures => GetAvailableFeatures();
+
+    /// <summary>
     /// .NET runtime version
     /// </summary>
     public string RuntimeVersion { get; init; } = string.Empty;
@@ -456,5 +486,56 @@ public record SystemValidationResult
             issues.Add($"Validation error: {ValidationError}");
 
         return $"System is not ready: {string.Join(", ", issues)}";
+    }
+
+    /// <summary>
+    /// Gets available features for the current platform
+    /// </summary>
+    /// <returns>List of available features</returns>
+    private IReadOnlyList<string> GetAvailableFeatures()
+    {
+        var features = new List<string>();
+
+        if (IsSupported)
+        {
+            features.Add("Core Search");
+            features.Add("File Indexing");
+
+            switch (SupportedPlatform)
+            {
+                case PlatformType.Windows:
+                    features.Add("NTFS Optimization");
+                    features.Add("WMI Integration");
+                    features.Add("Junction Link Support");
+                    break;
+                
+                case PlatformType.MacOS:
+                    features.Add("APFS Support");
+                    features.Add("FSEvents Monitoring");
+                    break;
+                
+                case PlatformType.Linux:
+                    features.Add("ext4 Optimization");
+                    features.Add("inotify Monitoring");
+                    break;
+                
+                case PlatformType.Unix:
+                    features.Add("POSIX Compatibility");
+                    break;
+            }
+
+            if (IsCompatibleRuntime)
+            {
+                features.Add("SIMD Acceleration");
+                features.Add("Memory Optimization");
+            }
+
+            if (HasFileSystemAccess)
+            {
+                features.Add("Real-time Monitoring");
+            }
+        }
+
+        return features.AsReadOnly();
     }
 }

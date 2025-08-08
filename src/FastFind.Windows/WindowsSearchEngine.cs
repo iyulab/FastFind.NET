@@ -15,8 +15,8 @@ namespace FastFind.Windows;
 [SupportedOSPlatform("windows")]
 public static class WindowsSearchEngine
 {
-    // 🚀 .NET 9: Thread-local storage for better performance
-    private static readonly ThreadLocal<WindowsCapabilityCache> _capabilityCache = 
+    // .NET 9: Thread-local storage for better performance
+    private static readonly ThreadLocal<WindowsCapabilityCache> _capabilityCache =
         new(() => new WindowsCapabilityCache());
 
     /// <summary>
@@ -43,8 +43,8 @@ public static class WindowsSearchEngine
         }
 
         var services = new ServiceCollection();
-        
-        // 🚀 .NET 9: Enhanced logging configuration
+
+        // .NET 9: Enhanced logging configuration
         if (loggerFactory != null)
         {
             services.AddSingleton(loggerFactory);
@@ -55,7 +55,7 @@ public static class WindowsSearchEngine
             services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Warning));
         }
 
-        // 🚀 Register enhanced Windows-specific implementations
+        // Register enhanced Windows-specific implementations
         services.AddSingleton<WindowsSearchEngineOptions>(provider => CreateOptimizedOptions());
         services.AddSingleton<IFileSystemProvider, WindowsFileSystemProvider>();
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
@@ -72,14 +72,14 @@ public static class WindowsSearchEngine
     /// <param name="loggerFactory">Optional logger factory</param>
     /// <returns>Configured Windows search engine</returns>
     public static ISearchEngine CreateWindowsSearchEngine(
-        Action<WindowsSearchEngineOptions> configure, 
+        Action<WindowsSearchEngineOptions> configure,
         ILoggerFactory? loggerFactory = null)
     {
         var options = CreateOptimizedOptions();
         configure(options);
 
         var services = new ServiceCollection();
-        
+
         // Register logging
         if (loggerFactory != null)
         {
@@ -104,24 +104,24 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// 🚀 .NET 9: Creates optimized default options based on system capabilities
+    /// .NET 9: Creates optimized default options based on system capabilities
     /// </summary>
     private static WindowsSearchEngineOptions CreateOptimizedOptions()
     {
         var capabilities = GetNtfsCapabilities();
         var processorCount = Environment.ProcessorCount;
         var totalMemoryGB = GC.GetTotalMemory(false) / (1024.0 * 1024.0 * 1024.0);
-        
+
         return new WindowsSearchEngineOptions
         {
-            // 🚀 MFT Access optimization
+            // MFT Access optimization
             UseMftAccess = capabilities.CanAccessMft,
             EnableNtfsOptimizations = capabilities.HasNtfsDrives,
-            
-            // 🚀 Concurrency optimization based on system
+
+            // Concurrency optimization based on system
             MaxConcurrentOperations = Math.Max(2, processorCount * (totalMemoryGB > 8 ? 3 : 2)),
-            
-            // 🚀 Memory optimization
+
+            // Memory optimization
             UseMemoryMappedFiles = totalMemoryGB > 4, // Enable for systems with >4GB RAM
             MetadataCacheSize = totalMemoryGB switch
             {
@@ -130,18 +130,18 @@ public static class WindowsSearchEngine
                 > 4 => 15000,   // Entry systems
                 _ => 10000      // Minimal systems
             },
-            
-            // 🚀 Buffer optimization
+
+            // Buffer optimization
             FileEnumerationBufferSize = processorCount >= 8 ? 128 * 1024 : 64 * 1024,
             FileWatcherBufferSize = processorCount >= 8 ? 16384 : 8192,
-            
-            // 🚀 Advanced features
+
+            // Advanced features
             EnableRealtimeMonitoring = true,
             EnableIndexCompression = true,
             UseVolumeSnapshotService = capabilities.SupportsAdvancedFeatures,
             FileOperationTimeout = TimeSpan.FromSeconds(totalMemoryGB > 8 ? 60 : 30),
-            
-            // 🚀 .NET 9 specific optimizations
+
+            // .NET 9 specific optimizations
             UseAdvancedStringOptimizations = true,
             EnableSIMDAcceleration = true,
             UseSearchValues = true,
@@ -150,13 +150,13 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// 🚀 Enhanced NTFS capabilities detection with caching
+    /// Enhanced NTFS capabilities detection with caching
     /// </summary>
     /// <returns>NTFS capability information</returns>
     public static NtfsCapabilities GetNtfsCapabilities()
     {
         var cache = _capabilityCache.Value!;
-        
+
         // Check cache first (5-minute expiry)
         if (cache.IsValid)
         {
@@ -164,10 +164,10 @@ public static class WindowsSearchEngine
         }
 
         var capabilities = new NtfsCapabilities();
-        
+
         try
         {
-            // 🚀 .NET 9: Parallel capability detection
+            // .NET 9: Parallel capability detection
             var tasks = new[]
             {
                 Task.Run(() => capabilities.CanAccessMft = WindowsFileSystemProvider.CanAccessMasterFileTable()),
@@ -177,11 +177,11 @@ public static class WindowsSearchEngine
             };
 
             Task.WaitAll(tasks, TimeSpan.FromSeconds(5)); // 5-second timeout
-            
-            capabilities.IsOptimal = capabilities.CanAccessMft && 
-                                   capabilities.HasNtfsDrives && 
+
+            capabilities.IsOptimal = capabilities.CanAccessMft &&
+                                   capabilities.HasNtfsDrives &&
                                    capabilities.SupportsAdvancedFeatures;
-                                   
+
             // Update cache
             cache.Update(capabilities);
         }
@@ -190,12 +190,12 @@ public static class WindowsSearchEngine
             capabilities.ErrorMessage = ex.Message;
             capabilities.IsOptimal = false;
         }
-        
+
         return capabilities;
     }
 
     /// <summary>
-    /// 🚀 Detects NTFS drives with enhanced information
+    /// Detects NTFS drives with enhanced information
     /// </summary>
     private static void DetectNtfsDrives(NtfsCapabilities capabilities)
     {
@@ -203,7 +203,7 @@ public static class WindowsSearchEngine
         {
             var ntfsDrives = System.IO.DriveInfo.GetDrives()
                 .AsParallel()
-                .Where(d => d.IsReady && 
+                .Where(d => d.IsReady &&
                            d.DriveFormat.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 .Select(d => new NtfsDriveInfo
                 {
@@ -214,7 +214,7 @@ public static class WindowsSearchEngine
                     SupportsEncryption = CheckEncryptionSupport(d)
                 })
                 .ToArray();
-            
+
             capabilities.NtfsDrives = ntfsDrives;
             capabilities.AvailableNtfsDrives = ntfsDrives.Select(d => d.Letter).ToArray();
             capabilities.HasNtfsDrives = ntfsDrives.Length > 0;
@@ -226,7 +226,7 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// 🚀 Detects Windows version and features
+    /// Detects Windows version and features
     /// </summary>
     private static void DetectWindowsFeatures(NtfsCapabilities capabilities)
     {
@@ -245,7 +245,7 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// 🚀 Detects advanced system capabilities
+    /// Detects advanced system capabilities
     /// </summary>
     private static void DetectAdvancedCapabilities(NtfsCapabilities capabilities)
     {
@@ -253,14 +253,14 @@ public static class WindowsSearchEngine
         {
             // Check for administrative privileges
             capabilities.HasAdministrativePrivileges = CheckAdministrativePrivileges();
-            
+
             // Check for Volume Shadow Copy Service
             capabilities.SupportsVolumeSnapshotService = CheckVssSupport();
-            
+
             // Check for SIMD support
             capabilities.SupportsSIMD = System.Numerics.Vector.IsHardwareAccelerated;
             capabilities.SupportsAVX2 = CheckAVX2Support();
-            
+
             // Check memory configuration
             capabilities.SystemMemoryGB = GC.GetTotalMemory(false) / (1024.0 * 1024.0 * 1024.0);
             capabilities.ProcessorCount = Environment.ProcessorCount;
@@ -271,7 +271,7 @@ public static class WindowsSearchEngine
         }
     }
 
-    // 🚀 Helper methods for capability detection
+    // Helper methods for capability detection
     private static bool CheckCompressionSupport(System.IO.DriveInfo drive)
     {
         // Implementation would check for NTFS compression support
@@ -368,8 +368,8 @@ public class WindowsSearchEngineOptions
     /// </summary>
     public TimeSpan FileOperationTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    // 🚀 .NET 9 specific optimizations
-    
+    // .NET 9 specific optimizations
+
     /// <summary>
     /// Whether to use advanced string optimizations (StringPool, SearchValues)
     /// </summary>
@@ -406,7 +406,7 @@ public class WindowsSearchEngineOptions
     public bool EnablePerformanceTelemetry { get; set; } = true;
 
     /// <summary>
-    /// 🚀 Validates and optimizes the configuration
+    /// Validates and optimizes the configuration
     /// </summary>
     public (bool IsValid, string? ErrorMessage) Validate()
     {
@@ -428,7 +428,7 @@ public class WindowsSearchEngineOptions
     }
 
     /// <summary>
-    /// 🚀 Creates optimized configuration for specific scenarios
+    /// Creates optimized configuration for specific scenarios
     /// </summary>
     public static WindowsSearchEngineOptions CreateForScenario(OptimizationScenario scenario)
     {
@@ -458,7 +458,7 @@ public class WindowsSearchEngineOptions
 }
 
 /// <summary>
-/// 🚀 Optimization scenarios for different use cases
+/// Optimization scenarios for different use cases
 /// </summary>
 public enum OptimizationScenario
 {
@@ -490,7 +490,7 @@ public class NtfsCapabilities
     public char[] AvailableNtfsDrives { get; set; } = [];
 
     /// <summary>
-    /// 🚀 Detailed NTFS drive information
+    /// Detailed NTFS drive information
     /// </summary>
     public NtfsDriveInfo[] NtfsDrives { get; set; } = [];
 
@@ -500,7 +500,7 @@ public class NtfsCapabilities
     public bool SupportsAdvancedFeatures { get; set; }
 
     /// <summary>
-    /// 🚀 Windows version information
+    /// Windows version information
     /// </summary>
     public Version? WindowsVersion { get; set; }
 
@@ -563,13 +563,13 @@ public class NtfsCapabilities
             return $"Error checking capabilities: {ErrorMessage}";
 
         var features = new List<string>();
-        
+
         if (CanAccessMft)
             features.Add("Direct MFT access");
-        
+
         if (HasNtfsDrives)
             features.Add($"NTFS drives: {string.Join(", ", AvailableNtfsDrives)}");
-        
+
         if (SupportsAdvancedFeatures)
             features.Add($"Windows {WindowsVersion?.Major}.{WindowsVersion?.Minor}");
 
@@ -582,13 +582,13 @@ public class NtfsCapabilities
         features.Add($"{ProcessorCount} cores, {SystemMemoryGB:F1}GB RAM");
 
         var summary = features.Count > 0 ? string.Join(", ", features) : "Basic file system access only";
-        var status = IsOptimal ? "🚀 Optimal" : "⚠️ Limited";
-        
+        var status = IsOptimal ? "Optimal" : "⚠️ Limited";
+
         return $"{status} configuration: {summary}";
     }
 
     /// <summary>
-    /// 🚀 Gets performance recommendations based on capabilities
+    /// Gets performance recommendations based on capabilities
     /// </summary>
     public string GetPerformanceRecommendations()
     {
@@ -606,14 +606,14 @@ public class NtfsCapabilities
         if (!SupportsSIMD)
             recommendations.Add("SIMD acceleration not available on this system");
 
-        return recommendations.Count > 0 
+        return recommendations.Count > 0
             ? string.Join(", ", recommendations)
             : "System is optimally configured";
     }
 }
 
 /// <summary>
-/// 🚀 Detailed information about an NTFS drive
+/// Detailed information about an NTFS drive
 /// </summary>
 public class NtfsDriveInfo
 {
@@ -622,7 +622,7 @@ public class NtfsDriveInfo
     public long AvailableSpace { get; set; }
     public bool SupportsCompression { get; set; }
     public bool SupportsEncryption { get; set; }
-    
+
     public double UsagePercentage => TotalSize > 0 ? (1.0 - (double)AvailableSpace / TotalSize) * 100 : 0;
     public string TotalSizeFormatted => FormatBytes(TotalSize);
     public string AvailableSpaceFormatted => FormatBytes(AvailableSpace);
@@ -642,7 +642,7 @@ public class NtfsDriveInfo
 }
 
 /// <summary>
-/// 🚀 Thread-safe capability cache for performance
+/// Thread-safe capability cache for performance
 /// </summary>
 internal class WindowsCapabilityCache
 {
@@ -650,7 +650,7 @@ internal class WindowsCapabilityCache
     private DateTime _lastUpdate = DateTime.MinValue;
     private readonly TimeSpan _cacheExpiry = TimeSpan.FromMinutes(5);
 
-    public bool IsValid => _capabilities != null && 
+    public bool IsValid => _capabilities != null &&
                           DateTime.Now - _lastUpdate < _cacheExpiry;
 
     public NtfsCapabilities Capabilities => _capabilities ?? new NtfsCapabilities();

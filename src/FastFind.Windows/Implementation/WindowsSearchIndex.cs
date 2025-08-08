@@ -20,7 +20,7 @@ internal class WindowsSearchIndex : ISearchIndex
     private readonly ConcurrentDictionary<string, HashSet<string>> _extensionIndex = new();
     private readonly ReaderWriterLockSlim _indexLock = new();
     private readonly object _statsLock = new();
-    
+
     private long _memoryUsage = 0;
     private bool _isReady = false;
     private bool _disposed = false;
@@ -53,7 +53,7 @@ internal class WindowsSearchIndex : ISearchIndex
             {
                 var key = fileItem.FullPath.ToLowerInvariant();
                 var wasAdded = _fileIndex.TryAdd(key, fileItem);
-                
+
                 if (wasAdded)
                 {
                     UpdateIndices(fileItem, IndexOperation.Add);
@@ -71,7 +71,7 @@ internal class WindowsSearchIndex : ISearchIndex
     public async Task AddFilesAsync(IEnumerable<FileItem> fileItems, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         if (cancellationToken.IsCancellationRequested)
             return;
 
@@ -79,7 +79,7 @@ internal class WindowsSearchIndex : ISearchIndex
         if (items.Length == 0)
             return;
 
-        // 🚀 성능 최우선 고속 배치 처리 - OperationCanceledException 방지
+        // 성능 최우선 고속 배치 처리 - OperationCanceledException 방지
         await Task.Run(() =>
         {
             try
@@ -90,7 +90,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 {
                     var addedCount = 0;
                     var batchProcessed = 0;
-                    
+
                     foreach (var fileItem in items)
                     {
                         // 간소화된 취소 체크 (5000개마다만)
@@ -99,7 +99,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
                         var key = fileItem.FullPath.ToLowerInvariant();
                         var wasAdded = _fileIndex.TryAdd(key, fileItem);
-                        
+
                         if (wasAdded)
                         {
                             UpdateIndices(fileItem, IndexOperation.Add);
@@ -107,7 +107,7 @@ internal class WindowsSearchIndex : ISearchIndex
                             addedCount++;
                         }
                     }
-                    
+
                     _logger.LogDebug("Added {AddedCount} files to index in single batch", addedCount);
                 }
                 finally
@@ -166,7 +166,7 @@ internal class WindowsSearchIndex : ISearchIndex
                     UpdateIndices(existingFile, IndexOperation.Remove);
                     UpdateMemoryUsage(existingFile, IndexOperation.Remove);
                 }
-                
+
                 _fileIndex[key] = fileItem;
                 UpdateIndices(fileItem, IndexOperation.Add);
                 UpdateMemoryUsage(fileItem, IndexOperation.Add);
@@ -180,11 +180,11 @@ internal class WindowsSearchIndex : ISearchIndex
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> SearchAsync(
-        SearchQuery query, 
+        SearchQuery query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         var validation = query.Validate();
         if (!validation.IsValid)
         {
@@ -194,7 +194,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
         // Collect candidates first while holding the lock, then release it
         IEnumerable<FileItem> candidates;
-        
+
         _indexLock.EnterReadLock();
         try
         {
@@ -325,17 +325,17 @@ internal class WindowsSearchIndex : ISearchIndex
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> GetFilesInDirectoryAsync(
-        string directoryPath, 
-        bool recursive = false, 
+        string directoryPath,
+        bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         var normalizedPath = directoryPath.ToLowerInvariant().TrimEnd('\\', '/');
-        
+
         // Collect files while holding the lock, then release it
         List<FileItem> files;
-        
+
         _indexLock.EnterReadLock();
         try
         {
@@ -358,14 +358,14 @@ internal class WindowsSearchIndex : ISearchIndex
         {
             _indexLock.ExitReadLock();
         }
-        
+
         // Yield files without holding the lock
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return file;
         }
-        
+
         await Task.Yield();
     }
 
@@ -373,7 +373,7 @@ internal class WindowsSearchIndex : ISearchIndex
     public async Task ClearAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         await Task.Run(() =>
         {
             _indexLock.EnterWriteLock();
@@ -383,7 +383,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 _directoryIndex.Clear();
                 _extensionIndex.Clear();
                 Interlocked.Exchange(ref _memoryUsage, 0);
-                
+
                 _logger.LogInformation("Search index cleared");
             }
             finally
@@ -397,7 +397,7 @@ internal class WindowsSearchIndex : ISearchIndex
     public async Task OptimizeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         await Task.Run(() =>
         {
             _indexLock.EnterWriteLock();
@@ -407,11 +407,11 @@ internal class WindowsSearchIndex : ISearchIndex
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 GC.Collect();
-                
+
                 // Recalculate memory usage
                 RecalculateMemoryUsage();
-                
-                _logger.LogInformation("Search index optimized. Memory usage: {MemoryMB} MB", 
+
+                _logger.LogInformation("Search index optimized. Memory usage: {MemoryMB} MB",
                     MemoryUsage / (1024.0 * 1024.0));
             }
             finally
@@ -425,7 +425,7 @@ internal class WindowsSearchIndex : ISearchIndex
     public async Task<IndexingStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        
+
         return await Task.Run(() =>
         {
             _indexLock.EnterReadLock();
@@ -433,7 +433,7 @@ internal class WindowsSearchIndex : ISearchIndex
             {
                 var files = _fileIndex.Values.Where(f => !f.IsDirectory).ToArray();
                 var directories = _fileIndex.Values.Where(f => f.IsDirectory).ToArray();
-                
+
                 return new IndexingStatistics
                 {
                     TotalFiles = files.Length,
@@ -514,8 +514,8 @@ internal class WindowsSearchIndex : ISearchIndex
         // Text search
         if (!string.IsNullOrEmpty(searchText))
         {
-            var targetText = query.SearchFileNameOnly 
-                ? file.Name.ToLowerInvariant() 
+            var targetText = query.SearchFileNameOnly
+                ? file.Name.ToLowerInvariant()
                 : file.FullPath.ToLowerInvariant();
 
             if (regex != null)
@@ -524,8 +524,8 @@ internal class WindowsSearchIndex : ISearchIndex
             }
             else
             {
-                var comparison = query.CaseSensitive 
-                    ? StringComparison.Ordinal 
+                var comparison = query.CaseSensitive
+                    ? StringComparison.Ordinal
                     : StringComparison.OrdinalIgnoreCase;
                 return targetText.Contains(searchText, comparison);
             }
@@ -590,9 +590,9 @@ internal class WindowsSearchIndex : ISearchIndex
     private void UpdateMemoryUsage(FileItem fileItem, IndexOperation operation)
     {
         // Rough estimation of memory usage
-        var estimatedSize = fileItem.FullPath.Length * 2 + 
-                           fileItem.Name.Length * 2 + 
-                           fileItem.DirectoryPath.Length * 2 + 
+        var estimatedSize = fileItem.FullPath.Length * 2 +
+                           fileItem.Name.Length * 2 +
+                           fileItem.DirectoryPath.Length * 2 +
                            100; // Base object overhead
 
         if (operation == IndexOperation.Add)
@@ -607,9 +607,9 @@ internal class WindowsSearchIndex : ISearchIndex
 
     private void RecalculateMemoryUsage()
     {
-        var totalSize = _fileIndex.Values.Sum(f => 
+        var totalSize = _fileIndex.Values.Sum(f =>
             f.FullPath.Length * 2 + f.Name.Length * 2 + f.DirectoryPath.Length * 2 + 100);
-        
+
         Interlocked.Exchange(ref _memoryUsage, totalSize);
     }
 
