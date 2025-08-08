@@ -319,7 +319,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
                 var result = SearchResult.Success(
                     query, totalMatches, resultList.Count, searchTime,
-                    ConvertToAsyncEnumerable(resultList), metrics, hasMoreResults);
+                    ConvertToFastFileItemAsyncEnumerable(resultList), metrics, hasMoreResults);
 
                 // Notify search completed
                 SearchProgressChanged?.Invoke(this, new SearchProgressEventArgs(
@@ -775,6 +775,18 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         foreach (var item in items)
         {
             yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Convert FileItem list to FastFileItem async enumerable
+    /// </summary>
+    private static async IAsyncEnumerable<FastFileItem> ConvertToFastFileItemAsyncEnumerable(IList<FileItem> items)
+    {
+        await Task.Yield();
+        foreach (var item in items)
+        {
+            yield return item.ToFastFileItem();
         }
     }
 

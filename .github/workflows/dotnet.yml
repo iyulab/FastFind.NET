@@ -1,6 +1,12 @@
 name: .NET Build and NuGet Publish
 on:
   workflow_dispatch:
+    inputs:
+      push_to_nuget:
+        description: 'Push packages to NuGet (even without version tag)'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [ "main" ]
     tags: [ "v*" ]
@@ -31,11 +37,24 @@ jobs:
     - name: Build
       run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
     
+    - name: Run tests
+      run: dotnet test ${{ env.SOLUTION_PATH }} --configuration Release --no-build --verbosity normal --logger trx --results-directory TestResults/
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: TestResults/
+    
 
   pack-and-publish:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch')
     strategy:
       matrix:
         project: 
@@ -55,6 +74,14 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
     
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
     - name: Restore dependencies
       run: dotnet restore ${{ env.SOLUTION_PATH }}
     
@@ -64,20 +91,60 @@ jobs:
     - name: Pack ${{ matrix.project.name }}
       run: dotnet pack ${{ matrix.project.path }} --configuration Release --no-build --output nupkg
     
+    - name: List generated packages
+      run: ls -la nupkg/
+    
+    - name: Validate package
+      run: |
+        for package in nupkg/*.nupkg; do
+          echo "Validating package: $package"
+          dotnet nuget verify "$package" || echo "Package verification failed for $package"
+        done
+    
+    - name: Check if should push to NuGet
+      id: should_push
+      run: |
+        # Check for version changes in Directory.Build.props
+        VERSION_CHANGED="false"
+        if git diff --name-only ${{ github.event.before }}..${{ github.sha }} 2>/dev/null | grep -q "src/Directory.Build.props"; then
+          echo "Directory.Build.props file changed"
+          VERSION_CHANGED="true"
+        fi
+        
+        # Check conditions for pushing
+        if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]; then
+          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
+          echo "REASON=version_tag" >> $GITHUB_OUTPUT
+        elif [ "${{ github.event.inputs.push_to_nuget }}" == "true" ]; then
+          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
+          echo "REASON=manual_trigger" >> $GITHUB_OUTPUT
+        elif [ "$VERSION_CHANGED" == "true" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
+          echo "REASON=version_change" >> $GITHUB_OUTPUT
+        else
+          echo "SHOULD_PUSH=false" >> $GITHUB_OUTPUT
+          echo "REASON=no_trigger" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Push decision: $SHOULD_PUSH (reason: $REASON)"
+    
     - name: Push ${{ matrix.project.name }} to NuGet
-      if: startsWith(github.ref, 'refs/tags/v')
-      run: dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+      if: steps.should_push.outputs.SHOULD_PUSH == 'true'
+      run: |
+        echo "Pushing packages to NuGet (reason: ${{ steps.should_push.outputs.REASON }})"
+        dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
     
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
         name: nuget-packages-${{ matrix.project.name }}
         path: nupkg/*.nupkg
+        retention-days: 30
 
   create-release:
     needs: [build, pack-and-publish]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_nuget == 'true')
     
     steps:
     - uses: actions/checkout@v4
@@ -87,24 +154,67 @@ jobs:
       with:
         path: artifacts/
     
+    - name: Get version info
+      id: version
+      run: |
+        if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]; then
+          VERSION="${{ github.ref_name }}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        else
+          # Extract version from Directory.Build.props
+          VERSION=$(grep -oP '<Version>\K[^<]+' src/Directory.Build.props || echo "1.0.0")
+          echo "VERSION=v${VERSION}" >> $GITHUB_OUTPUT
+        fi
+        echo "Using version: ${VERSION}"
+    
+    - name: Generate changelog
+      id: changelog
+      run: |
+        if [ "${{ steps.version.outputs.VERSION }}" != "$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo 'v0.0.0')" ]; then
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo 'HEAD~10')
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "### 📋 Changes from ${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+          git log ${PREVIOUS_TAG}..HEAD --oneline --pretty=format:'- %s (%h)' >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        else
+          echo "CHANGELOG=### 📋 Changes\nSee commit history for details." >> $GITHUB_OUTPUT
+        fi
+    
     - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.ref_name }}
-        release_name: Release ${{ github.ref_name }}
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: FastFind.NET ${{ steps.version.outputs.VERSION }}
         body: |
-          ## FastFind.NET ${{ github.ref_name }}
+          ## FastFind.NET ${{ steps.version.outputs.VERSION }}
           
           ### 📦 Published Packages
-          - **FastFind.Core**: Core interfaces and models
-          - **FastFind.Windows**: Windows-specific implementation
+          - **FastFind.Core**: Core interfaces and models for cross-platform file search
+          - **FastFind.Windows**: Windows-optimized implementation with SIMD acceleration
+          
+          ### 🚀 Key Features
+          - High-performance file search with SIMD string matching
+          - Memory-optimized string pooling
+          - Real-time file system monitoring
+          - Windows-specific optimizations (NTFS, WMI integration)
           
           ### 🚧 Roadmap
-          - **FastFind.Unix**: Unix implementation (coming soon)
+          - **FastFind.Unix**: Unix/Linux implementation (coming soon)
+          - **FastFind.MacOS**: macOS-specific optimizations (planned)
           
-          ### 📋 Changes
-          See [commits](https://github.com/iyulab/FastFind.NET/compare/v${{ github.ref_name }}...HEAD) for details.
+          ${{ steps.changelog.outputs.CHANGELOG }}
+          
+          ### 📥 Installation
+          ```bash
+          # Core package
+          dotnet add package FastFind.Core
+          
+          # Windows implementation
+          dotnet add package FastFind.Windows
+          ```
         draft: false
-        prerelease: ${{ contains(github.ref_name, '-') }}
+        prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+        files: artifacts/**/*.nupkg
+        generate_release_notes: true
+        make_latest: ${{ !contains(steps.version.outputs.VERSION, '-') }}

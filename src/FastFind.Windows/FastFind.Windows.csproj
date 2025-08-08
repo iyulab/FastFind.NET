@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FastFind\FastFind.csproj" />
+    <ProjectReference Include="..\FastFind\ㅊ.csproj" />
   </ItemGroup>
 
 </Project>

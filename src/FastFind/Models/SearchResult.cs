@@ -38,7 +38,7 @@ public record SearchResult
     /// <summary>
     /// Async enumerable of matching files
     /// </summary>
-    public IAsyncEnumerable<FileItem> Files { get; init; } = AsyncEnumerable.Empty<FileItem>();
+    public IAsyncEnumerable<FastFileItem> Files { get; init; } = AsyncEnumerable.Empty<FastFileItem>();
 
     /// <summary>
     /// Performance metrics for the search operation
@@ -63,7 +63,7 @@ public record SearchResult
         long totalMatches,
         long resultCount,
         TimeSpan searchTime,
-        IAsyncEnumerable<FileItem> files,
+        IAsyncEnumerable<FastFileItem> files,
         SearchMetrics? metrics = null,
         bool hasMoreResults = false)
     {
@@ -88,7 +88,7 @@ public record SearchResult
         long totalMatches,
         long resultCount,
         TimeSpan searchTime,
-        IAsyncEnumerable<FileItem> files,
+        IAsyncEnumerable<FastFileItem> files,
         SearchMetrics? metrics = null)
     {
         return new SearchResult
@@ -117,7 +117,7 @@ public record SearchResult
             SearchTime = searchTime,
             IsComplete = true,
             HasMoreResults = false,
-            Files = AsyncEnumerable.Empty<FileItem>(),
+            Files = AsyncEnumerable.Empty<FastFileItem>(),
             ErrorMessage = errorMessage
         };
     }
@@ -135,7 +135,7 @@ public record SearchResult
             SearchTime = searchTime,
             IsComplete = true,
             HasMoreResults = false,
-            Files = AsyncEnumerable.Empty<FileItem>(),
+            Files = AsyncEnumerable.Empty<FastFileItem>(),
             ErrorMessage = errorMessage
         };
     }

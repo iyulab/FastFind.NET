@@ -21,18 +21,17 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FastFind\FastFind.csproj" />
+    <ProjectReference Include="..\FastFind\ㅊ.csproj" />
     <ProjectReference Include="..\FastFind.Windows\FastFind.Windows.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
-    <PackageReference Include="FluentAssertions" Version="7.0.0" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.2" />
+    <PackageReference Include="FluentAssertions" Version="8.5.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.8" />
-    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.0.0" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.0.8" />
     <PackageReference Include="System.Management" Version="9.0.8" />
-    <PackageReference Include="Xunit.SkippableFact" Version="1.5.13" />
   </ItemGroup>
 
   <ItemGroup>

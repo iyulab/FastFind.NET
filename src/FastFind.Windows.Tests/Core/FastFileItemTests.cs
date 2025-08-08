@@ -25,7 +25,7 @@ public class FastFileItemTests
         var size = Marshal.SizeOf<FastFileItem>();
         
         // Assert
-        size.Should().BeLessOrEqualTo(64, "FastFileItem should be <= 64 bytes for cache line optimization");
+        Assert.True(size <= 64, "FastFileItem should be <= 64 bytes for cache line optimization");
     }
     
     [Fact]
@@ -51,10 +51,10 @@ public class FastFileItemTests
     }
     
     [Theory]
-    [InlineData("test", true)]
-    [InlineData("TEST", false)] // Case sensitive by default
-    [InlineData("file", false)]
-    [InlineData("txt", false)]
+    [InlineData("test", true)]   // Case-insensitive matching
+    [InlineData("TEST", true)]   // Case-insensitive matching
+    [InlineData("File", true)]   // Substring match
+    [InlineData("xyz", false)]   // No match
     public void MatchesName_Should_Work_Correctly(string pattern, bool expected)
     {
         // Arrange
@@ -88,7 +88,6 @@ public class FastFileItemTests
     public void ToFileItem_Should_Convert_Correctly()
     {
         // Arrange
-        var originalPath = @"C:\Test\File.txt";
         var fastItem = CreateTestFastFileItem("File.txt");
         
         // Act

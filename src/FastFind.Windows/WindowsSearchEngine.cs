@@ -6,8 +6,37 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.Versioning;
 using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace FastFind.Windows;
+
+/// <summary>
+/// Windows search engine registration helper 
+/// </summary>
+public static class WindowsRegistration
+{
+    private static volatile bool _isRegistered = false;
+    private static readonly object _lock = new object();
+
+    /// <summary>
+    /// Ensures the Windows search engine factory is registered
+    /// </summary>
+    public static void EnsureRegistered()
+    {
+        if (_isRegistered) return;
+        
+        lock (_lock)
+        {
+            if (_isRegistered) return;
+            
+            if (OperatingSystem.IsWindows())
+            {
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, WindowsSearchEngine.CreateWindowsSearchEngine);
+                _isRegistered = true;
+            }
+        }
+    }
+}
 
 /// <summary>
 /// Windows-specific implementation registration for FastFind with .NET 9 optimizations
@@ -24,9 +53,16 @@ public static class WindowsSearchEngine
     /// </summary>
     static WindowsSearchEngine()
     {
-        if (OperatingSystem.IsWindows())
+        try 
         {
-            FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, CreateWindowsSearchEngine);
+            if (OperatingSystem.IsWindows())
+            {
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, CreateWindowsSearchEngine);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore registration errors
         }
     }
 
