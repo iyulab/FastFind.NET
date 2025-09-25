@@ -2,6 +2,7 @@ using FastFind;
 using FastFind.Interfaces;
 using FastFind.Windows;
 using FastFind.Models;
+using FastFind.Windows.Tests.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Management;
 
@@ -13,16 +14,10 @@ namespace FastFind.Windows.Tests.Integration;
 [Collection("WindowsOnly")]
 public class WindowsSpecificTests
 {
-    [Fact]
+    [WindowsOnlyFact]
     [Trait("Category", "Windows")]
     public void System_Validation_Should_Detect_Windows_Features()
     {
-        // Early exit for non-Windows environments (CI/CD compatibility)
-        if (!OperatingSystem.IsWindows())
-        {
-            Console.WriteLine("Skipping Windows-specific test on non-Windows platform");
-            return;
-        }
         
         // Ensure factory is registered
         WindowsRegistration.EnsureRegistered();
@@ -75,7 +70,7 @@ public class WindowsSpecificTests
         Console.WriteLine($"Summary: {validation.GetSummary()}");
     }
     
-    [Fact]
+    [WindowsOnlyFact]
     [Trait("Category", "Windows")]
     public void Windows_SearchEngine_Should_Be_Created_Successfully()
     {
@@ -251,7 +246,8 @@ public class WindowsSpecificTests
         }
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public void Windows_Should_Detect_Available_Drives()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows
@@ -273,7 +269,8 @@ public class WindowsSpecificTests
         }
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public async Task Windows_Indexing_Should_Handle_System_Directories()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows
@@ -325,7 +322,8 @@ public class WindowsSpecificTests
         Console.WriteLine($"Progress reports: {progressReports.Count}");
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public async Task Windows_Should_Handle_File_Attributes_Correctly()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows
@@ -451,7 +449,8 @@ public class WindowsSpecificTests
         }
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public async Task Windows_Performance_Counters_Should_Be_Available()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows
@@ -480,7 +479,8 @@ public class WindowsSpecificTests
                          $"Memory: {indexStats.IndexMemoryUsage:N0} bytes");
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public void Windows_WMI_Integration_Should_Work()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows
@@ -521,7 +521,8 @@ public class WindowsSpecificTests
         }
     }
     
-    [Fact]
+    [WindowsOnlyFact]
+    [Trait("Category", "Windows")]
     public async Task Windows_File_System_Events_Should_Be_Detected()
     {
         if (!OperatingSystem.IsWindows()) return; // Skip on non-Windows

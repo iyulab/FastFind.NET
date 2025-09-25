@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using FastFind.Models;
+using FastFind.Windows.Tests.Helpers;
 
 namespace FastFind.Windows.Tests.Core;
 
@@ -70,7 +71,8 @@ public class StringPoolTests
         StringPool.GetString(extensionId).Should().Be(".cs");
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
+    [Trait("Category", "Performance")]
     public void Memory_Usage_Should_Be_Efficient()
     {
         // Arrange
@@ -114,7 +116,7 @@ public class StringPoolTests
         }
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
     [Trait("Category", "Performance")]
     [Trait("Category", "Suite:StringPool")]
     public void Interning_Performance_Should_Be_Fast()
@@ -214,7 +216,8 @@ public class StringPoolTests
                          $"{stats.CompressionRatio:P1} compression");
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
+    [Trait("Category", "Performance")]
     public void Cleanup_Should_Reduce_Memory_Usage()
     {
         // Arrange
@@ -240,7 +243,8 @@ public class StringPoolTests
         Console.WriteLine($"After cleanup: {statsAfter.InternedCount} strings, {afterCleanup:N0} bytes");
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
+    [Trait("Category", "Performance")]
     public void CompactMemory_Should_Optimize_Storage()
     {
         // Arrange

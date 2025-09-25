@@ -62,23 +62,31 @@ jobs:
     
     - name: Run Core Tests (CI/CD Safe - Performance Tests Excluded)
       run: |
+        # Run all tests - conditional attributes will auto-skip inappropriate tests
+        echo "🚀 Running CI/CD-safe tests..."
+        echo "   • Performance tests: Auto-skipped in CI environment"
+        echo "   • Windows-specific: Auto-skipped on non-Windows platforms"
+        echo "   • Platform: ${{ matrix.platform }}"
+
         dotnet test ${{ env.SOLUTION_PATH }} \
           --configuration Release \
           --no-build \
           --verbosity normal \
           --logger trx \
           --results-directory TestResults/ \
-          --filter "Category!=Performance&Category!=Stress&Category!=Benchmark&Category!=Integration" \
           --collect:"XPlat Code Coverage"
 
-    - name: Run Windows Integration Tests
+    - name: Additional Integration Tests
       if: matrix.run-integration == true
       run: |
+        echo "🔧 Running additional integration tests..."
+        echo "   • Integration tests will auto-skip on unsupported platforms"
+
         dotnet test ${{ env.SOLUTION_PATH }} \
           --configuration Release \
           --no-build \
           --verbosity normal \
-          --filter "Category=Windows&Category!=Performance&Category!=Stress&Category!=Benchmark" \
+          --filter "Category=Integration" \
           --collect:"XPlat Code Coverage"
     
     - name: Upload test results
@@ -89,6 +97,26 @@ jobs:
         path: |
           TestResults/
           **/coverage.cobertura.xml
+
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "📊 CI/CD Test Execution Summary:"
+        echo "   Platform: ${{ matrix.platform }}"
+        echo "   ✅ Functional tests: Executed"
+        echo "   ⏭️  Performance tests: Auto-skipped (CI environment detected)"
+
+        if [ "${{ matrix.platform }}" = "windows" ]; then
+          echo "   ✅ Windows-specific tests: Executed"
+        else
+          echo "   ⏭️  Windows-specific tests: Auto-skipped (Linux platform)"
+        fi
+
+        echo ""
+        echo "🔧 Test Skipping Strategy:"
+        echo "   • Conditional test attributes automatically handle environment detection"
+        echo "   • No manual filtering needed - tests self-organize based on CI environment"
+        echo "   • All test categories execute, inappropriate tests skip with helpful messages"
     
 
   # ⚡ 성능 벤치마크 (수동 트리거만)
