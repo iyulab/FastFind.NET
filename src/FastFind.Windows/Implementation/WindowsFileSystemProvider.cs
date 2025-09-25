@@ -1,5 +1,6 @@
 using FastFind.Interfaces;
 using FastFind.Models;
+using FastFind.Extensions;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -15,11 +16,13 @@ namespace FastFind.Windows.Implementation;
 /// Windows-optimized file system provider with NTFS support
 /// </summary>
 [SupportedOSPlatform("windows")]
-internal class WindowsFileSystemProvider : IFileSystemProvider
+internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 {
     private readonly ILogger<WindowsFileSystemProvider> _logger;
     private readonly ConcurrentDictionary<string, FileSystemWatcher> _watchers = new();
     private readonly SemaphoreSlim _enumerationSemaphore;
+    private readonly AsyncFileEnumerator _asyncEnumerator;
+    private readonly AsyncFileIOProvider _asyncIOProvider;
     private bool _disposed = false;
 
     public WindowsFileSystemProvider(ILogger<WindowsFileSystemProvider> logger)
@@ -27,6 +30,10 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         _logger = logger;
         var maxConcurrentOperations = Environment.ProcessorCount * 2;
         _enumerationSemaphore = new SemaphoreSlim(maxConcurrentOperations, maxConcurrentOperations);
+        _asyncEnumerator = new AsyncFileEnumerator(logger as ILogger<AsyncFileEnumerator> ??
+            new LoggerFactory().CreateLogger<AsyncFileEnumerator>());
+        _asyncIOProvider = new AsyncFileIOProvider(logger as ILogger<AsyncFileIOProvider> ??
+            new LoggerFactory().CreateLogger<AsyncFileIOProvider>());
     }
 
     /// <inheritdoc/>
@@ -50,21 +57,22 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         if (locationArray.Length == 0)
             yield break;
 
-        // 완전히 새로운 고성능 아키텍처 - TaskCanceledException 완전 방지
-        var channel = Channel.CreateBounded<FileItem>(new BoundedChannelOptions(2000)
+        // .NET 9 최적화된 고성능 아키텍처 - 백프레셔 지원
+        var channelOptions = new BoundedChannelOptions(1000) // 적절한 버퍼 크기
         {
-            FullMode = BoundedChannelFullMode.Wait,
+            FullMode = BoundedChannelFullMode.Wait, // 백프레셔: 생산자 대기
             SingleReader = true,
             SingleWriter = false,
-            AllowSynchronousContinuations = true // 성능 최적화
-        });
+            AllowSynchronousContinuations = false // .NET 9 범용 방식
+        };
+        var channel = Channel.CreateBounded<FileItem>(channelOptions);
 
         // 생산자 작업을 별도 태스크로 실행
         var producerTask = Task.Run(async () =>
         {
             try
             {
-                await ProduceFileItemsUltraFastAsync(locationArray, options, channel.Writer, cancellationToken);
+                await ProduceFileItemsUltraFastAsync(locationArray, options, channel.Writer, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -84,7 +92,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         try
         {
             // 소비자: 간단하고 빠른 읽기
-            await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken))
+            await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 yield return item;
             }
@@ -94,7 +102,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
             // 정리 작업 - 타임아웃으로 무한 대기 방지
             try
             {
-                await producerTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
+                await producerTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
             }
             catch
             {
@@ -141,7 +149,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                         // 1000개씩 배치로 채널에 쓰기
                         if (localBuffer.Count >= 1000)
                         {
-                            await WriteBufferToChannelAsync(localBuffer, writer, ct);
+                            await WriteBufferToChannelAsync(localBuffer, writer, ct).ConfigureAwait(false);
                             localBuffer.Clear();
                         }
                     }
@@ -149,7 +157,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                     // 남은 항목들 처리
                     if (localBuffer.Count > 0)
                     {
-                        await WriteBufferToChannelAsync(localBuffer, writer, ct);
+                        await WriteBufferToChannelAsync(localBuffer, writer, ct).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
@@ -387,8 +395,8 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
         }
     }
 
-    // 고효율 채널 쓰기
-    private static async Task WriteBufferToChannelAsync(List<FileItem> buffer, ChannelWriter<FileItem> writer, CancellationToken cancellationToken)
+    // .NET 9 백프레셔 지원 고효율 채널 쓰기
+    private static async ValueTask WriteBufferToChannelAsync(List<FileItem> buffer, ChannelWriter<FileItem> writer, CancellationToken cancellationToken)
     {
         try
         {
@@ -397,16 +405,24 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
                 if (cancellationToken.IsCancellationRequested)
                     break;
 
-                await writer.WriteAsync(item, cancellationToken);
+                // 백프레셔 지원: 채널이 가득 차면 대기
+                while (await writer.WaitToWriteAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    if (writer.TryWrite(item))
+                        break; // 성공적으로 쓰기 완료
+
+                    // 실패 시 잠시 대기 후 재시도 (백프레셔)
+                    await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException)
         {
             // 정상적인 취소
         }
-        catch (Exception)
+        catch (InvalidOperationException)
         {
-            // 채널이 닫힌 경우 등 - 무시하고 계속
+            // 채널이 닫힌 경우 - 정상 종료
         }
     }
 
@@ -541,7 +557,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(100, cancellationToken);
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
                 var currentTime = DateTime.Now;
                 if (currentTime - lastChangeTime < debounceInterval)
@@ -789,38 +805,55 @@ internal class WindowsFileSystemProvider : IFileSystemProvider
 
     public void Dispose()
     {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
         if (!_disposed)
         {
             _disposed = true;
 
             _logger.LogDebug("Disposing WindowsFileSystemProvider");
 
-            // Stop all file system watchers first
+            // Stop all file system watchers first - async disposal
             var watcherDisposeErrors = new List<Exception>();
-            foreach (var watcher in _watchers.Values)
+            var disposeTasks = _watchers.Values.Select(async watcher =>
             {
                 try
                 {
                     watcher.EnableRaisingEvents = false;
-                    watcher.Dispose();
+                    await Task.Run(() => watcher.Dispose()).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     watcherDisposeErrors.Add(ex);
                     _logger.LogDebug(ex, "Error disposing file system watcher");
                 }
-            }
+            });
 
+            await Task.WhenAll(disposeTasks).ConfigureAwait(false);
             _watchers.Clear();
 
             // Dispose the semaphore
             try
             {
-                _enumerationSemaphore.Dispose();
+                await Task.Run(() => _enumerationSemaphore.Dispose()).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Error disposing enumeration semaphore");
+            }
+
+            // Dispose async components
+            try
+            {
+                await _asyncEnumerator.DisposeAsync().ConfigureAwait(false);
+                _asyncIOProvider.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error disposing async components");
             }
 
             if (watcherDisposeErrors.Count != 0)
