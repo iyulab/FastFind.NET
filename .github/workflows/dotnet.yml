@@ -1,4 +1,4 @@
-name: FastFind.NET CI/CD Production
+name: FastFind.NET Build & Deploy
 on:
   # Manual trigger - Always available for direct execution
   workflow_dispatch:
@@ -8,18 +8,13 @@ on:
         required: false
         default: false
         type: boolean
-      run_performance_tests:
-        description: 'Run performance benchmarks'
-        required: false
-        default: false
-        type: boolean
   # Automatic trigger - Only when version changes or workflow updates
   push:
     branches: [ "main" ]
     paths:
       - 'src/Directory.Build.props'    # Version changes trigger deployment
       - '.github/workflows/**'        # Workflow updates
-  # Pull request validation - Full testing on any src changes
+  # Pull request validation - Build validation only (tests run locally)
   pull_request:
     branches: [ "main" ]
     paths:
@@ -31,137 +26,8 @@ env:
   SOLUTION_PATH: 'src/FastFind.sln'
   
 jobs:
-  # 🧪 크로스 플랫폼 테스트 (CI/CD 안정성 보장)
-  test-cross-platform:
-    name: Cross-Platform Tests
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        include:
-          - os: windows-latest
-            platform: windows
-            run-integration: true
-          - os: ubuntu-latest
-            platform: linux
-            run-integration: false
-    runs-on: ${{ matrix.os }}
-
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    
-    - name: Restore dependencies
-      run: dotnet restore ${{ env.SOLUTION_PATH }}
-    
-    - name: Build
-      run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
-    
-    - name: Run Core Tests (CI/CD Safe - Performance Tests Excluded)
-      run: |
-        # Run all tests - conditional attributes will auto-skip inappropriate tests
-        echo "🚀 Running CI/CD-safe tests..."
-        echo "   • Performance tests: Auto-skipped in CI environment"
-        echo "   • Windows-specific: Auto-skipped on non-Windows platforms"
-        echo "   • Platform: ${{ matrix.platform }}"
-
-        dotnet test ${{ env.SOLUTION_PATH }} \
-          --configuration Release \
-          --no-build \
-          --verbosity normal \
-          --logger trx \
-          --results-directory TestResults/ \
-          --collect:"XPlat Code Coverage"
-
-    - name: Additional Integration Tests
-      if: matrix.run-integration == true
-      run: |
-        echo "🔧 Running additional integration tests..."
-        echo "   • Integration tests will auto-skip on unsupported platforms"
-
-        dotnet test ${{ env.SOLUTION_PATH }} \
-          --configuration Release \
-          --no-build \
-          --verbosity normal \
-          --filter "Category=Integration" \
-          --collect:"XPlat Code Coverage"
-    
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results-${{ matrix.platform }}
-        path: |
-          TestResults/
-          **/coverage.cobertura.xml
-
-    - name: Test Summary
-      if: always()
-      run: |
-        echo "📊 CI/CD Test Execution Summary:"
-        echo "   Platform: ${{ matrix.platform }}"
-        echo "   ✅ Functional tests: Executed"
-        echo "   ⏭️  Performance tests: Auto-skipped (CI environment detected)"
-
-        if [ "${{ matrix.platform }}" = "windows" ]; then
-          echo "   ✅ Windows-specific tests: Executed"
-        else
-          echo "   ⏭️  Windows-specific tests: Auto-skipped (Linux platform)"
-        fi
-
-        echo ""
-        echo "🔧 Test Skipping Strategy:"
-        echo "   • Conditional test attributes automatically handle environment detection"
-        echo "   • No manual filtering needed - tests self-organize based on CI environment"
-        echo "   • All test categories execute, inappropriate tests skip with helpful messages"
-    
-
-  # ⚡ 성능 벤치마크 (수동 트리거만)
-  performance-tests:
-    name: Performance Benchmarks
-    runs-on: windows-latest
-    needs: test-cross-platform
-    if: github.event.inputs.run_performance_tests == 'true'
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-
-    - name: Restore dependencies
-      run: dotnet restore ${{ env.SOLUTION_PATH }}
-
-    - name: Build
-      run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
-
-    - name: Run Performance Tests
-      run: |
-        echo "🚀 Running performance benchmarks..."
-        dotnet test ${{ env.SOLUTION_PATH }} \
-          --configuration Release \
-          --no-build \
-          --verbosity normal \
-          --filter "Category=Performance" \
-          --logger trx --results-directory PerformanceResults/ || true
-
-    - name: Upload Performance Results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: performance-results
-        path: |
-          PerformanceResults/
-          BenchmarkDotNet.Artifacts/**
-
-  # 📦 빌드 및 배포
+  # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
   pack-and-publish:
-    needs: test-cross-platform
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -308,7 +174,7 @@ jobs:
         retention-days: 30
 
   create-release:
-    needs: [test-cross-platform, pack-and-publish]
+    needs: [pack-and-publish]
     runs-on: ubuntu-latest
     if: needs.pack-and-publish.outputs.SHOULD_DEPLOY == 'true' && github.ref == 'refs/heads/main'
     

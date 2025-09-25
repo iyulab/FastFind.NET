@@ -49,9 +49,9 @@ public sealed class WindowsOnlyFactAttribute : FactAttribute
 /// <summary>
 /// 성능 테스트 특성 - CI에서는 자동 스킵
 /// </summary>
-public sealed class PerformanceFactAttribute : FactAttribute
+public sealed class PerformanceTestFactAttribute : FactAttribute
 {
-    public PerformanceFactAttribute()
+    public PerformanceTestFactAttribute()
     {
         if (!CIEnvironment.CanRunPerformanceTests)
         {

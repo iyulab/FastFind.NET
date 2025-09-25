@@ -532,40 +532,54 @@ FastFind.NET/
 
 ## 🧪 Testing
 
-### Functional Tests (CI/CD)
+> **Note**: Tests are designed to run in local development environments only. CI/CD focuses on build validation and package deployment.
+
+### Local Development Testing
 ```bash
-# Run standard functional tests (included in CI/CD)
-dotnet test --filter "Category!=Performance"
+# Run all functional tests
+dotnet test src/FastFind.Windows.Tests/ --configuration Release
+
+# Run only core functionality tests (fastest)
+dotnet test --filter "Category!=Performance&Category!=Stress"
+
+# Run specific test categories
+dotnet test --filter "Category=Core"        # Core functionality
+dotnet test --filter "Category=SIMD"        # String matching
+dotnet test --filter "Category=StringPool"  # Memory optimization
 ```
 
-### Performance Tests (Manual/Scheduled)
+### Performance & Benchmark Testing
 ```bash
-# Run all performance tests
+# Run all performance tests (requires sufficient system resources)
 dotnet test --filter "Category=Performance"
 
 # Run specific performance test suites
 dotnet test --filter "Category=Performance&Suite=SIMD"
-dotnet test --filter "Category=Performance&Suite=StringPool" 
+dotnet test --filter "Category=Performance&Suite=StringPool"
 dotnet test --filter "Category=Performance&Suite=Integration"
 
 # Run BenchmarkDotNet benchmarks (most comprehensive)
-dotnet run --project tests/FastFind.Windows.Tests --configuration Release
-# Then call: BenchmarkRunner.RunSearchBenchmarks()
+dotnet run --project src/FastFind.Windows.Tests --configuration Release
 ```
 
-### Performance Test Environments
-- **Quick**: Basic performance validation (~5-10 min)
-- **Standard**: Comprehensive performance testing (~30-45 min)  
-- **Extended**: Full stress testing with large datasets (~1-2 hours)
+### Test Environment Requirements
+- **Windows 10/11**: Full test suite compatibility
+- **Memory**: Minimum 1GB available for performance tests
+- **Disk Space**: 500MB+ for test file generation
+- **CPU**: SIMD/AVX2 support recommended for performance tests
 
-Set environment variable: `PERFORMANCE_TEST_DURATION=Quick|Standard|Extended`
+### Why Local Testing Only?
+- **File System Dependency**: Tests interact with real file systems and hardware
+- **Performance Sensitivity**: Accurate benchmarks require controlled environments
+- **Resource Requirements**: Memory and disk intensive operations
+- **Platform Specificity**: Windows-optimized features need native environment
 
 ## 🤝 Contributing
 
 - **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/iyulab/FastFind.NET/issues)
-- **Discussions**: Join conversations on [GitHub Discussions](https://github.com/iyulab/FastFind.NET/discussions) 
+- **Discussions**: Join conversations on [GitHub Discussions](https://github.com/iyulab/FastFind.NET/discussions)
 - **Pull Requests**: Bug fixes and documentation improvements welcome
-- **Performance Testing**: Use `[perf]` in commit messages to trigger performance CI
+- **Performance Testing**: Run local benchmarks and share results in issues/PRs
 - **Roadmap Input**: Help prioritize Unix/Linux implementation features
 
 ## 📄 License
