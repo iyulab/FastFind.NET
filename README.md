@@ -104,16 +104,26 @@ var fileList = await results.Files.ToListAsync();
 Console.WriteLine($"Found {fileList.Count} files");
 ```
 
-### Advanced Search with Filters
+### Advanced Search with Enhanced Options ⚡
 ```csharp
 var query = new SearchQuery
 {
-    SearchText = "project",
+    // 🎯 Enhanced Search Options
+    BasePath = @"D:\Projects",           // Search from specific base path
+    SearchText = "project",              // Search text pattern
+    IncludeSubdirectories = true,        // Include subdirectories (default: true)
+    SearchFileNameOnly = false,          // Search in full paths (default: false)
+
+    // 📂 File Type Filters
     IncludeFiles = true,
     IncludeDirectories = false,
     ExtensionFilter = ".cs",
+
+    // 📏 Size Filters
     MinSize = 1024, // 1KB minimum
     MaxSize = 1024 * 1024, // 1MB maximum
+
+    // ⚙️ Search Options
     UseRegex = false,
     CaseSensitive = false,
     MaxResults = 1000
@@ -123,9 +133,50 @@ var results = await searchEngine.SearchAsync(query);
 Console.WriteLine($"🔍 Found {results.TotalMatches} matches in {results.SearchTime.TotalMilliseconds}ms");
 ```
 
+### Enhanced Path-Based Search 🎯
+```csharp
+// 1. Base Path Search - Start from specific directory
+var basePathQuery = new SearchQuery
+{
+    BasePath = @"C:\Users\achunja",      // 기준경로: 이 경로부터 탐색
+    SearchText = "claude",               // search-text: 경로,파일명에서 패턴 검색
+    IncludeSubdirectories = true,        // subdirectory: 하위 디렉토리 포함
+    SearchFileNameOnly = false           // Search in full paths and filenames
+};
+
+var results = await searchEngine.SearchAsync(basePathQuery);
+// Will find: C:\Users\achunja\.claude\CLAUDE.md, C:\Users\achunja\claude_config.txt, etc.
+
+// 2. Filename vs Full Path Search Comparison
+var filenameOnlyQuery = new SearchQuery
+{
+    SearchText = "claude",
+    SearchFileNameOnly = true,           // Only search in file names
+    BasePath = @"C:\Users"
+};
+
+var fullPathQuery = new SearchQuery
+{
+    SearchText = "claude",
+    SearchFileNameOnly = false,          // Search in full paths + filenames
+    BasePath = @"C:\Users"
+};
+
+var filenameResults = await searchEngine.SearchAsync(filenameOnlyQuery);
+var fullPathResults = await searchEngine.SearchAsync(fullPathQuery);
+
+Console.WriteLine($"Filename only: {filenameResults.TotalMatches} matches");
+Console.WriteLine($"Full path: {fullPathResults.TotalMatches} matches");
+```
+
 ### Real-Time Search with Async Streaming
 ```csharp
-var query = new SearchQuery { SearchText = "document" };
+var query = new SearchQuery
+{
+    BasePath = @"D:\data",               // Search from specific base path
+    SearchText = "document",
+    IncludeSubdirectories = true
+};
 
 // Real-time search with IAsyncEnumerable streaming
 await foreach (var result in searchEngine.SearchRealTimeAsync(query).ConfigureAwait(false))
@@ -302,28 +353,96 @@ var options = new IndexingOptions
 await searchEngine.StartIndexingAsync(options);
 ```
 
-### Search Query Options
+### Search Query Options ⚡
 ```csharp
 var query = new SearchQuery
 {
-    SearchText = "project",
-    UseRegex = false,
-    CaseSensitive = false,
-    SearchFileNameOnly = true,
-    
-    // Size filters
-    MinSize = 1024, // 1KB
-    MaxSize = 1024 * 1024, // 1MB
-    
-    // Date filters
+    // 🎯 Enhanced Search Options
+    BasePath = @"D:\Projects",           // Single base path (takes precedence over SearchLocations)
+    SearchText = "project",              // Search pattern in paths/filenames
+    IncludeSubdirectories = true,        // Include subdirectories (default: true)
+    SearchFileNameOnly = false,          // Search in full paths (default: false)
+
+    // 🔍 Search Behavior
+    UseRegex = false,                    // Use regex patterns
+    CaseSensitive = false,               // Case sensitive matching
+
+    // 📏 Size Filters
+    MinSize = 1024,                      // 1KB minimum
+    MaxSize = 1024 * 1024,              // 1MB maximum
+
+    // 📅 Date Filters
     MinCreatedDate = DateTime.Now.AddDays(-30),
     MaxModifiedDate = DateTime.Now,
-    
-    // File type filters
+
+    // 📂 File Type Filters
     ExtensionFilter = ".cs",
-    
-    // Result limits
-    MaxResults = 1000
+    IncludeFiles = true,
+    IncludeDirectories = false,
+    IncludeHidden = false,
+    IncludeSystem = false,
+
+    // 📊 Result Control
+    MaxResults = 1000,
+
+    // 🚫 Exclusions
+    ExcludedPaths = { "node_modules", "bin", "obj" },
+    SearchLocations = { @"C:\", @"D:\" }  // Used if BasePath not specified
+};
+```
+
+## 🎯 Common Search Scenarios
+
+### 1. Project File Search
+```csharp
+// Find all C# files in a specific project directory
+var projectQuery = new SearchQuery
+{
+    BasePath = @"D:\MyProjects\WebApp",
+    SearchText = "Controller",
+    ExtensionFilter = ".cs",
+    IncludeSubdirectories = true,
+    SearchFileNameOnly = false  // Search in paths for "Controller" directories too
+};
+```
+
+### 2. Configuration File Hunt
+```csharp
+// Find configuration files anywhere in the system
+var configQuery = new SearchQuery
+{
+    SearchText = "config",
+    SearchFileNameOnly = false,  // Search in full paths
+    ExtensionFilter = ".json",
+    IncludeSubdirectories = true,
+    MaxResults = 100
+};
+```
+
+### 3. Large File Cleanup
+```csharp
+// Find large files in Downloads folder (no subdirectories)
+var largeFilesQuery = new SearchQuery
+{
+    BasePath = @"C:\Users\%USERNAME%\Downloads",
+    MinSize = 100 * 1024 * 1024,  // 100MB+
+    IncludeSubdirectories = false,  // Only direct files
+    IncludeFiles = true,
+    IncludeDirectories = false
+};
+```
+
+### 4. Source Code Analysis
+```csharp
+// Find TODO comments in source files
+var todoQuery = new SearchQuery
+{
+    BasePath = @"D:\SourceCode",
+    SearchText = "TODO|FIXME|HACK",
+    UseRegex = true,
+    SearchFileNameOnly = false,
+    ExtensionFilter = ".cs",
+    IncludeSubdirectories = true
 };
 ```
 

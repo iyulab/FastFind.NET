@@ -23,9 +23,16 @@ public class SearchQuery
     public bool CaseSensitive { get; set; } = false;
 
     /// <summary>
-    /// Whether to search only in file names (not full paths)
+    /// Whether to search only in file names (true) or in both file names and full paths (false)
+    /// When false, search text can match anywhere in the full path (e.g., directory names, file names)
     /// </summary>
-    public bool SearchFileNameOnly { get; set; } = true;
+    public bool SearchFileNameOnly { get; set; } = false;
+
+    /// <summary>
+    /// Single base path to start searching from (takes precedence over SearchLocations if specified)
+    /// Example: "D:\data" - will search from this path and optionally include subdirectories
+    /// </summary>
+    public string? BasePath { get; set; }
 
     /// <summary>
     /// File extension filter (e.g., ".txt", ".pdf")
@@ -96,6 +103,11 @@ public class SearchQuery
     /// Paths to exclude from search
     /// </summary>
     public IList<string> ExcludedPaths { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Whether to include subdirectories when searching in specific locations
+    /// </summary>
+    public bool IncludeSubdirectories { get; set; } = true;
 
     /// <summary>
     /// Custom file attributes to match
@@ -215,6 +227,7 @@ public class SearchQuery
             UseRegex = UseRegex,
             CaseSensitive = CaseSensitive,
             SearchFileNameOnly = SearchFileNameOnly,
+            BasePath = BasePath,
             ExtensionFilter = ExtensionFilter,
             IncludeFiles = IncludeFiles,
             IncludeDirectories = IncludeDirectories,
@@ -229,6 +242,7 @@ public class SearchQuery
             MaxResults = MaxResults,
             SearchLocations = new List<string>(SearchLocations),
             ExcludedPaths = new List<string>(ExcludedPaths),
+            IncludeSubdirectories = IncludeSubdirectories,
             RequiredAttributes = RequiredAttributes,
             ExcludedAttributes = ExcludedAttributes
         };

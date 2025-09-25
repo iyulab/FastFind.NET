@@ -233,6 +233,20 @@ internal class WindowsSearchIndex : ISearchIndex
 
     private IEnumerable<FileItem> GetSearchCandidatesSync(SearchQuery query)
     {
+        // BasePath takes precedence over SearchLocations
+        if (!string.IsNullOrEmpty(query.BasePath))
+        {
+            var basePathCandidates = GetFilesByLocationsSync(new[] { query.BasePath }, query.IncludeSubdirectories);
+
+            // If extension filter is also specified, apply it to base path results
+            if (!string.IsNullOrEmpty(query.ExtensionFilter))
+            {
+                return ApplyExtensionFilter(basePathCandidates, query.ExtensionFilter);
+            }
+
+            return basePathCandidates;
+        }
+
         // Optimize search by using appropriate index
         if (!string.IsNullOrEmpty(query.ExtensionFilter))
         {
@@ -241,7 +255,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
         if (query.SearchLocations.Count > 0)
         {
-            return GetFilesByLocationsSync(query.SearchLocations);
+            return GetFilesByLocationsSync(query.SearchLocations, query.IncludeSubdirectories);
         }
 
         // Return all files
@@ -263,20 +277,50 @@ internal class WindowsSearchIndex : ISearchIndex
         }
     }
 
-    private IEnumerable<FileItem> GetFilesByLocationsSync(IList<string> locations)
+    private IEnumerable<FileItem> GetFilesByLocationsSync(IList<string> locations, bool includeSubdirectories = true)
     {
         foreach (var location in locations)
         {
             var normalizedPath = location.ToLowerInvariant().TrimEnd('\\', '/');
-            if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
+
+            if (includeSubdirectories)
             {
-                foreach (var filePath in filePaths)
+                // Search in the specified directory and all subdirectories
+                foreach (var fileItem in _fileIndex.Values)
                 {
-                    if (_fileIndex.TryGetValue(filePath, out var fileItem))
+                    var itemDirectory = fileItem.DirectoryPath?.ToLowerInvariant().TrimEnd('\\', '/');
+                    if (itemDirectory != null &&
+                        (itemDirectory == normalizedPath || itemDirectory.StartsWith(normalizedPath + "\\")))
                     {
                         yield return fileItem;
                     }
                 }
+            }
+            else
+            {
+                // Search only in the specified directory (exact match)
+                if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
+                {
+                    foreach (var filePath in filePaths)
+                    {
+                        if (_fileIndex.TryGetValue(filePath, out var fileItem))
+                        {
+                            yield return fileItem;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private IEnumerable<FileItem> ApplyExtensionFilter(IEnumerable<FileItem> candidates, string extension)
+    {
+        var normalizedExtension = extension.ToLowerInvariant();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Extension.ToLowerInvariant() == normalizedExtension)
+            {
+                yield return candidate;
             }
         }
     }

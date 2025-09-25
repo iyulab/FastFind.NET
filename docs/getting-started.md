@@ -100,17 +100,28 @@ await foreach (var file in results.Files.ConfigureAwait(false))
 }
 ```
 
-### 4. Advanced Search
+### 4. Enhanced Search with Path Control ⚡
 
 ```csharp
+// New: Enhanced search with base path and subdirectory control
 var query = new SearchQuery
 {
-    SearchText = "project",
+    // 🎯 Enhanced Path-Based Search Options
+    BasePath = @"D:\Projects",           // 기준경로: Search from specific base path
+    SearchText = "Controller",           // search-text: Pattern in paths/filenames
+    IncludeSubdirectories = true,        // subdirectory: Include subdirectories
+    SearchFileNameOnly = false,          // Search in full paths (default: false)
+
+    // 📂 File Filters
     IncludeFiles = true,
     IncludeDirectories = false,
     ExtensionFilter = ".cs",
+
+    // 📏 Size Filters
     MinSize = 1024, // 1KB minimum
     MaxSize = 1024 * 1024, // 1MB maximum
+
+    // ⚙️ Search Behavior
     UseRegex = false,
     CaseSensitive = false,
     MaxResults = 1000
@@ -169,11 +180,16 @@ var options = new IndexingOptions
 ```csharp
 var query = new SearchQuery
 {
-    SearchText = "search term",
+    // Enhanced search options
+    BasePath = @"C:\MyProject",          // Start from specific directory
+    SearchText = "search term",          // Pattern to find
+    IncludeSubdirectories = true,        // Include subdirectories
+    SearchFileNameOnly = false,          // Search in full paths (recommended)
+
+    // Search behavior
     UseRegex = false,
     CaseSensitive = false,
-    SearchFileNameOnly = true,
-    
+
     // Filters
     ExtensionFilter = ".cs",
     MinSize = 1024,
