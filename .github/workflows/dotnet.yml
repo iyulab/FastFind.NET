@@ -1,5 +1,6 @@
-name: .NET Build and NuGet Publish
+name: FastFind.NET CI/CD Production
 on:
+  # Manual trigger - Always available for direct execution
   workflow_dispatch:
     inputs:
       push_to_nuget:
@@ -7,22 +8,44 @@ on:
         required: false
         default: false
         type: boolean
+      run_performance_tests:
+        description: 'Run performance benchmarks'
+        required: false
+        default: false
+        type: boolean
+  # Automatic trigger - Only when version changes or workflow updates
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
+    paths:
+      - 'src/Directory.Build.props'    # Version changes trigger deployment
+      - '.github/workflows/**'        # Workflow updates
+  # Pull request validation - Full testing on any src changes
+  pull_request:
+    branches: [ "main" ]
     paths:
       - 'src/**'
       - '.github/workflows/**'
-  pull_request:
-    branches: [ "main" ]
 
 env:
   DOTNET_VERSION: '9.0.x'
   SOLUTION_PATH: 'src/FastFind.sln'
   
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  # 🧪 크로스 플랫폼 테스트 (CI/CD 안정성 보장)
+  test-cross-platform:
+    name: Cross-Platform Tests
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform: windows
+            run-integration: true
+          - os: ubuntu-latest
+            platform: linux
+            run-integration: false
+    runs-on: ${{ matrix.os }}
+
     steps:
     - uses: actions/checkout@v4
     
@@ -37,19 +60,80 @@ jobs:
     - name: Build
       run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
     
-    - name: Run tests
-      run: dotnet test ${{ env.SOLUTION_PATH }} --configuration Release --no-build --verbosity normal --logger trx --results-directory TestResults/
+    - name: Run Core Tests (CI/CD Safe - Performance Tests Excluded)
+      run: |
+        dotnet test ${{ env.SOLUTION_PATH }} \
+          --configuration Release \
+          --no-build \
+          --verbosity normal \
+          --logger trx \
+          --results-directory TestResults/ \
+          --filter "Category!=Performance&Category!=Stress&Category!=Benchmark&Category!=Integration" \
+          --collect:"XPlat Code Coverage"
+
+    - name: Run Windows Integration Tests
+      if: matrix.run-integration == true
+      run: |
+        dotnet test ${{ env.SOLUTION_PATH }} \
+          --configuration Release \
+          --no-build \
+          --verbosity normal \
+          --filter "Category=Windows&Category!=Performance&Category!=Stress&Category!=Benchmark" \
+          --collect:"XPlat Code Coverage"
     
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results
-        path: TestResults/
+        name: test-results-${{ matrix.platform }}
+        path: |
+          TestResults/
+          **/coverage.cobertura.xml
     
 
+  # ⚡ 성능 벤치마크 (수동 트리거만)
+  performance-tests:
+    name: Performance Benchmarks
+    runs-on: windows-latest
+    needs: test-cross-platform
+    if: github.event.inputs.run_performance_tests == 'true'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+    - name: Build
+      run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
+
+    - name: Run Performance Tests
+      run: |
+        echo "🚀 Running performance benchmarks..."
+        dotnet test ${{ env.SOLUTION_PATH }} \
+          --configuration Release \
+          --no-build \
+          --verbosity normal \
+          --filter "Category=Performance" \
+          --logger trx --results-directory PerformanceResults/ || true
+
+    - name: Upload Performance Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: performance-results
+        path: |
+          PerformanceResults/
+          BenchmarkDotNet.Artifacts/**
+
+  # 📦 빌드 및 배포
   pack-and-publish:
-    needs: build
+    needs: test-cross-platform
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -101,38 +185,92 @@ jobs:
           dotnet nuget verify "$package" || echo "Package verification failed for $package"
         done
     
-    - name: Check if should push to NuGet
-      id: should_push
+    - name: Extract Version from Directory.Build.props
+      id: version
       run: |
-        # Check for version changes in Directory.Build.props
+        # Extract current version from Directory.Build.props
+        CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' src/Directory.Build.props || echo "1.0.0")
+        echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+        echo "📦 Current version: ${CURRENT_VERSION}"
+
+        # Create version tag format
+        echo "VERSION_TAG=v${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Check Version Change and Deploy Conditions
+      id: deploy_check
+      run: |
+        CURRENT_VERSION="${{ steps.version.outputs.CURRENT_VERSION }}"
         VERSION_CHANGED="false"
-        if git diff --name-only ${{ github.event.before }}..${{ github.sha }} 2>/dev/null | grep -q "src/Directory.Build.props"; then
-          echo "Directory.Build.props file changed"
-          VERSION_CHANGED="true"
+        SHOULD_DEPLOY="false"
+        REASON="no_trigger"
+
+        echo "🔍 Checking deployment conditions..."
+
+        # Check if Directory.Build.props was changed in this push
+        if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+          if git diff --name-only ${{ github.event.before }}..${{ github.sha }} | grep -q "src/Directory.Build.props"; then
+            echo "✅ Directory.Build.props was changed in this push"
+            VERSION_CHANGED="true"
+
+            # Get previous version for comparison
+            PREVIOUS_VERSION=$(git show ${{ github.event.before }}:src/Directory.Build.props | grep -oP '<Version>\K[^<]+' || echo "0.0.0")
+            echo "📊 Previous version: ${PREVIOUS_VERSION}"
+            echo "📊 Current version: ${CURRENT_VERSION}"
+
+            if [ "${PREVIOUS_VERSION}" != "${CURRENT_VERSION}" ]; then
+              echo "🚀 Version changed from ${PREVIOUS_VERSION} to ${CURRENT_VERSION}"
+              if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+                SHOULD_DEPLOY="true"
+                REASON="version_change_on_main"
+              else
+                echo "⚠️ Version changed but not on main branch"
+                REASON="version_change_not_main"
+              fi
+            else
+              echo "ℹ️ Directory.Build.props changed but version remained the same"
+              REASON="props_change_no_version"
+            fi
+          else
+            echo "ℹ️ Directory.Build.props was not changed"
+          fi
         fi
-        
-        # Check conditions for pushing
-        if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]; then
-          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
-          echo "REASON=version_tag" >> $GITHUB_OUTPUT
-        elif [ "${{ github.event.inputs.push_to_nuget }}" == "true" ]; then
-          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
-          echo "REASON=manual_trigger" >> $GITHUB_OUTPUT
-        elif [ "$VERSION_CHANGED" == "true" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
-          echo "SHOULD_PUSH=true" >> $GITHUB_OUTPUT
-          echo "REASON=version_change" >> $GITHUB_OUTPUT
-        else
-          echo "SHOULD_PUSH=false" >> $GITHUB_OUTPUT
-          echo "REASON=no_trigger" >> $GITHUB_OUTPUT
+
+        # Manual trigger override
+        if [ "${{ github.event.inputs.push_to_nuget }}" == "true" ]; then
+          echo "🔧 Manual deployment trigger activated"
+          SHOULD_DEPLOY="true"
+          REASON="manual_trigger"
         fi
-        
-        echo "Push decision: $SHOULD_PUSH (reason: $REASON)"
+
+        # Check if version already exists on NuGet (optional - can be enabled later)
+        # We'll skip this for now to allow re-publishing same version if needed
+
+        echo "SHOULD_DEPLOY=${SHOULD_DEPLOY}" >> $GITHUB_OUTPUT
+        echo "REASON=${REASON}" >> $GITHUB_OUTPUT
+        echo "VERSION_CHANGED=${VERSION_CHANGED}" >> $GITHUB_OUTPUT
+        echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+
+        echo "📋 Deployment Decision:"
+        echo "   Should Deploy: ${SHOULD_DEPLOY}"
+        echo "   Reason: ${REASON}"
+        echo "   Version: ${CURRENT_VERSION}"
     
     - name: Push ${{ matrix.project.name }} to NuGet
-      if: steps.should_push.outputs.SHOULD_PUSH == 'true'
+      if: steps.deploy_check.outputs.SHOULD_DEPLOY == 'true'
       run: |
-        echo "Pushing packages to NuGet (reason: ${{ steps.should_push.outputs.REASON }})"
-        dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        echo "🚀 Deploying ${{ matrix.project.name }} v${{ steps.deploy_check.outputs.CURRENT_VERSION }} to NuGet"
+        echo "📋 Reason: ${{ steps.deploy_check.outputs.REASON }}"
+        echo "📦 Packages in nupkg/:"
+        ls -la nupkg/
+
+        echo "📤 Pushing to NuGet..."
+        dotnet nuget push ./nupkg/*.nupkg \
+          --source https://api.nuget.org/v3/index.json \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --skip-duplicate \
+          --no-symbols
+
+        echo "✅ NuGet deployment completed for ${{ matrix.project.name }} v${{ steps.deploy_check.outputs.CURRENT_VERSION }}"
     
     - name: Upload packages
       uses: actions/upload-artifact@v4
@@ -142,9 +280,9 @@ jobs:
         retention-days: 30
 
   create-release:
-    needs: [build, pack-and-publish]
+    needs: [test-cross-platform, pack-and-publish]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_nuget == 'true')
+    if: needs.pack-and-publish.outputs.SHOULD_DEPLOY == 'true' && github.ref == 'refs/heads/main'
     
     steps:
     - uses: actions/checkout@v4

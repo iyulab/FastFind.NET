@@ -31,7 +31,7 @@ dotnet add package FastFind.Unix
 
 ## 🚀 Quick Start
 
-### 1. Basic Setup
+### 1. Basic Setup with Async Optimization
 
 ```csharp
 using FastFind;
@@ -54,38 +54,49 @@ if (!validation.IsReady)
 logger.LogInformation("✅ System ready: {Summary}", validation.GetSummary());
 ```
 
-### 2. Create Search Engine
+### 2. Create Search Engine with Async Disposal
 
 ```csharp
-// Create platform-optimized search engine
-// Windows-specific factory method available
-var searchEngine = FastFinder.CreateWindowsSearchEngine(logger);
-// Or use auto-detection: FastFinder.CreateSearchEngine(logger);
+// Register Windows implementation (required)
+WindowsRegistration.EnsureRegistered();
 
-// Configure indexing options
+// Create platform-optimized search engine with async disposal
+await using var searchEngine = FastFinder.CreateWindowsSearchEngine(logger);
+
+// Configure indexing options with async optimization
 var indexingOptions = new IndexingOptions
 {
     DriveLetters = ['C'], // Windows drives to scan
     ExcludedPaths = ["temp", "cache", "node_modules", ".git"],
     IncludeHidden = false,
-    ParallelThreads = Environment.ProcessorCount
+    ParallelThreads = Environment.ProcessorCount,
+    UseMemoryPool = true,    // New: MemoryPool<T> optimization
+    UseAsyncIO = true        // New: True async I/O with IOCP
 };
 
 // Start background indexing
-await searchEngine.StartIndexingAsync(indexingOptions);
+await searchEngine.StartIndexingAsync(indexingOptions).ConfigureAwait(false);
 ```
 
-### 3. Basic Search
+### 3. Basic Search with Streaming
 
 ```csharp
-// Simple text search
-var results = await searchEngine.SearchAsync("*.txt");
+// Simple text search with streaming results
+var results = await searchEngine.SearchAsync("*.txt").ConfigureAwait(false);
 
 Console.WriteLine($"🔍 Found {results.TotalMatches} files in {results.SearchTime.TotalMilliseconds}ms");
 
-foreach (var file in results.Files.Take(10))
+// Stream results for memory efficiency - New async pattern
+await foreach (var file in results.Files.ConfigureAwait(false))
 {
-    Console.WriteLine($"📄 {file.Name} ({file.SizeFormatted}) - {file.Directory}");
+    Console.WriteLine($"📄 {file.Name} ({file.Size:N0} bytes) - {file.Directory}");
+
+    // Process files immediately without buffering
+    if (file.Extension == ".txt" && file.Size > 1024)
+    {
+        // Process large text files
+        break; // Example: stop after first large file
+    }
 }
 ```
 
