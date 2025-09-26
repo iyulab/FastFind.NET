@@ -5,8 +5,6 @@ using FastFind.Windows.Implementation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.Versioning;
-using System.Buffers;
-using System.Runtime.CompilerServices;
 
 namespace FastFind.Windows;
 

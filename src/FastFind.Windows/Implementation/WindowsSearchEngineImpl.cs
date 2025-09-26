@@ -276,12 +276,15 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             try
             {
                 // .NET 9: Enhanced async enumeration with ConfigureAwait
+                Console.WriteLine($"[DEBUG] SearchEngineImpl - Starting to enumerate search index results...");
                 await foreach (var fileItem in _searchIndex.SearchAsync(query, cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    Console.WriteLine($"[DEBUG] SearchEngineImpl - Received result: {fileItem.Name} from search index");
                     resultList.Add(fileItem);
                     totalMatches++;
+                    Console.WriteLine($"[DEBUG] SearchEngineImpl - Total matches so far: {totalMatches}");
 
                     // Update progress with adaptive frequency
                     if (totalMatches % GetProgressUpdateFrequency(totalMatches) == 0)
@@ -294,6 +297,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     if (query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value)
                         break;
                 }
+                Console.WriteLine($"[DEBUG] SearchEngineImpl - Finished enumerating, total collected: {totalMatches}");
 
                 stopwatch.Stop();
 
@@ -783,11 +787,17 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     /// </summary>
     private static async IAsyncEnumerable<FastFileItem> ConvertToFastFileItemAsyncEnumerable(IList<FileItem> items)
     {
+        Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Converting {items.Count} items");
         await Task.Yield();
+        var convertedCount = 0;
         foreach (var item in items)
         {
-            yield return item.ToFastFileItem();
+            convertedCount++;
+            var fastItem = item.ToFastFileItem();
+            Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Converted #{convertedCount}: {fastItem.Name}");
+            yield return fastItem;
         }
+        Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Completed, yielded {convertedCount} items");
     }
 
     private static string GetDefaultIndexPath()
