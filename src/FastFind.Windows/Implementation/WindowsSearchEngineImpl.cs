@@ -321,9 +321,14 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     IndexHitRate = 100.0
                 };
 
+                // .NET 9: Create a copy of resultList before returning to pool
+                // This is necessary because ConvertToFastFileItemAsyncEnumerable uses lazy evaluation
+                // and the enumeration may happen after the finally block clears the list
+                var resultListCopy = resultList.ToList();
+
                 var result = SearchResult.Success(
-                    query, totalMatches, resultList.Count, searchTime,
-                    ConvertToFastFileItemAsyncEnumerable(resultList), metrics, hasMoreResults);
+                    query, totalMatches, resultListCopy.Count, searchTime,
+                    ConvertToFastFileItemAsyncEnumerable(resultListCopy), metrics, hasMoreResults);
 
                 // Notify search completed
                 SearchProgressChanged?.Invoke(this, new SearchProgressEventArgs(
