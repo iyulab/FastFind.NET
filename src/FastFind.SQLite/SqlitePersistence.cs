@@ -19,6 +19,9 @@ public sealed class SqlitePersistence : IIndexPersistence
     private bool _disposed;
     private long _count;
     private bool _isReady;
+    private readonly object _countSyncLock = new();
+    private SqliteIndexTransaction? _activeTransaction;
+    private readonly SemaphoreSlim _bulkOperationLock = new(1, 1);
 
     /// <inheritdoc/>
     public long Count => _count;
@@ -112,9 +115,17 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
+        // Check if item exists before insert to correctly track count for UPSERT
+        var existsBefore = await ExistsAsync(item.FullPath, cancellationToken);
+
         await using var cmd = CreateInsertCommand(item);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
-        Interlocked.Increment(ref _count);
+
+        // Only increment count for actual INSERT, not UPDATE (UPSERT)
+        if (!existsBefore)
+        {
+            Interlocked.Increment(ref _count);
+        }
     }
 
     /// <inheritdoc/>
@@ -159,9 +170,9 @@ public sealed class SqlitePersistence : IIndexPersistence
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                fullPathParam.Value = item.FullPath;
+                fullPathParam.Value = NormalizePath(item.FullPath);
                 nameParam.Value = item.Name;
-                dirPathParam.Value = item.DirectoryPath;
+                dirPathParam.Value = NormalizePath(item.DirectoryPath);
                 extParam.Value = item.Extension;
                 sizeParam.Value = item.Size;
                 createdParam.Value = new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds();
@@ -176,7 +187,9 @@ public sealed class SqlitePersistence : IIndexPersistence
             }
 
             await transaction.CommitAsync(cancellationToken);
-            Interlocked.Add(ref _count, count);
+
+            // Refresh count from DB to accurately reflect UPSERT behavior
+            await RefreshCountAsync(cancellationToken);
 
             _logger?.LogDebug("Batch inserted {Count} items", count);
             return count;
@@ -203,46 +216,63 @@ public sealed class SqlitePersistence : IIndexPersistence
         var totalInserted = 0;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+        // Acquire exclusive lock for bulk operations to prevent concurrent FTS manipulation
+        await _bulkOperationLock.WaitAsync(cancellationToken);
         try
         {
             // Apply bulk loading optimizations
             await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
 
-            // Disable FTS triggers for bulk loading (rebuild FTS afterward)
-            if (_config.EnableFullTextSearch)
-            {
-                await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
-            }
-
-            await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+            // Use IMMEDIATE transaction to acquire write lock early and prevent conflicts
+            await ExecuteNonQueryAsync("BEGIN IMMEDIATE", cancellationToken);
 
             try
             {
+                // Disable FTS triggers within transaction
+                if (_config.EnableFullTextSearch)
+                {
+                    await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
+                }
+
                 for (var i = 0; i < items.Count; i += batchSize)
                 {
                     if (cancellationToken.IsCancellationRequested) break;
 
                     var batch = items.Skip(i).Take(batchSize).ToList();
-                    var inserted = await InsertBatchMultiValueAsync(batch, transaction, cancellationToken);
+                    var inserted = await InsertBatchMultiValueInternalAsync(batch, cancellationToken);
                     totalInserted += inserted;
                 }
 
-                await transaction.CommitAsync(cancellationToken);
+                // Rebuild FTS index within transaction
+                if (_config.EnableFullTextSearch)
+                {
+                    await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
+                    await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
+                }
+
+                await ExecuteNonQueryAsync("COMMIT", cancellationToken);
             }
             catch
             {
-                await transaction.RollbackAsync(cancellationToken);
+                await ExecuteNonQueryAsync("ROLLBACK", cancellationToken);
+
+                // Re-enable FTS triggers if they were disabled
+                if (_config.EnableFullTextSearch)
+                {
+                    try
+                    {
+                        await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
+                    }
+                    catch
+                    {
+                        // Ignore trigger recreation errors during rollback
+                    }
+                }
                 throw;
             }
 
-            // Rebuild FTS index in one operation (faster than per-row triggers)
-            if (_config.EnableFullTextSearch)
-            {
-                await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
-                await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
-            }
-
-            Interlocked.Add(ref _count, totalInserted);
+            // Refresh count from DB to accurately reflect UPSERT behavior
+            await RefreshCountAsync(cancellationToken);
 
             stopwatch.Stop();
             var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
@@ -255,7 +285,15 @@ public sealed class SqlitePersistence : IIndexPersistence
         finally
         {
             // Restore normal PRAGMA settings
-            await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
+            try
+            {
+                await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
+            }
+            catch
+            {
+                // Ignore PRAGMA restore errors
+            }
+            _bulkOperationLock.Release();
         }
     }
 
@@ -281,9 +319,54 @@ public sealed class SqlitePersistence : IIndexPersistence
 
             sb.Append($"({prefix}fp, {prefix}n, {prefix}dp, {prefix}e, {prefix}s, {prefix}ct, {prefix}mt, {prefix}at, {prefix}a, {prefix}dl, {prefix}id)");
 
-            cmd.Parameters.AddWithValue($"{prefix}fp", item.FullPath);
+            cmd.Parameters.AddWithValue($"{prefix}fp", NormalizePath(item.FullPath));
             cmd.Parameters.AddWithValue($"{prefix}n", item.Name);
-            cmd.Parameters.AddWithValue($"{prefix}dp", item.DirectoryPath);
+            cmd.Parameters.AddWithValue($"{prefix}dp", NormalizePath(item.DirectoryPath));
+            cmd.Parameters.AddWithValue($"{prefix}e", item.Extension);
+            cmd.Parameters.AddWithValue($"{prefix}s", item.Size);
+            cmd.Parameters.AddWithValue($"{prefix}ct", new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}mt", new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}at", new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}a", (int)item.Attributes);
+            cmd.Parameters.AddWithValue($"{prefix}dl", item.DriveLetter.ToString());
+            cmd.Parameters.AddWithValue($"{prefix}id", item.IsDirectory ? 1 : 0);
+        }
+
+        sb.AppendLine();
+        sb.Append(SqliteSchema.BulkInsertSuffix);
+
+        cmd.CommandText = sb.ToString();
+        return await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+
+    /// <summary>
+    /// Internal version of InsertBatchMultiValueAsync without explicit transaction parameter.
+    /// Used when transaction is controlled externally via BEGIN/COMMIT.
+    /// </summary>
+    private async Task<int> InsertBatchMultiValueInternalAsync(
+        List<FastFileItem> batch,
+        CancellationToken cancellationToken)
+    {
+        if (batch.Count == 0) return 0;
+
+        // Build multi-value INSERT statement
+        var sb = new System.Text.StringBuilder(SqliteSchema.BulkInsertPrefix);
+
+        await using var cmd = _connection!.CreateCommand();
+
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+
+            var item = batch[i];
+            var prefix = $"@p{i}_";
+
+            sb.Append($"({prefix}fp, {prefix}n, {prefix}dp, {prefix}e, {prefix}s, {prefix}ct, {prefix}mt, {prefix}at, {prefix}a, {prefix}dl, {prefix}id)");
+
+            cmd.Parameters.AddWithValue($"{prefix}fp", NormalizePath(item.FullPath));
+            cmd.Parameters.AddWithValue($"{prefix}n", item.Name);
+            cmd.Parameters.AddWithValue($"{prefix}dp", NormalizePath(item.DirectoryPath));
             cmd.Parameters.AddWithValue($"{prefix}e", item.Extension);
             cmd.Parameters.AddWithValue($"{prefix}s", item.Size);
             cmd.Parameters.AddWithValue($"{prefix}ct", new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds());
@@ -408,7 +491,7 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         await using var cmd = _connection!.CreateCommand();
         cmd.CommandText = SqliteSchema.DeleteFile;
-        cmd.Parameters.AddWithValue("@full_path", fullPath);
+        cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
         var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
         if (affected > 0)
@@ -439,7 +522,7 @@ public sealed class SqlitePersistence : IIndexPersistence
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                param.Value = path;
+                param.Value = NormalizePath(path);
                 var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
                 if (affected > 0) count++;
             }
@@ -474,7 +557,7 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         await using var cmd = _connection!.CreateCommand();
         cmd.CommandText = SqliteSchema.GetByPath;
-        cmd.Parameters.AddWithValue("@full_path", fullPath);
+        cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         if (await reader.ReadAsync(cancellationToken))
@@ -492,7 +575,7 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         await using var cmd = _connection!.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE full_path = @full_path LIMIT 1";
-        cmd.Parameters.AddWithValue("@full_path", fullPath);
+        cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result != null;
@@ -552,17 +635,18 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
+        var normalizedPath = NormalizePath(directoryPath);
         await using var cmd = _connection!.CreateCommand();
 
         if (recursive)
         {
             cmd.CommandText = SqliteSchema.GetByDirectoryRecursive;
-            cmd.Parameters.AddWithValue("@directory_pattern", directoryPath.TrimEnd('\\', '/') + "%");
+            cmd.Parameters.AddWithValue("@directory_pattern", normalizedPath.TrimEnd('\\', '/') + "%");
         }
         else
         {
             cmd.CommandText = SqliteSchema.GetByDirectory;
-            cmd.Parameters.AddWithValue("@directory_path", directoryPath);
+            cmd.Parameters.AddWithValue("@directory_path", normalizedPath);
         }
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -674,7 +758,9 @@ public sealed class SqlitePersistence : IIndexPersistence
         EnsureReady();
 
         var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
-        return new SqliteIndexTransaction((SqliteTransaction)transaction);
+        var indexTransaction = new SqliteIndexTransaction((SqliteTransaction)transaction, this);
+        _activeTransaction = indexTransaction;
+        return indexTransaction;
     }
 
     /// <inheritdoc/>
@@ -698,9 +784,9 @@ public sealed class SqlitePersistence : IIndexPersistence
     {
         var cmd = _connection!.CreateCommand();
         cmd.CommandText = SqliteSchema.InsertFile;
-        cmd.Parameters.AddWithValue("@full_path", item.FullPath);
+        cmd.Parameters.AddWithValue("@full_path", NormalizePath(item.FullPath));
         cmd.Parameters.AddWithValue("@name", item.Name);
-        cmd.Parameters.AddWithValue("@directory_path", item.DirectoryPath);
+        cmd.Parameters.AddWithValue("@directory_path", NormalizePath(item.DirectoryPath));
         cmd.Parameters.AddWithValue("@extension", item.Extension);
         cmd.Parameters.AddWithValue("@size", item.Size);
         cmd.Parameters.AddWithValue("@created_time", new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds());
@@ -806,6 +892,25 @@ public sealed class SqlitePersistence : IIndexPersistence
         return result is long l ? l : 0;
     }
 
+
+    /// <summary>
+    /// Refreshes the in-memory count from the database.
+    /// Called internally when a transaction completes.
+    /// </summary>
+    internal async Task RefreshCountAsync(CancellationToken cancellationToken = default)
+    {
+        var dbCount = await GetCountFromDbAsync(cancellationToken);
+        Interlocked.Exchange(ref _count, dbCount);
+    }
+
+    /// <summary>
+    /// Clears the active transaction reference.
+    /// </summary>
+    internal void ClearActiveTransaction()
+    {
+        _activeTransaction = null;
+    }
+
     private async Task ExecuteNonQueryAsync(string sql, CancellationToken cancellationToken)
     {
         await using var cmd = _connection!.CreateCommand();
@@ -824,6 +929,18 @@ public sealed class SqlitePersistence : IIndexPersistence
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
+
+    /// <summary>
+    /// Normalizes a file path for consistent storage and lookup.
+    /// Converts to lowercase and normalizes directory separators for Windows filesystem compatibility.
+    /// </summary>
+    private static string NormalizePath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+        return path.ToLowerInvariant().Replace('/', '\\');
+    }
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
@@ -831,8 +948,28 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         if (_connection != null)
         {
-            await _connection.CloseAsync();
-            await _connection.DisposeAsync();
+            try
+            {
+                await _connection.CloseAsync();
+                await _connection.DisposeAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Connection already disposed, ignore
+            }
+            catch (NullReferenceException)
+            {
+                // Connection internal state issue during concurrent dispose, ignore
+            }
+        }
+
+        try
+        {
+            _bulkOperationLock.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Semaphore already disposed
         }
 
         _disposed = true;
@@ -844,8 +981,28 @@ public sealed class SqlitePersistence : IIndexPersistence
     {
         if (_disposed) return;
 
-        _connection?.Close();
-        _connection?.Dispose();
+        try
+        {
+            _connection?.Close();
+            _connection?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Connection already disposed, ignore
+        }
+        catch (NullReferenceException)
+        {
+            // Connection internal state issue during concurrent dispose, ignore
+        }
+
+        try
+        {
+            _bulkOperationLock.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Semaphore already disposed
+        }
 
         _disposed = true;
         _isReady = false;
@@ -853,16 +1010,18 @@ public sealed class SqlitePersistence : IIndexPersistence
 }
 
 /// <summary>
-/// SQLite transaction wrapper
+/// SQLite transaction wrapper with count synchronization support
 /// </summary>
 internal sealed class SqliteIndexTransaction : IIndexTransaction
 {
     private readonly SqliteTransaction _transaction;
+    private readonly SqlitePersistence _persistence;
     private bool _completed;
 
-    public SqliteIndexTransaction(SqliteTransaction transaction)
+    public SqliteIndexTransaction(SqliteTransaction transaction, SqlitePersistence persistence)
     {
         _transaction = transaction;
+        _persistence = persistence;
     }
 
     public async Task CommitAsync(CancellationToken cancellationToken = default)
@@ -870,6 +1029,9 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
         if (_completed) return;
         await _transaction.CommitAsync(cancellationToken);
         _completed = true;
+        _persistence.ClearActiveTransaction();
+        // Refresh count from DB to ensure accuracy after commit
+        await _persistence.RefreshCountAsync(cancellationToken);
     }
 
     public async Task RollbackAsync(CancellationToken cancellationToken = default)
@@ -877,6 +1039,9 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
         if (_completed) return;
         await _transaction.RollbackAsync(cancellationToken);
         _completed = true;
+        _persistence.ClearActiveTransaction();
+        // Refresh count from DB to revert any in-memory count changes
+        await _persistence.RefreshCountAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -884,6 +1049,9 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
         if (!_completed)
         {
             await _transaction.RollbackAsync();
+            _persistence.ClearActiveTransaction();
+            // Refresh count from DB to revert any in-memory count changes
+            await _persistence.RefreshCountAsync();
         }
         await _transaction.DisposeAsync();
     }
