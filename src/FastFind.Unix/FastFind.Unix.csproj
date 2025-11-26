@@ -1,10 +1,8 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <Nullable>enable</Nullable>
-	<PackageId>FastFind.Unix</PackageId>
-	<Title>FastFind.NET Unix</Title>
+    <PackageId>FastFind.Unix</PackageId>
+    <Title>FastFind.NET Unix</Title>
   </PropertyGroup>
 
   <ItemGroup>

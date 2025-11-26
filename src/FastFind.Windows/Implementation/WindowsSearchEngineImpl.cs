@@ -276,15 +276,13 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             try
             {
                 // .NET 9: Enhanced async enumeration with ConfigureAwait
-                Console.WriteLine($"[DEBUG] SearchEngineImpl - Starting to enumerate search index results...");
-                await foreach (var fileItem in _searchIndex.SearchAsync(query, cancellationToken).ConfigureAwait(false))
+                // SearchAsync now returns FastFileItem, convert to FileItem for internal storage
+                await foreach (var fastFileItem in _searchIndex.SearchAsync(query, cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    Console.WriteLine($"[DEBUG] SearchEngineImpl - Received result: {fileItem.Name} from search index");
-                    resultList.Add(fileItem);
+                    resultList.Add(fastFileItem.ToFileItem());
                     totalMatches++;
-                    Console.WriteLine($"[DEBUG] SearchEngineImpl - Total matches so far: {totalMatches}");
 
                     // Update progress with adaptive frequency
                     if (totalMatches % GetProgressUpdateFrequency(totalMatches) == 0)
@@ -297,7 +295,6 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     if (query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value)
                         break;
                 }
-                Console.WriteLine($"[DEBUG] SearchEngineImpl - Finished enumerating, total collected: {totalMatches}");
 
                 stopwatch.Stop();
 
@@ -425,7 +422,16 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     public async Task<IndexingStatistics> GetIndexingStatisticsAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        return await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+        var indexStats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+
+        // Convert IndexStatistics to IndexingStatistics
+        return new IndexingStatistics
+        {
+            TotalFiles = indexStats.TotalFiles,
+            TotalDirectories = indexStats.TotalDirectories,
+            IndexMemoryUsage = indexStats.MemoryUsageBytes,
+            LastUpdateTime = indexStats.LastUpdated ?? DateTime.MinValue
+        };
     }
 
     /// <inheritdoc/>
@@ -480,22 +486,16 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
-        filePath ??= GetDefaultIndexPath();
-
-        // .NET 9: Enhanced file I/O with buffer pooling
-        var buffer = _bufferPool.Rent(64 * 1024); // 64KB buffer
-        try
+        // Save to persistence layer if available
+        if (_searchIndex.Persistence != null)
         {
-            using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write,
-                FileShare.None, buffer.Length, FileOptions.SequentialScan);
-            await _searchIndex.SaveToStreamAsync(fileStream, cancellationToken).ConfigureAwait(false);
+            var savedCount = await _searchIndex.SaveToPersistenceAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Index saved to persistence layer: {SavedCount} items", savedCount);
         }
-        finally
+        else
         {
-            _bufferPool.Return(buffer);
+            _logger.LogWarning("No persistence layer configured, index not saved");
         }
-
-        _logger.LogInformation("💾 Index saved to: {FilePath}", filePath);
     }
 
     /// <inheritdoc/>
@@ -503,32 +503,21 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
-        filePath ??= GetDefaultIndexPath();
-
-        if (!File.Exists(filePath))
+        // Load from persistence layer if available
+        if (_searchIndex.Persistence != null)
         {
-            _logger.LogWarning("Index file not found: {FilePath}", filePath);
-            return;
-        }
+            var loadedCount = await _searchIndex.LoadFromPersistenceAsync(cancellationToken).ConfigureAwait(false);
 
-        // .NET 9: Enhanced file I/O with buffer pooling
-        var buffer = _bufferPool.Rent(64 * 1024);
-        try
+            // Update indexed files count
+            var stats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Exchange(ref _totalIndexedFiles, stats.TotalFiles);
+
+            _logger.LogInformation("Index loaded from persistence layer: {LoadedCount} items", loadedCount);
+        }
+        else
         {
-            using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
-                FileShare.Read, buffer.Length, FileOptions.SequentialScan);
-            await _searchIndex.LoadFromStreamAsync(fileStream, cancellationToken).ConfigureAwait(false);
+            _logger.LogWarning("No persistence layer configured, index not loaded");
         }
-        finally
-        {
-            _bufferPool.Return(buffer);
-        }
-
-        // Update indexed files count
-        var stats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
-        Interlocked.Exchange(ref _totalIndexedFiles, stats.TotalFiles);
-
-        _logger.LogInformation("📥 Index loaded from: {FilePath}", filePath);
     }
 
     /// <inheritdoc/>
@@ -612,7 +601,8 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 // Process in adaptive batches for better performance
                 if (batch.Count >= batchSize)
                 {
-                    await _searchIndex.AddFilesAsync(batch, cancellationToken).ConfigureAwait(false);
+                    // Convert FileItem to FastFileItem for the new interface
+                    await _searchIndex.AddBatchAsync(batch.Select(f => f.ToFastFileItem()), cancellationToken).ConfigureAwait(false);
                     batch.Clear();
 
                     // Update total indexed files atomically
@@ -635,7 +625,8 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             // Process remaining files
             if (batch.Count > 0)
             {
-                await _searchIndex.AddFilesAsync(batch, cancellationToken).ConfigureAwait(false);
+                // Convert FileItem to FastFileItem for the new interface
+                await _searchIndex.AddBatchAsync(batch.Select(f => f.ToFastFileItem()), cancellationToken).ConfigureAwait(false);
                 Interlocked.Exchange(ref _totalIndexedFiles, processedFiles);
             }
 
@@ -753,23 +744,23 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 var fileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (fileItem != null)
                 {
-                    await _searchIndex.UpdateFileAsync(fileItem, cancellationToken).ConfigureAwait(false);
+                    await _searchIndex.UpdateAsync(fileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
                 }
                 break;
 
             case FileChangeType.Deleted:
-                await _searchIndex.RemoveFileAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
+                await _searchIndex.RemoveAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 break;
 
             case FileChangeType.Renamed:
                 if (!string.IsNullOrEmpty(change.OldPath))
                 {
-                    await _searchIndex.RemoveFileAsync(change.OldPath, cancellationToken).ConfigureAwait(false);
+                    await _searchIndex.RemoveAsync(change.OldPath, cancellationToken).ConfigureAwait(false);
                 }
                 var renamedFileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (renamedFileItem != null)
                 {
-                    await _searchIndex.AddFileAsync(renamedFileItem, cancellationToken).ConfigureAwait(false);
+                    await _searchIndex.AddAsync(renamedFileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
                 }
                 break;
         }
@@ -792,17 +783,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     /// </summary>
     private static async IAsyncEnumerable<FastFileItem> ConvertToFastFileItemAsyncEnumerable(IList<FileItem> items)
     {
-        Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Converting {items.Count} items");
         await Task.Yield();
-        var convertedCount = 0;
         foreach (var item in items)
         {
-            convertedCount++;
-            var fastItem = item.ToFastFileItem();
-            Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Converted #{convertedCount}: {fastItem.Name}");
-            yield return fastItem;
+            yield return item.ToFastFileItem();
         }
-        Console.WriteLine($"[DEBUG] ConvertToFastFileItemAsyncEnumerable - Completed, yielded {convertedCount} items");
     }
 
     private static string GetDefaultIndexPath()

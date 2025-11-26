@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Platforms>AnyCPU;x64</Platforms>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>FastFind.SQLite</PackageId>
+    <Title>FastFind.NET SQLite Persistence</Title>
+    <Description>SQLite persistence provider for FastFind.NET with FTS5 full-text search support</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FastFind\FastFind.csproj" />
+  </ItemGroup>
+
+</Project>

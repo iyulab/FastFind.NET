@@ -1,11 +1,16 @@
 <Project>
+  <!-- Common Build Properties -->
   <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>preview</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    
-    <!-- 패키지 정보 -->
-    <Version>1.0.6</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- Package Information -->
+  <PropertyGroup>
+    <Version>1.0.7</Version>
     <Description>Lightning-fast cross-platform file search library - Core interfaces and models</Description>
     <PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft</PackageTags>
     <PackageProjectUrl>https://github.com/iyulab/FastFind.NET</PackageProjectUrl>
@@ -14,12 +19,15 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>logo.png</PackageIcon>
-    
-    <!-- 작성자 정보 -->
+  </PropertyGroup>
+
+  <!-- Author Information -->
+  <PropertyGroup>
     <Authors>iyulab</Authors>
     <Copyright>Copyright (c) Iyulab Corporation 2025.</Copyright>
   </PropertyGroup>
-  
+
+  <!-- Package Assets -->
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="\" />
     <None Include="../logo.png" Pack="true" PackagePath="\" />

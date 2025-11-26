@@ -62,10 +62,12 @@ internal class WindowsSearchIndex : ISearchIndex
     private long _memoryUsage = 0;
     private bool _isReady = false;
     private bool _disposed = false;
+    private IIndexPersistence? _persistence;
 
-    public WindowsSearchIndex(ILogger<WindowsSearchIndex> logger)
+    public WindowsSearchIndex(ILogger<WindowsSearchIndex> logger, IIndexPersistence? persistence = null)
     {
         _logger = logger;
+        _persistence = persistence;
         _isReady = true;
     }
 
@@ -79,10 +81,15 @@ internal class WindowsSearchIndex : ISearchIndex
     public bool IsReady => _isReady && !_disposed;
 
     /// <inheritdoc/>
-    public async Task AddFileAsync(FileItem fileItem, CancellationToken cancellationToken = default)
+    public IIndexPersistence? Persistence => _persistence;
+
+    /// <inheritdoc/>
+    public async Task AddAsync(FastFileItem item, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+
+        var fileItem = item.ToFileItem();
 
         await Task.Run(() =>
         {
@@ -103,19 +110,27 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.ExitWriteLock();
             }
         }, cancellationToken);
+
+        // Persist if enabled
+        if (_persistence != null)
+        {
+            await _persistence.AddAsync(item, cancellationToken);
+        }
     }
 
     /// <inheritdoc/>
-    public async Task AddFilesAsync(IEnumerable<FileItem> fileItems, CancellationToken cancellationToken = default)
+    public async Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         if (cancellationToken.IsCancellationRequested)
-            return;
+            return 0;
 
-        var items = fileItems.ToArray();
-        if (items.Length == 0)
-            return;
+        var fastItems = items.ToArray();
+        if (fastItems.Length == 0)
+            return 0;
+
+        var addedCount = 0;
 
         // 성능 최우선 고속 배치 처리 - OperationCanceledException 방지
         await Task.Run(() =>
@@ -126,15 +141,15 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.EnterWriteLock();
                 try
                 {
-                    var addedCount = 0;
                     var batchProcessed = 0;
 
-                    foreach (var fileItem in items)
+                    foreach (var fastItem in fastItems)
                     {
                         // 간소화된 취소 체크 (5000개마다만)
                         if (++batchProcessed % 5000 == 0 && cancellationToken.IsCancellationRequested)
                             break;
 
+                        var fileItem = fastItem.ToFileItem();
                         var key = fileItem.FullPath.ToLowerInvariant();
                         var wasAdded = _fileIndex.TryAdd(key, fileItem);
 
@@ -159,24 +174,35 @@ internal class WindowsSearchIndex : ISearchIndex
                 _logger.LogDebug("Batch add operation cancelled");
             }
         }, CancellationToken.None); // 내부에서 취소 처리하므로 외부 토큰 사용 안함
+
+        // Persist if enabled
+        if (_persistence != null && addedCount > 0)
+        {
+            await _persistence.AddBatchAsync(fastItems.Take(addedCount), cancellationToken);
+        }
+
+        return addedCount;
     }
 
     /// <inheritdoc/>
-    public async Task RemoveFileAsync(string filePath, CancellationToken cancellationToken = default)
+    public async Task<bool> RemoveAsync(string fullPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+
+        var removed = false;
 
         await Task.Run(() =>
         {
             _indexLock.EnterWriteLock();
             try
             {
-                var key = filePath.ToLowerInvariant();
+                var key = fullPath.ToLowerInvariant();
                 if (_fileIndex.TryRemove(key, out var removedFile))
                 {
                     UpdateIndices(removedFile, IndexOperation.Remove);
                     UpdateMemoryUsage(removedFile, IndexOperation.Remove);
+                    removed = true;
                 }
             }
             finally
@@ -184,13 +210,24 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.ExitWriteLock();
             }
         }, cancellationToken);
+
+        // Persist if enabled
+        if (_persistence != null && removed)
+        {
+            await _persistence.RemoveAsync(fullPath, cancellationToken);
+        }
+
+        return removed;
     }
 
     /// <inheritdoc/>
-    public async Task UpdateFileAsync(FileItem fileItem, CancellationToken cancellationToken = default)
+    public async Task<bool> UpdateAsync(FastFileItem item, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+
+        var fileItem = item.ToFileItem();
+        var updated = false;
 
         await Task.Run(() =>
         {
@@ -203,6 +240,7 @@ internal class WindowsSearchIndex : ISearchIndex
                     // Remove old indices and add new ones
                     UpdateIndices(existingFile, IndexOperation.Remove);
                     UpdateMemoryUsage(existingFile, IndexOperation.Remove);
+                    updated = true;
                 }
 
                 _fileIndex[key] = fileItem;
@@ -214,10 +252,18 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.ExitWriteLock();
             }
         }, cancellationToken);
+
+        // Persist if enabled
+        if (_persistence != null)
+        {
+            await _persistence.UpdateAsync(item, cancellationToken);
+        }
+
+        return updated;
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<FileItem> SearchAsync(
+    public async IAsyncEnumerable<FastFileItem> SearchAsync(
         SearchQuery query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -233,7 +279,7 @@ internal class WindowsSearchIndex : ISearchIndex
         // Use hybrid search approach for optimal performance and completeness
         await foreach (var result in SearchHybridAsync(query, cancellationToken))
         {
-            yield return result;
+            yield return result.ToFastFileItem();
         }
     }
 
@@ -290,9 +336,7 @@ internal class WindowsSearchIndex : ISearchIndex
         if (ShouldPerformFilesystemFallback(query, matchCount))
         {
             _logger.LogDebug("Hybrid search: Performing filesystem fallback, current matches: {Count}", matchCount);
-            Console.WriteLine($"[DEBUG] Starting filesystem fallback - searchText: '{searchText}', BasePath: '{query.BasePath}'");
 
-            var fsResultCount = 0;
             await foreach (var fsResult in SearchFilesystemAsync(query, returnedPaths, regex, searchText, cancellationToken))
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -301,23 +345,15 @@ internal class WindowsSearchIndex : ISearchIndex
                 if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
                     yield break;
 
-                fsResultCount++;
                 matchCount++;
-                Console.WriteLine($"[DEBUG] Filesystem found file #{fsResultCount}: {fsResult.Name} at {fsResult.DirectoryPath}");
                 yield return fsResult;
 
                 // Yield control periodically for better responsiveness
                 if (matchCount % 25 == 0)
                     await Task.Yield();
             }
-            Console.WriteLine($"[DEBUG] Filesystem fallback completed: {fsResultCount} additional files found");
-        }
-        else
-        {
-            Console.WriteLine($"[DEBUG] Skipping filesystem fallback - Count: {Count}, matchCount: {matchCount}");
         }
 
-        Console.WriteLine($"[DEBUG] Hybrid search completed: {matchCount} total matches");
         _logger.LogDebug("Hybrid search completed: {TotalMatches} matches", matchCount);
     }
 
@@ -354,7 +390,6 @@ internal class WindowsSearchIndex : ISearchIndex
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var searchPaths = GetFilesystemSearchPaths(query);
-        Console.WriteLine($"[DEBUG] SearchFilesystemAsync - SearchPaths: [{string.Join(", ", searchPaths)}], regex: {(regex != null ? "YES" : "NO")}");
 
         if (query.IncludeSubdirectories)
         {
@@ -429,20 +464,13 @@ internal class WindowsSearchIndex : ISearchIndex
         }, cancellationToken);
 
         // Stream results as they become available
-        Console.WriteLine($"[DEBUG] Starting to read from result channel...");
-        var channelResultCount = 0;
         await foreach (var result in resultChannel.Reader.ReadAllAsync(cancellationToken))
         {
-            channelResultCount++;
-            Console.WriteLine($"[DEBUG] Yielding result #{channelResultCount}: {result.Name}");
             yield return result;
         }
-        Console.WriteLine($"[DEBUG] Channel reading completed, yielded {channelResultCount} results");
 
         // Wait for scanning to complete
-        Console.WriteLine($"[DEBUG] Waiting for scanning task to complete...");
         await scanningTask;
-        Console.WriteLine($"[DEBUG] Scanning task completed");
     }
 
     /// <summary>
@@ -557,8 +585,6 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         try
         {
-            Console.WriteLine($"[DEBUG] Processing directory: {directoryPath}");
-
             var options = new EnumerationOptions
             {
                 RecurseSubdirectories = false, // We handle recursion manually for parallel processing
@@ -569,7 +595,6 @@ internal class WindowsSearchIndex : ISearchIndex
 
             // Get all entries in this directory
             var entries = Directory.EnumerateFileSystemEntries(directoryPath, "*", options);
-            Console.WriteLine($"[DEBUG] Found {entries.Count()} entries in {directoryPath}");
 
             await Task.Run(() =>
             {
@@ -601,16 +626,13 @@ internal class WindowsSearchIndex : ISearchIndex
                     }
 
                     // Check if it matches our search criteria
-                    Console.WriteLine($"[DEBUG] Checking file: {fileItem.Name} (FullPath: {fileItem.FullPath})");
                     if (MatchesQuery(fileItem, query, regex, searchText))
                     {
-                        Console.WriteLine($"[DEBUG] File MATCHES query: {fileItem.Name}");
                         lock (excludePaths)
                         {
                             if (!excludePaths.Contains(fullPath))
                             {
                                 excludePaths.Add(fullPath);
-                                Console.WriteLine($"[DEBUG] Adding match to results: {fileItem.Name}");
 
                                 // Write to channel (non-blocking)
                                 if (!writer.TryWrite(fileItem))
@@ -620,10 +642,6 @@ internal class WindowsSearchIndex : ISearchIndex
                                 }
                             }
                         }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[DEBUG] File does NOT match query: {fileItem.Name}");
                     }
                 }
             }, cancellationToken);
@@ -889,7 +907,7 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <inheritdoc/>
-    public async Task<FileItem?> GetFileAsync(string filePath, CancellationToken cancellationToken = default)
+    public async Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -899,8 +917,8 @@ internal class WindowsSearchIndex : ISearchIndex
             _indexLock.EnterReadLock();
             try
             {
-                var key = filePath.ToLowerInvariant();
-                return _fileIndex.TryGetValue(key, out var fileItem) ? fileItem : null;
+                var key = fullPath.ToLowerInvariant();
+                return _fileIndex.TryGetValue(key, out var fileItem) ? fileItem.ToFastFileItem() : (FastFileItem?)null;
             }
             finally
             {
@@ -910,7 +928,7 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <inheritdoc/>
-    public async Task<bool> ContainsAsync(string filePath, CancellationToken cancellationToken = default)
+    public async Task<bool> ContainsAsync(string fullPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -920,7 +938,7 @@ internal class WindowsSearchIndex : ISearchIndex
             _indexLock.EnterReadLock();
             try
             {
-                var key = filePath.ToLowerInvariant();
+                var key = fullPath.ToLowerInvariant();
                 return _fileIndex.ContainsKey(key);
             }
             finally
@@ -931,7 +949,7 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<FileItem> GetFilesInDirectoryAsync(
+    public async IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(
         string directoryPath,
         bool recursive = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -970,7 +988,7 @@ internal class WindowsSearchIndex : ISearchIndex
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return file;
+            yield return file.ToFastFileItem();
         }
 
         await Task.Yield();
@@ -998,6 +1016,12 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.ExitWriteLock();
             }
         }, cancellationToken);
+
+        // Clear persistence if enabled
+        if (_persistence != null)
+        {
+            await _persistence.ClearAsync(cancellationToken);
+        }
     }
 
     /// <inheritdoc/>
@@ -1026,10 +1050,16 @@ internal class WindowsSearchIndex : ISearchIndex
                 _indexLock.ExitWriteLock();
             }
         }, cancellationToken);
+
+        // Optimize persistence if enabled
+        if (_persistence != null)
+        {
+            await _persistence.OptimizeAsync(cancellationToken);
+        }
     }
 
     /// <inheritdoc/>
-    public async Task<IndexingStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default)
+    public async Task<IndexStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -1041,19 +1071,15 @@ internal class WindowsSearchIndex : ISearchIndex
                 var files = _fileIndex.Values.Where(f => !f.IsDirectory).ToArray();
                 var directories = _fileIndex.Values.Where(f => f.IsDirectory).ToArray();
 
-                return new IndexingStatistics
+                return new IndexStatistics
                 {
+                    TotalItems = _fileIndex.Count,
                     TotalFiles = files.Length,
                     TotalDirectories = directories.Length,
-                    TotalSize = files.Sum(f => f.Size),
-                    IndexMemoryUsage = MemoryUsage,
-                    LastUpdateTime = DateTime.Now,
-                    Efficiency = new IndexEfficiency
-                    {
-                        MemoryPerFile = files.Length > 0 ? (double)MemoryUsage / files.Length : 0,
-                        LookupSpeed = 1000000, // Estimated lookups per second
-                        CacheHitRate = 0.95 // Estimated cache hit rate
-                    }
+                    MemoryUsageBytes = MemoryUsage,
+                    PersistenceEnabled = _persistence != null,
+                    LastUpdated = DateTime.Now,
+                    UniqueExtensions = _extensionIndex.Count
                 };
             }
             finally
@@ -1064,17 +1090,70 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <inheritdoc/>
-    public Task SaveToStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    public async Task<int> LoadFromPersistenceAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        throw new NotImplementedException("Stream persistence not yet implemented");
+
+        if (_persistence == null)
+        {
+            _logger.LogWarning("No persistence layer configured");
+            return 0;
+        }
+
+        var loadedCount = 0;
+        var query = new SearchQuery(); // Empty query to get all items
+
+        await foreach (var item in _persistence.SearchAsync(query, cancellationToken))
+        {
+            var fileItem = item.ToFileItem();
+            var key = fileItem.FullPath.ToLowerInvariant();
+
+            _indexLock.EnterWriteLock();
+            try
+            {
+                if (_fileIndex.TryAdd(key, fileItem))
+                {
+                    UpdateIndices(fileItem, IndexOperation.Add);
+                    UpdateMemoryUsage(fileItem, IndexOperation.Add);
+                    loadedCount++;
+                }
+            }
+            finally
+            {
+                _indexLock.ExitWriteLock();
+            }
+        }
+
+        _logger.LogInformation("Loaded {Count} items from persistence", loadedCount);
+        return loadedCount;
     }
 
     /// <inheritdoc/>
-    public Task LoadFromStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    public async Task<int> SaveToPersistenceAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        throw new NotImplementedException("Stream persistence not yet implemented");
+
+        if (_persistence == null)
+        {
+            _logger.LogWarning("No persistence layer configured");
+            return 0;
+        }
+
+        List<FastFileItem> items;
+
+        _indexLock.EnterReadLock();
+        try
+        {
+            items = _fileIndex.Values.Select(f => f.ToFastFileItem()).ToList();
+        }
+        finally
+        {
+            _indexLock.ExitReadLock();
+        }
+
+        var savedCount = await _persistence.AddBatchAsync(items, cancellationToken);
+        _logger.LogInformation("Saved {Count} items to persistence", savedCount);
+        return savedCount;
     }
 
     /// <inheritdoc/>
@@ -1096,10 +1175,8 @@ internal class WindowsSearchIndex : ISearchIndex
     private static bool MatchesQuery(FileItem file, SearchQuery query, System.Text.RegularExpressions.Regex? regex, string searchText)
     {
         // Type filters
-        Console.WriteLine($"[DEBUG] MatchesQuery - IncludeFiles: {query.IncludeFiles}, IsDirectory: {file.IsDirectory}");
         if (!query.IncludeFiles && !file.IsDirectory)
         {
-            Console.WriteLine($"[DEBUG] MatchesQuery - REJECTED: IncludeFiles=false and IsDirectory=false");
             return false;
         }
         if (!query.IncludeDirectories && file.IsDirectory) return false;
@@ -1130,22 +1207,16 @@ internal class WindowsSearchIndex : ISearchIndex
                 ? file.Name.ToLowerInvariant()
                 : file.FullPath.ToLowerInvariant();
 
-            Console.WriteLine($"[DEBUG] MatchesQuery - SearchText: '{searchText}', TargetText: '{targetText}', SearchFileNameOnly: {query.SearchFileNameOnly}");
-
             if (regex != null)
             {
-                var regexMatch = regex.IsMatch(targetText);
-                Console.WriteLine($"[DEBUG] MatchesQuery - Regex match result: {regexMatch}");
-                return regexMatch;
+                return regex.IsMatch(targetText);
             }
             else
             {
                 var comparison = query.CaseSensitive
                     ? StringComparison.Ordinal
                     : StringComparison.OrdinalIgnoreCase;
-                var containsResult = targetText.Contains(searchText, comparison);
-                Console.WriteLine($"[DEBUG] MatchesQuery - Contains result: {containsResult} (CaseSensitive: {query.CaseSensitive})");
-                return containsResult;
+                return targetText.Contains(searchText, comparison);
             }
         }
 
@@ -1242,6 +1313,21 @@ internal class WindowsSearchIndex : ISearchIndex
         if (!_disposed)
         {
             _indexLock.Dispose();
+            _disposed = true;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!_disposed)
+        {
+            _indexLock.Dispose();
+
+            if (_persistence != null)
+            {
+                await _persistence.DisposeAsync();
+            }
+
             _disposed = true;
         }
     }

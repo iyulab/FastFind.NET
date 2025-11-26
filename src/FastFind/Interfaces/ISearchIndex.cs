@@ -3,9 +3,10 @@ using FastFind.Models;
 namespace FastFind.Interfaces;
 
 /// <summary>
-/// Interface for high-performance search index operations
+/// Interface for high-performance in-memory search index operations.
+/// This interface focuses on search operations and delegates persistence to IIndexPersistence.
 /// </summary>
-public interface ISearchIndex : IDisposable
+public interface ISearchIndex : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Gets the total number of indexed items
@@ -23,60 +24,65 @@ public interface ISearchIndex : IDisposable
     bool IsReady { get; }
 
     /// <summary>
+    /// Gets the optional persistence layer for this index
+    /// </summary>
+    IIndexPersistence? Persistence { get; }
+
+    /// <summary>
     /// Adds a file item to the index
     /// </summary>
-    /// <param name="fileItem">File item to add</param>
+    /// <param name="item">File item to add</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Task representing the add operation</returns>
-    Task AddFileAsync(FileItem fileItem, CancellationToken cancellationToken = default);
+    Task AddAsync(FastFileItem item, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Adds multiple file items to the index in batch
     /// </summary>
-    /// <param name="fileItems">File items to add</param>
+    /// <param name="items">File items to add</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the add operation</returns>
-    Task AddFilesAsync(IEnumerable<FileItem> fileItems, CancellationToken cancellationToken = default);
+    /// <returns>Number of items added</returns>
+    Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Removes a file from the index
     /// </summary>
-    /// <param name="filePath">Full path of the file to remove</param>
+    /// <param name="fullPath">Full path of the file to remove</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the remove operation</returns>
-    Task RemoveFileAsync(string filePath, CancellationToken cancellationToken = default);
+    /// <returns>True if item was removed, false if not found</returns>
+    Task<bool> RemoveAsync(string fullPath, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Updates an existing file in the index
     /// </summary>
-    /// <param name="fileItem">Updated file item</param>
+    /// <param name="item">Updated file item</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the update operation</returns>
-    Task UpdateFileAsync(FileItem fileItem, CancellationToken cancellationToken = default);
+    /// <returns>True if item was updated, false if not found</returns>
+    Task<bool> UpdateAsync(FastFileItem item, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Searches the index with the specified query
+    /// Searches the index with the specified query using SIMD-accelerated matching
     /// </summary>
     /// <param name="query">Search query</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Async enumerable of matching files</returns>
-    IAsyncEnumerable<FileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a file item by its full path
     /// </summary>
-    /// <param name="filePath">Full path of the file</param>
+    /// <param name="fullPath">Full path of the file</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>File item if found, null otherwise</returns>
-    Task<FileItem?> GetFileAsync(string filePath, CancellationToken cancellationToken = default);
+    Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if a file exists in the index
     /// </summary>
-    /// <param name="filePath">Full path of the file</param>
+    /// <param name="fullPath">Full path of the file</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>True if the file exists in the index</returns>
-    Task<bool> ContainsAsync(string filePath, CancellationToken cancellationToken = default);
+    Task<bool> ContainsAsync(string fullPath, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets all files in a specific directory
@@ -85,7 +91,7 @@ public interface ISearchIndex : IDisposable
     /// <param name="recursive">Whether to include subdirectories</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Async enumerable of files in the directory</returns>
-    IAsyncEnumerable<FileItem> GetFilesInDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears all items from the index
@@ -106,23 +112,21 @@ public interface ISearchIndex : IDisposable
     /// </summary>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Index statistics</returns>
-    Task<IndexingStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default);
+    Task<IndexStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Saves the index to a stream
+    /// Loads index data from the persistence layer
     /// </summary>
-    /// <param name="stream">Stream to save to</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the save operation</returns>
-    Task SaveToStreamAsync(Stream stream, CancellationToken cancellationToken = default);
+    /// <returns>Number of items loaded</returns>
+    Task<int> LoadFromPersistenceAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads the index from a stream
+    /// Saves current index data to the persistence layer
     /// </summary>
-    /// <param name="stream">Stream to load from</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the load operation</returns>
-    Task LoadFromStreamAsync(Stream stream, CancellationToken cancellationToken = default);
+    /// <returns>Number of items saved</returns>
+    Task<int> SaveToPersistenceAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Starts monitoring for changes in the specified locations
@@ -138,4 +142,50 @@ public interface ISearchIndex : IDisposable
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Task representing the monitoring stop operation</returns>
     Task StopMonitoringAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Statistics about the search index
+/// </summary>
+public record IndexStatistics
+{
+    /// <summary>
+    /// Total number of indexed items
+    /// </summary>
+    public required long TotalItems { get; init; }
+
+    /// <summary>
+    /// Total number of directories
+    /// </summary>
+    public required long TotalDirectories { get; init; }
+
+    /// <summary>
+    /// Total number of files
+    /// </summary>
+    public required long TotalFiles { get; init; }
+
+    /// <summary>
+    /// Memory usage in bytes
+    /// </summary>
+    public required long MemoryUsageBytes { get; init; }
+
+    /// <summary>
+    /// Whether persistence is enabled
+    /// </summary>
+    public bool PersistenceEnabled { get; init; }
+
+    /// <summary>
+    /// Last index update time
+    /// </summary>
+    public DateTime? LastUpdated { get; init; }
+
+    /// <summary>
+    /// Number of unique extensions
+    /// </summary>
+    public int UniqueExtensions { get; init; }
+
+    /// <summary>
+    /// Average search time in milliseconds
+    /// </summary>
+    public double? AverageSearchTimeMs { get; init; }
 }
