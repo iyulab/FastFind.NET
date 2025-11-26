@@ -232,4 +232,65 @@ internal static class SqliteSchema
     public const string RebuildFts = """
         INSERT INTO files_fts(files_fts) VALUES('rebuild');
         """;
+
+    /// <summary>
+    /// SQL for bulk inserting files (multi-value INSERT)
+    /// Use string.Format or StringBuilder to build the VALUES clause
+    /// </summary>
+    public const string BulkInsertPrefix = """
+        INSERT INTO files (full_path, name, directory_path, extension, size, created_time, modified_time, accessed_time, attributes, drive_letter, is_directory)
+        VALUES
+        """;
+
+    /// <summary>
+    /// SQL suffix for bulk insert with UPSERT behavior
+    /// </summary>
+    public const string BulkInsertSuffix = """
+        ON CONFLICT(full_path) DO UPDATE SET
+            name = excluded.name,
+            directory_path = excluded.directory_path,
+            extension = excluded.extension,
+            size = excluded.size,
+            created_time = excluded.created_time,
+            modified_time = excluded.modified_time,
+            accessed_time = excluded.accessed_time,
+            attributes = excluded.attributes,
+            drive_letter = excluded.drive_letter,
+            is_directory = excluded.is_directory
+        """;
+
+    /// <summary>
+    /// PRAGMA settings for high-performance bulk loading
+    /// Disables FTS triggers temporarily for maximum insert speed
+    /// </summary>
+    public const string BulkLoadPragmas = """
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = -32000;
+        """;
+
+    /// <summary>
+    /// Restore normal PRAGMA settings after bulk loading
+    /// Note: journal_mode is not changed here since WAL is already set at initialization
+    /// </summary>
+    public const string RestoreNormalPragmas = """
+        PRAGMA synchronous = NORMAL;
+        """;
+
+    /// <summary>
+    /// Disable FTS triggers for bulk loading
+    /// </summary>
+    public const string DisableFtsTriggers = """
+        DROP TRIGGER IF EXISTS files_ai;
+        DROP TRIGGER IF EXISTS files_ad;
+        DROP TRIGGER IF EXISTS files_au;
+        """;
+
+    /// <summary>
+    /// SQL for bulk FTS rebuild after bulk loading (more efficient than triggers)
+    /// </summary>
+    public const string BulkRebuildFts = """
+        DELETE FROM files_fts;
+        INSERT INTO files_fts(rowid, name, full_path) SELECT id, name, full_path FROM files;
+        """;
 }

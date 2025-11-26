@@ -10,9 +10,9 @@
 
   <!-- Package Information -->
   <PropertyGroup>
-    <Version>1.0.7</Version>
-    <Description>Lightning-fast cross-platform file search library - Core interfaces and models</Description>
-    <PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft</PackageTags>
+    <Version>1.0.8</Version>
+    <Description>Lightning-fast cross-platform file search library with MFT direct access, SQLite persistence, and USN Journal real-time sync</Description>
+    <PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft;sqlite;usn-journal</PackageTags>
     <PackageProjectUrl>https://github.com/iyulab/FastFind.NET</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iyulab/FastFind.NET</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

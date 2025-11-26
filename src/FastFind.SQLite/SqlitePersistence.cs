@@ -123,17 +123,54 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
+        var itemList = items as IList<FastFileItem> ?? items.ToList();
+        if (itemList.Count == 0) return 0;
+
+        // Use optimized bulk insert for large batches
+        if (itemList.Count >= 100)
+        {
+            return await AddBulkOptimizedAsync(itemList, cancellationToken);
+        }
+
+        // Standard batch insert for smaller batches
         var count = 0;
         await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
 
         try
         {
-            foreach (var item in items)
+            // Reuse command with parameters for efficiency
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SqliteSchema.InsertFile;
+            cmd.Transaction = (SqliteTransaction)transaction;
+
+            var fullPathParam = cmd.Parameters.Add("@full_path", SqliteType.Text);
+            var nameParam = cmd.Parameters.Add("@name", SqliteType.Text);
+            var dirPathParam = cmd.Parameters.Add("@directory_path", SqliteType.Text);
+            var extParam = cmd.Parameters.Add("@extension", SqliteType.Text);
+            var sizeParam = cmd.Parameters.Add("@size", SqliteType.Integer);
+            var createdParam = cmd.Parameters.Add("@created_time", SqliteType.Integer);
+            var modifiedParam = cmd.Parameters.Add("@modified_time", SqliteType.Integer);
+            var accessedParam = cmd.Parameters.Add("@accessed_time", SqliteType.Integer);
+            var attrsParam = cmd.Parameters.Add("@attributes", SqliteType.Integer);
+            var driveParam = cmd.Parameters.Add("@drive_letter", SqliteType.Text);
+            var isDirParam = cmd.Parameters.Add("@is_directory", SqliteType.Integer);
+
+            foreach (var item in itemList)
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                await using var cmd = CreateInsertCommand(item);
-                cmd.Transaction = (SqliteTransaction)transaction;
+                fullPathParam.Value = item.FullPath;
+                nameParam.Value = item.Name;
+                dirPathParam.Value = item.DirectoryPath;
+                extParam.Value = item.Extension;
+                sizeParam.Value = item.Size;
+                createdParam.Value = new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds();
+                modifiedParam.Value = new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds();
+                accessedParam.Value = new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds();
+                attrsParam.Value = (int)item.Attributes;
+                driveParam.Value = item.DriveLetter.ToString();
+                isDirParam.Value = item.IsDirectory ? 1 : 0;
+
                 await cmd.ExecuteNonQueryAsync(cancellationToken);
                 count++;
             }
@@ -143,6 +180,218 @@ public sealed class SqlitePersistence : IIndexPersistence
 
             _logger?.LogDebug("Batch inserted {Count} items", count);
             return count;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// High-performance bulk insert for MFT-level throughput (100K+ items)
+    /// Uses multi-value INSERT statements and optimized PRAGMA settings
+    /// </summary>
+    public async Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureReady();
+
+        if (items.Count == 0) return 0;
+
+        const int batchSize = 500; // SQLite max variables / 11 params per row
+        var totalInserted = 0;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            // Apply bulk loading optimizations
+            await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
+
+            // Disable FTS triggers for bulk loading (rebuild FTS afterward)
+            if (_config.EnableFullTextSearch)
+            {
+                await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
+            }
+
+            await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+
+            try
+            {
+                for (var i = 0; i < items.Count; i += batchSize)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    var batch = items.Skip(i).Take(batchSize).ToList();
+                    var inserted = await InsertBatchMultiValueAsync(batch, transaction, cancellationToken);
+                    totalInserted += inserted;
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+
+            // Rebuild FTS index in one operation (faster than per-row triggers)
+            if (_config.EnableFullTextSearch)
+            {
+                await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
+                await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
+            }
+
+            Interlocked.Add(ref _count, totalInserted);
+
+            stopwatch.Stop();
+            var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
+            _logger?.LogInformation(
+                "Bulk inserted {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
+                totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
+
+            return totalInserted;
+        }
+        finally
+        {
+            // Restore normal PRAGMA settings
+            await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
+        }
+    }
+
+    private async Task<int> InsertBatchMultiValueAsync(
+        List<FastFileItem> batch,
+        System.Data.Common.DbTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        if (batch.Count == 0) return 0;
+
+        // Build multi-value INSERT statement
+        var sb = new System.Text.StringBuilder(SqliteSchema.BulkInsertPrefix);
+
+        await using var cmd = _connection!.CreateCommand();
+        cmd.Transaction = (SqliteTransaction)transaction;
+
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+
+            var item = batch[i];
+            var prefix = $"@p{i}_";
+
+            sb.Append($"({prefix}fp, {prefix}n, {prefix}dp, {prefix}e, {prefix}s, {prefix}ct, {prefix}mt, {prefix}at, {prefix}a, {prefix}dl, {prefix}id)");
+
+            cmd.Parameters.AddWithValue($"{prefix}fp", item.FullPath);
+            cmd.Parameters.AddWithValue($"{prefix}n", item.Name);
+            cmd.Parameters.AddWithValue($"{prefix}dp", item.DirectoryPath);
+            cmd.Parameters.AddWithValue($"{prefix}e", item.Extension);
+            cmd.Parameters.AddWithValue($"{prefix}s", item.Size);
+            cmd.Parameters.AddWithValue($"{prefix}ct", new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}mt", new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}at", new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue($"{prefix}a", (int)item.Attributes);
+            cmd.Parameters.AddWithValue($"{prefix}dl", item.DriveLetter.ToString());
+            cmd.Parameters.AddWithValue($"{prefix}id", item.IsDirectory ? 1 : 0);
+        }
+
+        sb.AppendLine();
+        sb.Append(SqliteSchema.BulkInsertSuffix);
+
+        cmd.CommandText = sb.ToString();
+        return await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Streams data from an async enumerable directly into SQLite with buffered bulk inserts.
+    /// Optimized for MFT enumeration integration (500K+ records/sec source).
+    /// </summary>
+    public async Task<int> AddFromStreamAsync(
+        IAsyncEnumerable<FastFileItem> items,
+        int bufferSize = 5000,
+        IProgress<int>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureReady();
+
+        var buffer = new List<FastFileItem>(bufferSize);
+        var totalInserted = 0;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            // Apply bulk loading optimizations
+            await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
+
+            if (_config.EnableFullTextSearch)
+            {
+                await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
+            }
+
+            await foreach (var item in items.WithCancellation(cancellationToken))
+            {
+                buffer.Add(item);
+
+                if (buffer.Count >= bufferSize)
+                {
+                    var inserted = await FlushBufferAsync(buffer, cancellationToken);
+                    totalInserted += inserted;
+                    progress?.Report(totalInserted);
+                    buffer.Clear();
+                }
+            }
+
+            // Flush remaining items
+            if (buffer.Count > 0)
+            {
+                var inserted = await FlushBufferAsync(buffer, cancellationToken);
+                totalInserted += inserted;
+                progress?.Report(totalInserted);
+            }
+
+            // Rebuild FTS index
+            if (_config.EnableFullTextSearch)
+            {
+                _logger?.LogInformation("Rebuilding FTS index...");
+                await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
+                await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
+            }
+
+            Interlocked.Add(ref _count, totalInserted);
+
+            stopwatch.Stop();
+            var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
+            _logger?.LogInformation(
+                "Stream insert completed: {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
+                totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
+
+            return totalInserted;
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
+        }
+    }
+
+    private async Task<int> FlushBufferAsync(List<FastFileItem> buffer, CancellationToken cancellationToken)
+    {
+        if (buffer.Count == 0) return 0;
+
+        const int batchSize = 500;
+        var totalInserted = 0;
+
+        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            for (var i = 0; i < buffer.Count; i += batchSize)
+            {
+                var batch = buffer.Skip(i).Take(batchSize).ToList();
+                totalInserted += await InsertBatchMultiValueAsync(batch, transaction, cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return totalInserted;
         }
         catch
         {

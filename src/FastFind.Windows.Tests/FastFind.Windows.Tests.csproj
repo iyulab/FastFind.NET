@@ -30,6 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FastFind\FastFind.csproj" />
     <ProjectReference Include="..\FastFind.Windows\FastFind.Windows.csproj" />
+    <ProjectReference Include="..\FastFind.SQLite\FastFind.SQLite.csproj" />
   </ItemGroup>
 
   <ItemGroup>
