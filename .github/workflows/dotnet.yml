@@ -40,13 +40,17 @@ jobs:
             name: 'FastFind.Core'
           - path: 'src/FastFind.Windows/FastFind.Windows.csproj'
             name: 'FastFind.Windows'
+          - path: 'src/FastFind.SQLite/FastFind.SQLite.csproj'
+            name: 'FastFind.SQLite'
           # Unix 구현시 활성화 예정
           # - path: 'src/FastFind.Unix/FastFind.Unix.csproj'
           #   name: 'FastFind.Unix'
     
     steps:
     - uses: actions/checkout@v4
-    
+      with:
+        fetch-depth: 0  # Full history for version comparison
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -180,7 +184,9 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    
+      with:
+        fetch-depth: 0  # Full history for changelog generation
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
@@ -224,12 +230,14 @@ jobs:
           ### 📦 Published Packages
           - **FastFind.Core**: Core interfaces and models for cross-platform file search
           - **FastFind.Windows**: Windows-optimized implementation with SIMD acceleration
-          
+          - **FastFind.SQLite**: SQLite persistence provider with FTS5 full-text search
+
           ### 🚀 Key Features
           - High-performance file search with SIMD string matching
           - Memory-optimized string pooling
           - Real-time file system monitoring
-          - Windows-specific optimizations (NTFS, WMI integration)
+          - Windows-specific optimizations (NTFS, MFT, USN Journal)
+          - SQLite persistence with FTS5 full-text search support
           
           ### 🚧 Roadmap
           - **FastFind.Unix**: Unix/Linux implementation (coming soon)
@@ -241,9 +249,12 @@ jobs:
           ```bash
           # Core package
           dotnet add package FastFind.Core
-          
+
           # Windows implementation
           dotnet add package FastFind.Windows
+
+          # SQLite persistence
+          dotnet add package FastFind.SQLite
           ```
         draft: false
         prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
