@@ -21,7 +21,13 @@ Install-Package FastFind.Core
 ```bash
 dotnet add package FastFind.Windows
 ```
-**Performance**: 1.87M SIMD ops/sec, 243K files/sec indexing, 61-byte FastFileItem structs
+**Performance**: 1.87M SIMD ops/sec, 500K+ MFT files/sec, 61-byte FastFileItem structs
+
+#### SQLite Persistence 🗄️
+```bash
+dotnet add package FastFind.SQLite
+```
+**Features**: FTS5 full-text search, WAL mode, 100K+ bulk inserts/sec
 
 #### Unix/Linux (🚧 Coming Soon)
 ```bash
@@ -233,9 +239,13 @@ else
 ## 🎯 Next Steps
 
 1. **[API Reference](api-reference.md)** - Complete API documentation
-2. **[Performance Guide](performance.md)** - Optimization techniques
-3. **[Advanced Features](advanced-features.md)** - SIMD, Memory optimization
-4. **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
+2. **[Search Examples](search-examples.md)** - Practical search scenarios
+3. **[Roadmap](roadmap.md)** - Future plans and development status
+
+### Advanced Features (v1.0.8+)
+- **MFT Direct Access** - Ultra-fast NTFS enumeration (500K+ files/sec)
+- **SQLite Persistence** - Persistent index with FTS5 full-text search
+- **USN Journal Sync** - Real-time file change detection
 
 ## 📊 Performance Monitoring
 

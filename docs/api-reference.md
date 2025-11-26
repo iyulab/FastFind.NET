@@ -169,3 +169,190 @@ var recursiveQuery = new SearchQuery
     SearchFileNameOnly = false
 };
 ```
+
+## SQLite Persistence API
+
+### SqlitePersistence Class
+High-performance SQLite persistence with FTS5 full-text search.
+
+```csharp
+public class SqlitePersistence : IIndexPersistence
+{
+    // Factory methods
+    public static SqlitePersistence Create(string databasePath, ILogger? logger = null);
+    public static SqlitePersistence CreateHighPerformance(string databasePath, ILogger? logger = null);
+
+    // Initialization
+    public Task InitializeAsync(CancellationToken cancellationToken = default);
+
+    // Add operations
+    public Task AddAsync(FastFileItem item, CancellationToken cancellationToken = default);
+    public Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default);
+    public Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default);
+    public Task<int> AddFromStreamAsync(IAsyncEnumerable<FastFileItem> items, int bufferSize = 5000, IProgress<int>? progress = null, CancellationToken cancellationToken = default);
+
+    // Query operations
+    public IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
+    public IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken cancellationToken = default);
+    public IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, CancellationToken cancellationToken = default);
+    public Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default);
+
+    // Maintenance
+    public Task OptimizeAsync(CancellationToken cancellationToken = default);
+    public Task VacuumAsync(CancellationToken cancellationToken = default);
+    public Task<PersistenceStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default);
+
+    // Properties
+    public long Count { get; }
+    public bool IsReady { get; }
+    public string StoragePath { get; }
+}
+```
+
+### Usage Example
+```csharp
+using FastFind.SQLite;
+
+// Create high-performance SQLite persistence
+await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
+await persistence.InitializeAsync();
+
+// Bulk insert files
+var items = GetFileItems();
+var inserted = await persistence.AddBulkOptimizedAsync(items);
+
+// FTS5 search
+var results = await persistence.SearchAsync(new SearchQuery
+{
+    SearchText = "document",
+    ExtensionFilter = ".pdf",
+    MaxResults = 100
+}).ToListAsync();
+
+// Get statistics
+var stats = await persistence.GetStatisticsAsync();
+Console.WriteLine($"Total: {stats.TotalItems}, Files: {stats.TotalFiles}, Dirs: {stats.TotalDirectories}");
+```
+
+## MFT Direct Access API
+
+### MftSqlitePipeline Class
+High-throughput pipeline connecting MFT enumeration to SQLite persistence.
+
+```csharp
+public class MftSqlitePipeline : IDisposable
+{
+    // Main indexing methods
+    public Task<int> IndexAllDrivesAsync(
+        IIndexPersistence persistence,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    public Task<int> IndexDrivesAsync(
+        char[] driveLetters,
+        IIndexPersistence persistence,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    // Statistics
+    public PipelineStatistics Statistics { get; }
+}
+```
+
+### MftReader Class
+Direct NTFS MFT enumeration for ultra-fast file discovery.
+
+```csharp
+public class MftReader : IDisposable
+{
+    // Static utility methods
+    public static bool IsAvailable();
+    public static char[] GetNtfsDrives();
+
+    // Enumeration
+    public IAsyncEnumerable<MftFileRecord> EnumerateFilesAsync(
+        char driveLetter,
+        CancellationToken cancellationToken = default);
+}
+```
+
+### Usage Example
+```csharp
+using FastFind.Windows.Mft;
+using FastFind.SQLite;
+
+// Check MFT availability (requires admin)
+if (!MftReader.IsAvailable())
+{
+    Console.WriteLine("MFT access requires administrator privileges");
+    return;
+}
+
+// Create persistence and pipeline
+await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
+await persistence.InitializeAsync();
+
+using var pipeline = new MftSqlitePipeline();
+
+// Index all NTFS drives
+var progress = new Progress<IndexingProgress>(p =>
+    Console.WriteLine($"Indexed: {p.TotalIndexed:N0} - {p.CurrentOperation}"));
+
+var total = await pipeline.IndexAllDrivesAsync(persistence, progress);
+
+Console.WriteLine($"✅ Indexed {total:N0} files at {pipeline.Statistics.RecordsPerSecond:N0}/sec");
+```
+
+## USN Journal Real-Time Sync API
+
+### UsnSqliteSyncService Class
+Real-time file change synchronization using USN Journal.
+
+```csharp
+public class UsnSqliteSyncService : IAsyncDisposable
+{
+    // Start/Stop
+    public Task StartAsync(CancellationToken cancellationToken = default);
+    public Task StartAsync(char[] driveLetters, CancellationToken cancellationToken = default);
+    public Task StopAsync();
+
+    // Properties
+    public bool IsRunning { get; }
+    public SyncStatistics Statistics { get; }
+}
+
+public class SyncStatistics
+{
+    public long TotalChangesReceived { get; }
+    public long Additions { get; }
+    public long Updates { get; }
+    public long Deletions { get; }
+    public long Errors { get; }
+    public TimeSpan Duration { get; }
+    public double ChangesPerSecond { get; }
+}
+```
+
+### Usage Example
+```csharp
+using FastFind.Windows.Mft;
+using FastFind.SQLite;
+
+// Initialize persistence
+await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
+await persistence.InitializeAsync();
+
+// Start real-time sync
+await using var syncService = new UsnSqliteSyncService(persistence);
+await syncService.StartAsync(new[] { 'C', 'D' });
+
+Console.WriteLine("Monitoring file changes...");
+
+// Monitor statistics
+while (syncService.IsRunning)
+{
+    var stats = syncService.Statistics;
+    Console.WriteLine($"Changes: {stats.TotalChangesReceived:N0} ({stats.ChangesPerSecond:F1}/sec)");
+    await Task.Delay(5000);
+}
+```

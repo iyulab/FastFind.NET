@@ -11,13 +11,17 @@
 | Package | Status | Version | Platform | Description |
 |---------|--------|---------|----------|-------------|
 | **FastFind.Core** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Cross-Platform | Core interfaces and models |
-| **FastFind.Windows** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | Windows 10/11 | Windows-optimized implementation |
+| **FastFind.Windows** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | Windows 10/11 | Windows-optimized with MFT & USN Journal |
+| **FastFind.SQLite** | ✅ Stable | [![NuGet](https://img.shields.io/nuget/v/FastFind.SQLite.svg)](https://www.nuget.org/packages/FastFind.SQLite) | Cross-Platform | SQLite persistence with FTS5 search |
 | **FastFind.Unix** | 🚧 Roadmap | - | Linux/macOS | Unix implementation (coming Q2 2025) |
 
 ## 🚀 Revolutionary Performance Features
 
 ### **⚡ Lightning-Fast Performance**
 - **SIMD-Accelerated String Matching**: Hardware-accelerated search operations (1.87M ops/sec)
+- **MFT Direct Access**: Ultra-fast NTFS enumeration (500K+ files/sec) bypassing Windows APIs
+- **USN Journal Real-Time Sync**: Instant file change detection without polling
+- **SQLite FTS5 Full-Text Search**: Persistent index with lightning-fast queries
 - **Advanced String Interning**: 60-80% memory reduction through intelligent string pooling
 - **Lock-Free Data Structures**: Zero-contention concurrent operations
 - **Channel-Based Architecture**: High-throughput asynchronous processing with backpressure
@@ -57,6 +61,12 @@ Install-Package FastFind.Core
 dotnet add package FastFind.Windows
 ```
 **Features**: SIMD acceleration, memory-optimized structs, string interning, high-performance indexing
+
+#### SQLite Persistence (Persistent Index) 🗄️
+```bash
+dotnet add package FastFind.SQLite
+```
+**Features**: FTS5 full-text search, WAL mode, bulk operations (100K+ inserts/sec), optimized queries
 
 #### Unix/Linux (🚧 Coming Soon)
 ```bash
@@ -448,6 +458,84 @@ var todoQuery = new SearchQuery
 
 ## 🚀 Advanced Features
 
+### MFT Direct Access (500K+ files/sec) 🏎️
+```csharp
+using FastFind.Windows.Mft;
+using FastFind.SQLite;
+
+// Direct MFT enumeration with SQLite persistence
+await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
+await persistence.InitializeAsync();
+
+using var pipeline = new MftSqlitePipeline();
+
+// Index all NTFS drives at Everything-level speed
+var progress = new Progress<IndexingProgress>(p =>
+    Console.WriteLine($"Indexed: {p.TotalIndexed:N0} files - {p.CurrentOperation}"));
+
+var totalFiles = await pipeline.IndexAllDrivesAsync(persistence, progress);
+
+Console.WriteLine($"✅ Indexed {totalFiles:N0} files");
+Console.WriteLine($"📊 Rate: {pipeline.Statistics.RecordsPerSecond:N0} records/sec");
+
+// Search the index instantly
+var results = await persistence.SearchAsync(new SearchQuery { SearchText = "*.cs" }).ToListAsync();
+Console.WriteLine($"Found {results.Count} C# files");
+```
+
+### SQLite Persistence with FTS5 🗄️
+```csharp
+using FastFind.SQLite;
+
+// High-performance SQLite with WAL mode
+await using var persistence = SqlitePersistence.CreateHighPerformance("fastfind.db");
+await persistence.InitializeAsync();
+
+// Bulk insert (optimized for 100K+ items)
+var items = GenerateFileItems(100000);
+var inserted = await persistence.AddBulkOptimizedAsync(items);
+Console.WriteLine($"Inserted {inserted:N0} items");
+
+// FTS5 full-text search
+var searchResults = await persistence.SearchAsync(new SearchQuery
+{
+    SearchText = "document",
+    ExtensionFilter = ".pdf",
+    MaxResults = 100
+}).ToListAsync();
+
+// Get by directory (with optional recursion)
+var projectFiles = await persistence.GetByDirectoryAsync(@"D:\Projects", recursive: true).ToListAsync();
+
+// Optimize and vacuum
+await persistence.OptimizeAsync();
+await persistence.VacuumAsync();
+```
+
+### USN Journal Real-Time Sync ⚡
+```csharp
+using FastFind.Windows.Mft;
+using FastFind.SQLite;
+
+// Initialize persistence
+await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
+await persistence.InitializeAsync();
+
+// Start real-time sync service
+await using var syncService = new UsnSqliteSyncService(persistence);
+await syncService.StartAsync(new[] { 'C', 'D' }); // Monitor C: and D:
+
+Console.WriteLine("Monitoring file changes... Press Enter to stop.");
+Console.ReadLine();
+
+// Check statistics
+var stats = syncService.Statistics;
+Console.WriteLine($"Changes: {stats.TotalChangesReceived:N0}");
+Console.WriteLine($"Adds: {stats.Additions}, Updates: {stats.Updates}, Deletes: {stats.Deletions}");
+
+await syncService.StopAsync();
+```
+
 ### SIMD-Accelerated String Matching (1.87M ops/sec) ⚡
 ```csharp
 // Hardware-accelerated AVX2 string operations
@@ -624,12 +712,17 @@ public interface IPerformanceCollector
 - **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Logging support
 - **System.Linq.Async** (6.0.3): Async enumerable operations
 
-### FastFind.Windows  
+### FastFind.Windows
 - **FastFind.Core**: Core package dependency
 - **Microsoft.Extensions.Logging** (9.0.7): Logging implementation
 - **Microsoft.Extensions.DependencyInjection** (9.0.7): DI container
 - **System.Management** (9.0.7): Windows system access
 - **System.Threading.Channels** (9.0.7): High-performance channels
+
+### FastFind.SQLite
+- **FastFind.Core**: Core package dependency
+- **Microsoft.Data.Sqlite** (9.0.0): SQLite database provider
+- **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Logging support
 
 ## 🏗️ Architecture
 
@@ -637,16 +730,26 @@ public interface IPerformanceCollector
 ```
 FastFind.NET/
 ├── FastFind.Core/           # Cross-platform core
-│   ├── Interfaces/          # ISearchEngine, IFileSystemProvider
-│   └── Models/              # FileItem, SearchQuery, Statistics
+│   ├── Interfaces/          # ISearchEngine, IFileSystemProvider, IIndexPersistence
+│   ├── Models/              # FastFileItem, SearchQuery, Statistics
+│   └── Extensions/          # Multi-language search support
 ├── FastFind.Windows/        # Windows implementation
-│   └── Implementation/      # NTFS-optimized providers
-└── FastFind.Unix/          # 🚧 Future Unix implementation
+│   ├── Implementation/      # NTFS-optimized providers
+│   └── Mft/                 # MFT direct access & USN Journal
+│       ├── MftReader        # Direct MFT enumeration
+│       ├── MftSqlitePipeline # MFT → SQLite pipeline
+│       ├── UsnJournalMonitor # Real-time change detection
+│       └── UsnSqliteSyncService # Automatic DB sync
+├── FastFind.SQLite/         # SQLite persistence
+│   ├── SqlitePersistence    # FTS5 full-text search
+│   └── Schema/              # Optimized schema & indexes
+└── FastFind.Unix/           # 🚧 Future Unix implementation
 ```
 
 ### Core Interfaces
 - **ISearchEngine**: Primary search operations interface
 - **IFileSystemProvider**: Platform-specific file system access
+- **IIndexPersistence**: SQLite persistence with FTS5 full-text search
 - **ISearchIndex**: Search index management
 
 ## 🧪 Testing
