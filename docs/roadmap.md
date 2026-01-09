@@ -2,7 +2,7 @@
 
 🗺️ Development roadmap and platform support status for FastFind.NET
 
-## 🎯 Current Status (v1.0.8) - ⚡ MFT, SQLite & USN Journal Integration
+## 🎯 Current Status (v1.0.9) - ⚡ MFT, SQLite & USN Journal Integration
 
 ### ✅ Completed Features (Latest Enhancements)
 
@@ -49,6 +49,9 @@
 - [x] **API Documentation**: Complete API reference with async patterns
 - [x] **Getting Started Guide**: Comprehensive setup with async best practices
 - [x] **Factory Pattern**: Thread-safe WindowsRegistration.EnsureRegistered()
+- [x] **ModuleInitializer**: Automatic factory registration on assembly load (v1.0.9)
+- [x] **Empty SearchText Support**: List all files with empty/null SearchText (v1.0.9)
+- [x] **Memory Check Fix**: GC.GetGCMemoryInfo() for accurate system memory validation (v1.0.9)
 - [x] **Extension Methods**: FastFileItem ↔ FileItem conversion utilities
 - [x] **MIT License**: Open source licensing
 
@@ -193,7 +196,7 @@ public class UnixFileSystemProvider : IFileSystemProvider
 
 ## 🔧 Platform Support Matrix
 
-### Current Support (v1.0.8)
+### Current Support (v1.0.9)
 
 | Platform | Status | Package | **Verified Performance** | Features |
 |----------|--------|---------|------------------------|----------|
@@ -314,7 +317,7 @@ public class UnixFileSystemProvider : IFileSystemProvider
 
 ---
 
-**Last Updated**: November 2025
-**Next Review**: January 2026
+**Last Updated**: January 2026
+**Next Review**: March 2026
 
 > 📝 This roadmap is subject to change based on community feedback, technical challenges, and market demands. Features may be moved between releases based on development priorities and resource availability.

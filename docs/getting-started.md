@@ -63,11 +63,11 @@ logger.LogInformation("✅ System ready: {Summary}", validation.GetSummary());
 ### 2. Create Search Engine with Async Disposal
 
 ```csharp
-// Register Windows implementation (required)
-WindowsRegistration.EnsureRegistered();
+// Windows factory is auto-registered via ModuleInitializer (no manual registration needed)
+// WindowsRegistration.EnsureRegistered(); // Optional: only if you need explicit control
 
 // Create platform-optimized search engine with async disposal
-await using var searchEngine = FastFinder.CreateWindowsSearchEngine(logger);
+await using var searchEngine = FastFinder.CreateWindowsSearchEngine(loggerFactory);
 
 // Configure indexing options with async optimization
 var indexingOptions = new IndexingOptions

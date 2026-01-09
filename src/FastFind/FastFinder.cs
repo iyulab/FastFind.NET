@@ -149,9 +149,12 @@ public static class FastFinder
             var runtimeVersion = version.ToString();
             var isCompatibleRuntime = version.Major >= 6; // .NET 6+ required
             
-            // Check available memory
-            var workingSet = Environment.WorkingSet;
-            var hasSufficientMemory = workingSet > 100 * 1024 * 1024; // 100MB minimum
+            // Check available memory using GC API (not Environment.WorkingSet which is process working set)
+            // GC.GetGCMemoryInfo().TotalAvailableMemoryBytes returns actual system available memory
+            var gcInfo = GC.GetGCMemoryInfo();
+            var availableMemory = gcInfo.TotalAvailableMemoryBytes;
+            // If GC hasn't run yet, TotalAvailableMemoryBytes may be 0 - assume sufficient memory in this case
+            var hasSufficientMemory = availableMemory == 0 || availableMemory > 100 * 1024 * 1024; // 100MB minimum
             
             // Check permissions (basic test)
             bool hasFileSystemAccess;
@@ -176,7 +179,7 @@ public static class FastFinder
                 IsSupported = isSupported,
                 RuntimeVersion = runtimeVersion,
                 IsCompatibleRuntime = isCompatibleRuntime,
-                AvailableMemory = workingSet,
+                AvailableMemory = availableMemory,
                 HasSufficientMemory = hasSufficientMemory,
                 HasFileSystemAccess = hasFileSystemAccess,
                 IsReady = isReady

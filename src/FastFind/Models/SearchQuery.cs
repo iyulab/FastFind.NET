@@ -174,13 +174,9 @@ public class SearchQuery
     /// </summary>
     public (bool IsValid, string? ErrorMessage) Validate()
     {
-        if (string.IsNullOrWhiteSpace(SearchText) && ExtensionFilter == null && 
-            MinSize == null && MaxSize == null && MinCreatedDate == null && 
-            MaxCreatedDate == null && MinModifiedDate == null && MaxModifiedDate == null)
-        {
-            return (false, "At least one search criterion must be specified");
-        }
-
+        // Empty SearchText is valid - it means "match all files"
+        // No need to require at least one search criterion
+        
         if (UseRegex && !string.IsNullOrEmpty(SearchText))
         {
             try

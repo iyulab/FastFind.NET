@@ -10,7 +10,7 @@ public class SearchQuery
 {
     // 🎯 Enhanced Path-Based Search Options
     public string? BasePath { get; set; }               // Single base path for search
-    public string SearchText { get; set; } = string.Empty;
+    public string SearchText { get; set; } = string.Empty;  // Empty = match all files
     public bool IncludeSubdirectories { get; set; } = true;
     public bool SearchFileNameOnly { get; set; } = false;  // Default: search full paths
 

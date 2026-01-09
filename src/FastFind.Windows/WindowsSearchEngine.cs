@@ -4,12 +4,13 @@ using FastFind.Models;
 using FastFind.Windows.Implementation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 
 namespace FastFind.Windows;
 
 /// <summary>
-/// Windows search engine registration helper 
+/// Windows search engine registration helper
 /// </summary>
 public static class WindowsRegistration
 {
@@ -17,16 +18,27 @@ public static class WindowsRegistration
     private static readonly object _lock = new object();
 
     /// <summary>
+    /// Module initializer that automatically registers the Windows search engine factory
+    /// when the FastFind.Windows assembly is loaded. This ensures that users don't need
+    /// to manually call EnsureRegistered() before using FastFinder.CreateWindowsSearchEngine().
+    /// </summary>
+    [ModuleInitializer]
+    internal static void Initialize()
+    {
+        EnsureRegistered();
+    }
+
+    /// <summary>
     /// Ensures the Windows search engine factory is registered
     /// </summary>
     public static void EnsureRegistered()
     {
         if (_isRegistered) return;
-        
+
         lock (_lock)
         {
             if (_isRegistered) return;
-            
+
             if (OperatingSystem.IsWindows())
             {
                 FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, WindowsSearchEngine.CreateWindowsSearchEngine);

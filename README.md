@@ -93,8 +93,8 @@ if (validation.IsReady)
 {
     Console.WriteLine($"✅ {validation.GetSummary()}");
     // Windows-specific factory method available
-    var searchEngine = FastFinder.CreateWindowsSearchEngine(logger);
-    // Or use auto-detection: FastFinder.CreateSearchEngine(logger);
+    var searchEngine = FastFinder.CreateWindowsSearchEngine(loggerFactory);
+    // Or use auto-detection: FastFinder.CreateSearchEngine(loggerFactory);
 }
 ```
 
@@ -200,6 +200,30 @@ await foreach (var result in searchEngine.SearchRealTimeAsync(query).ConfigureAw
         // Process immediately without buffering
     }
 }
+```
+
+### List All Files (Empty SearchText)
+```csharp
+// Empty or null SearchText means "match all files"
+var allFilesQuery = new SearchQuery
+{
+    BasePath = @"D:\Projects",
+    SearchText = "",                     // Empty = match all files
+    IncludeSubdirectories = true,
+    MaxResults = 10000                   // Recommended to set a limit
+};
+
+var allFiles = await searchEngine.SearchAsync(allFilesQuery);
+Console.WriteLine($"📂 Total files: {allFiles.TotalMatches}");
+
+// You can also combine with filters
+var allCSharpFiles = new SearchQuery
+{
+    BasePath = @"D:\Projects",
+    SearchText = "",                     // Match all
+    ExtensionFilter = ".cs",             // But only .cs files
+    MinSize = 1024                       // Larger than 1KB
+};
 ```
 
 ## 🏗️ Core Architecture
