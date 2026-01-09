@@ -1,9 +1,9 @@
 # FastFind.NET
 
-⚡ Ultra-high performance cross-platform file search library for .NET 9
+⚡ Ultra-high performance cross-platform file search library for .NET 10
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
-[![.NET](https://img.shields.io/badge/.NET-9.0-blue.svg)](https://dotnet.microsoft.com/)  
+[![.NET](https://img.shields.io/badge/.NET-10.0-blue.svg)](https://dotnet.microsoft.com/)  
 [![Build Status](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml/badge.svg)](https://github.com/iyulab/FastFind.NET/actions/workflows/dotnet.yml)
 
 ## 📦 Available Packages
@@ -35,7 +35,7 @@
 - **Vectorized Operations**: Hardware-accelerated character processing
 - **FastFileItem Struct**: Ultra-compact 61-byte struct with string interning
 
-### **🔧 .NET 9 Specific Optimizations**
+### **🔧 .NET 10 Specific Optimizations**
 - **SearchValues Integration**: Up to 10x faster character searches
 - **Span-Based Operations**: Zero-allocation string processing
 - **Enhanced Async Patterns**: ConfigureAwait(false), IAsyncDisposable, ValueTask optimization
@@ -732,21 +732,19 @@ public interface IPerformanceCollector
 ## 🛠️ Dependencies
 
 ### FastFind.Core
-- **.NET 9.0**: Target framework
-- **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Logging support
-- **System.Linq.Async** (6.0.3): Async enumerable operations
+- **.NET 10.0**: Target framework
+- **Microsoft.Extensions.Logging.Abstractions** (10.0.1): Logging support
 
 ### FastFind.Windows
 - **FastFind.Core**: Core package dependency
-- **Microsoft.Extensions.Logging** (9.0.7): Logging implementation
-- **Microsoft.Extensions.DependencyInjection** (9.0.7): DI container
-- **System.Management** (9.0.7): Windows system access
-- **System.Threading.Channels** (9.0.7): High-performance channels
+- **Microsoft.Extensions.Logging** (10.0.1): Logging implementation
+- **Microsoft.Extensions.DependencyInjection** (10.0.1): DI container
+- **System.Management** (10.0.1): Windows system access
 
 ### FastFind.SQLite
 - **FastFind.Core**: Core package dependency
-- **Microsoft.Data.Sqlite** (9.0.0): SQLite database provider
-- **Microsoft.Extensions.Logging.Abstractions** (9.0.7): Logging support
+- **Microsoft.Data.Sqlite** (10.0.1): SQLite database provider
+- **Microsoft.Extensions.Logging.Abstractions** (10.0.1): Logging support
 
 ## 🏗️ Architecture
 
@@ -834,6 +832,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- .NET Team for .NET 9 performance improvements
+- .NET Team for .NET 10 performance improvements
 - Community feedback and feature requests
 - Open source libraries that inspired this project

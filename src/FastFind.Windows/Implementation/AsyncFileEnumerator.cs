@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using FastFind.Models;
@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace FastFind.Windows.Implementation;
 
 /// <summary>
-/// .NET 9 최적화된 비동기 파일 열거자 - Memory&lt;T&gt; 활용
+/// .NET 10 최적화된 비동기 파일 열거자 - Memory&lt;T&gt; 활용
 /// </summary>
 internal sealed class AsyncFileEnumerator : IAsyncDisposable
 {
@@ -33,7 +33,7 @@ internal sealed class AsyncFileEnumerator : IAsyncDisposable
             cancellationToken, _disposeCts.Token);
         var token = combinedCts.Token;
 
-        // Channel 생성 - .NET 9 백프레셔 지원
+        // Channel 생성 - .NET 10 백프레셔 지원
         var channelOptions = new BoundedChannelOptions(500)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -166,7 +166,7 @@ internal sealed class AsyncFileEnumerator : IAsyncDisposable
     }
 
     /// <summary>
-    /// .NET 9 비동기 파일 시스템 열거 (향후 확장 가능)
+    /// .NET 10 비동기 파일 시스템 열거 (향후 확장 가능)
     /// </summary>
     private async IAsyncEnumerable<string> EnumerateFileSystemEntriesAsync(
         string location,

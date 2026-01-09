@@ -1,4 +1,4 @@
-using FastFind.Interfaces;
+﻿using FastFind.Interfaces;
 using FastFind.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -11,7 +11,7 @@ using System.Buffers;
 namespace FastFind.Windows.Implementation;
 
 /// <summary>
-/// Windows-optimized search engine implementation with .NET 9 performance enhancements
+/// Windows-optimized search engine implementation with .NET 10 performance enhancements
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal class WindowsSearchEngineImpl : ISearchEngine
@@ -21,17 +21,17 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     private readonly ILogger<WindowsSearchEngineImpl> _logger;
     private readonly WindowsSearchEngineOptions _options;
 
-    // .NET 9: Enhanced concurrent collections and performance monitoring
+    // .NET 10: Enhanced concurrent collections and performance monitoring
     private readonly ConcurrentDictionary<string, SearchStatistics> _searchStats = new();
     private readonly object _statisticsLock = new();
     private readonly CancellationTokenSource _lifecycleCancellationSource = new();
 
-    // .NET 9: Channel-based high-performance communication
+    // .NET 10: Channel-based high-performance communication
     private readonly Channel<FileChangeEventArgs> _fileChangeChannel;
     private readonly ChannelWriter<FileChangeEventArgs> _fileChangeWriter;
     private readonly ChannelReader<FileChangeEventArgs> _fileChangeReader;
 
-    // .NET 9: Memory management and buffer pooling
+    // .NET 10: Memory management and buffer pooling
     private readonly ArrayPool<byte> _bufferPool = ArrayPool<byte>.Shared;
     private readonly SimpleObjectPool<List<FileItem>> _listPool;
 
@@ -58,7 +58,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         _options = options;
         _logger = logger;
 
-        // .NET 9: Channel for high-performance file change processing
+        // .NET 10: Channel for high-performance file change processing
         var channelOptions = new BoundedChannelOptions(_options.FileWatcherBufferSize)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -70,13 +70,13 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         _fileChangeWriter = _fileChangeChannel.Writer;
         _fileChangeReader = _fileChangeChannel.Reader;
 
-        // .NET 9: Object pooling for better memory management
+        // .NET 10: Object pooling for better memory management
         _listPool = new SimpleObjectPool<List<FileItem>>(() => new List<FileItem>(), list => list.Clear());
 
         // Start file change processing task
         _fileChangeProcessingTask = ProcessFileChangesAsync(_lifecycleCancellationSource.Token);
 
-        _logger.LogInformation("WindowsSearchEngineImpl initialized with .NET 9 optimizations");
+        _logger.LogInformation("WindowsSearchEngineImpl initialized with .NET 10 optimizations");
     }
 
     /// <inheritdoc/>
@@ -124,7 +124,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         _currentIndexingOptions = options;
 
-        // .NET 9: Enhanced cancellation token linking with timeout
+        // .NET 10: Enhanced cancellation token linking with timeout
         var indexingCts = new CancellationTokenSource(_options.FileOperationTimeout);
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, _lifecycleCancellationSource.Token, indexingCts.Token);
@@ -169,7 +169,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             }, combinedCts.Token);
         }
 
-        _logger.LogInformation("Indexing started successfully with enhanced .NET 9 optimizations");
+        _logger.LogInformation("Indexing started successfully with enhanced .NET 10 optimizations");
     }
 
     /// <inheritdoc/>
@@ -194,7 +194,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             // Already disposed, which is fine
         }
 
-        // .NET 9: Enhanced task completion with timeout and graceful shutdown
+        // .NET 10: Enhanced task completion with timeout and graceful shutdown
         var stopTasks = new List<Task>();
 
         if (_indexingTask != null)
@@ -223,7 +223,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Enhanced task timeout handling with better cancellation support
+    /// .NET 10: Enhanced task timeout handling with better cancellation support
     /// </summary>
     private async Task WaitForTaskWithTimeoutAsync(Task task, string taskName, TimeSpan timeout)
     {
@@ -271,11 +271,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
             var totalMatches = 0L;
 
-            // .NET 9: Use object pooling for better memory management
+            // .NET 10: Use object pooling for better memory management
             var resultList = _listPool.Get();
             try
             {
-                // .NET 9: Enhanced async enumeration with ConfigureAwait
+                // .NET 10: Enhanced async enumeration with ConfigureAwait
                 // SearchAsync now returns FastFileItem, convert to FileItem for internal storage
                 await foreach (var fastFileItem in _searchIndex.SearchAsync(query, cancellationToken).ConfigureAwait(false))
                 {
@@ -307,7 +307,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 var searchTime = stopwatch.Elapsed;
                 var hasMoreResults = query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value;
 
-                // .NET 9: Enhanced metrics collection
+                // .NET 10: Enhanced metrics collection
                 var metrics = new SearchMetrics
                 {
                     FilesProcessed = _searchIndex.Count,
@@ -318,7 +318,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     IndexHitRate = 100.0
                 };
 
-                // .NET 9: Create a copy of resultList before returning to pool
+                // .NET 10: Create a copy of resultList before returning to pool
                 // This is necessary because ConvertToFastFileItemAsyncEnumerable uses lazy evaluation
                 // and the enumeration may happen after the finally block clears the list
                 var resultListCopy = resultList.ToList();
@@ -368,7 +368,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Adaptive progress update frequency based on result count
+    /// .NET 10: Adaptive progress update frequency based on result count
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetProgressUpdateFrequency(long totalMatches) => totalMatches switch
@@ -402,7 +402,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             var currentTime = DateTime.Now;
             var timeSinceLastSearch = currentTime - lastSearchTime;
 
-            // .NET 9: Enhanced debouncing with string optimization awareness
+            // .NET 10: Enhanced debouncing with string optimization awareness
             if (query.SearchText != lastQuery && timeSinceLastSearch >= debounceDelay)
             {
                 lastQuery = query.SearchText;
@@ -412,7 +412,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 yield return result;
             }
 
-            // .NET 9: Adaptive delay based on system performance
+            // .NET 10: Adaptive delay based on system performance
             var delayMs = 50; // Simplified without complex CPU monitoring
             await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
         }
@@ -445,7 +445,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             var totalTime = Interlocked.Read(ref _totalSearchTime);
             var averageTime = totalSearches > 0 ? TimeSpan.FromMilliseconds(totalTime / (double)totalSearches) : TimeSpan.Zero;
 
-            // .NET 9: Enhanced statistics with performance metrics
+            // .NET 10: Enhanced statistics with performance metrics
             return new SearchStatistics
             {
                 TotalSearches = totalSearches,
@@ -472,7 +472,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         _searchStats.Clear();
 
-        // .NET 9: Force garbage collection for better memory management
+        // .NET 10: Force garbage collection for better memory management
         if (_options.UseAggressiveMemoryOptimization)
         {
             GC.Collect(2, GCCollectionMode.Aggressive, true, true);
@@ -527,7 +527,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         await _searchIndex.OptimizeAsync(cancellationToken).ConfigureAwait(false);
 
-        // .NET 9: Memory optimization after index optimization
+        // .NET 10: Memory optimization after index optimization
         if (_options.UseAggressiveMemoryOptimization)
         {
             StringPool.Cleanup();
@@ -570,7 +570,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Enhanced indexing worker with advanced parallel processing
+    /// .NET 10: Enhanced indexing worker with advanced parallel processing
     /// </summary>
     private async Task IndexingWorkerAsync(IndexingOptions options, CancellationToken cancellationToken)
     {
@@ -578,7 +578,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         var processedFiles = 0L;
         var batchSize = Math.Min(options.BatchSize, _options.MaxConcurrentOperations * 50);
 
-        // .NET 9: Use object pooling for batch processing
+        // .NET 10: Use object pooling for batch processing
         var batch = _listPool.Get();
 
         try
@@ -590,7 +590,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
                 string.Join(", ", locations), 0, 0, TimeSpan.Zero, string.Empty, IndexingPhase.Initializing));
 
-            // .NET 9: Enhanced async enumeration with ConfigureAwait
+            // .NET 10: Enhanced async enumeration with ConfigureAwait
             await foreach (var fileItem in _fileSystemProvider.EnumerateFilesAsync(locations, options, cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -617,7 +617,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     }
                 }
 
-                // .NET 9: Adaptive yielding based on performance
+                // .NET 10: Adaptive yielding based on performance
                 if (processedFiles % 100 == 0)
                     await Task.Yield();
             }
@@ -660,7 +660,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Adaptive progress reporting frequency
+    /// .NET 10: Adaptive progress reporting frequency
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetProgressReportFrequency(long processedFiles) => processedFiles switch
@@ -672,7 +672,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     };
 
     /// <summary>
-    /// .NET 9: Channel-based file change processing for better performance
+    /// .NET 10: Channel-based file change processing for better performance
     /// </summary>
     private async Task ProcessFileChangesAsync(CancellationToken cancellationToken)
     {
@@ -691,7 +691,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Enhanced monitoring worker with channel-based communication
+    /// .NET 10: Enhanced monitoring worker with channel-based communication
     /// </summary>
     private async Task MonitoringWorkerAsync(IndexingOptions options, CancellationToken cancellationToken)
     {
@@ -709,7 +709,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
             _logger.LogInformation("Starting enhanced file system monitoring for: {Locations}", string.Join(", ", locations));
 
-            // .NET 9: Channel-based change processing for better throughput
+            // .NET 10: Channel-based change processing for better throughput
             await foreach (var change in _fileSystemProvider.MonitorChangesAsync(locations, monitoringOptions, cancellationToken).ConfigureAwait(false))
             {
                 // Write to channel for asynchronous processing
@@ -767,7 +767,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Enhanced async enumerable conversion with object pooling
+    /// .NET 10: Enhanced async enumerable conversion with object pooling
     /// </summary>
     private static async IAsyncEnumerable<FileItem> ConvertToAsyncEnumerable(IList<FileItem> items)
     {
@@ -825,7 +825,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             // Already disposed, continue with cleanup
         }
 
-        // .NET 9: Enhanced disposal with better timeout handling
+        // .NET 10: Enhanced disposal with better timeout handling
         var waitTasks = new List<Task>();
 
         if (_indexingTask != null && !_indexingTask.IsCompleted)
@@ -875,7 +875,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 }
 
 /// <summary>
-/// .NET 9: Simple object pool implementation for high performance
+/// .NET 10: Simple object pool implementation for high performance
 /// </summary>
 internal class SimpleObjectPool<T> : IDisposable where T : class
 {

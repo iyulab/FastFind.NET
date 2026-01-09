@@ -1,4 +1,4 @@
-using FastFind.Interfaces;
+﻿using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Extensions;
 using Microsoft.Extensions.Logging;
@@ -57,13 +57,13 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         if (locationArray.Length == 0)
             yield break;
 
-        // .NET 9 최적화된 고성능 아키텍처 - 백프레셔 지원
+        // .NET 10 최적화된 고성능 아키텍처 - 백프레셔 지원
         var channelOptions = new BoundedChannelOptions(1000) // 적절한 버퍼 크기
         {
             FullMode = BoundedChannelFullMode.Wait, // 백프레셔: 생산자 대기
             SingleReader = true,
             SingleWriter = false,
-            AllowSynchronousContinuations = false // .NET 9 범용 방식
+            AllowSynchronousContinuations = false // .NET 10 범용 방식
         };
         var channel = Channel.CreateBounded<FileItem>(channelOptions);
 
@@ -395,7 +395,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         }
     }
 
-    // .NET 9 백프레셔 지원 고효율 채널 쓰기
+    // .NET 10 백프레셔 지원 고효율 채널 쓰기
     private static async ValueTask WriteBufferToChannelAsync(List<FileItem> buffer, ChannelWriter<FileItem> writer, CancellationToken cancellationToken)
     {
         try

@@ -4,19 +4,19 @@
   </PropertyGroup>
 
   <ItemGroup Label="Microsoft.Extensions (.NET 10)">
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.1" />
   </ItemGroup>
 
   <ItemGroup Label="System Libraries (.NET 10)">
-    <PackageVersion Include="System.Management" Version="10.0.0" />
-    <PackageVersion Include="System.Diagnostics.PerformanceCounter" Version="10.0.0" />
+    <PackageVersion Include="System.Management" Version="10.0.1" />
+    <PackageVersion Include="System.Diagnostics.PerformanceCounter" Version="10.0.1" />
   </ItemGroup>
 
   <ItemGroup Label="Database">
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.1" />
   </ItemGroup>
 
   <ItemGroup Label="Testing Framework">
@@ -27,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup Label="Testing Utilities">
-    <PackageVersion Include="BenchmarkDotNet" Version="0.15.6" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="FluentAssertions" Version="8.8.0" />
   </ItemGroup>
 

@@ -1,4 +1,4 @@
-using FastFind;
+﻿using FastFind;
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
@@ -49,12 +49,12 @@ public static class WindowsRegistration
 }
 
 /// <summary>
-/// Windows-specific implementation registration for FastFind with .NET 9 optimizations
+/// Windows-specific implementation registration for FastFind with .NET 10 optimizations
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class WindowsSearchEngine
 {
-    // .NET 9: Thread-local storage for better performance
+    // .NET 10: Thread-local storage for better performance
     private static readonly ThreadLocal<WindowsCapabilityCache> _capabilityCache =
         new(() => new WindowsCapabilityCache());
 
@@ -77,7 +77,7 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// Creates a Windows-optimized search engine with .NET 9 enhancements
+    /// Creates a Windows-optimized search engine with .NET 10 enhancements
     /// </summary>
     /// <param name="loggerFactory">Optional logger factory</param>
     /// <returns>Windows search engine instance</returns>
@@ -90,7 +90,7 @@ public static class WindowsSearchEngine
 
         var services = new ServiceCollection();
 
-        // .NET 9: Enhanced logging configuration
+        // .NET 10: Enhanced logging configuration
         if (loggerFactory != null)
         {
             services.AddSingleton(loggerFactory);
@@ -150,7 +150,7 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
-    /// .NET 9: Creates optimized default options based on system capabilities
+    /// .NET 10: Creates optimized default options based on system capabilities
     /// </summary>
     private static WindowsSearchEngineOptions CreateOptimizedOptions()
     {
@@ -187,7 +187,7 @@ public static class WindowsSearchEngine
             UseVolumeSnapshotService = capabilities.SupportsAdvancedFeatures,
             FileOperationTimeout = TimeSpan.FromSeconds(totalMemoryGB > 8 ? 60 : 30),
 
-            // .NET 9 specific optimizations
+            // .NET 10 specific optimizations
             UseAdvancedStringOptimizations = true,
             EnableSIMDAcceleration = true,
             UseSearchValues = true,
@@ -213,7 +213,7 @@ public static class WindowsSearchEngine
 
         try
         {
-            // .NET 9: Parallel capability detection
+            // .NET 10: Parallel capability detection
             var tasks = new[]
             {
                 Task.Run(() => capabilities.CanAccessMft = WindowsFileSystemProvider.CanAccessMasterFileTable()),
@@ -350,7 +350,7 @@ public static class WindowsSearchEngine
 }
 
 /// <summary>
-/// Enhanced configuration options for Windows search engine with .NET 9 optimizations
+/// Enhanced configuration options for Windows search engine with .NET 10 optimizations
 /// </summary>
 public class WindowsSearchEngineOptions
 {
@@ -414,7 +414,7 @@ public class WindowsSearchEngineOptions
     /// </summary>
     public TimeSpan FileOperationTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    // .NET 9 specific optimizations
+    // .NET 10 specific optimizations
 
     /// <summary>
     /// Whether to use advanced string optimizations (StringPool, SearchValues)
@@ -427,7 +427,7 @@ public class WindowsSearchEngineOptions
     public bool EnableSIMDAcceleration { get; set; } = true;
 
     /// <summary>
-    /// Whether to use .NET 9 SearchValues for character searching
+    /// Whether to use .NET 10 SearchValues for character searching
     /// </summary>
     public bool UseSearchValues { get; set; } = true;
 

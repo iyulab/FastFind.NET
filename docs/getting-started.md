@@ -1,6 +1,6 @@
 # Getting Started with FastFind.NET
 
-⚡ Ultra-high performance cross-platform file search library for .NET 9
+⚡ Ultra-high performance cross-platform file search library for .NET 10
 
 ## 📦 Installation
 

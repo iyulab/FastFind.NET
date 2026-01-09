@@ -219,7 +219,7 @@ public class UnixFileSystemProvider : IFileSystemProvider
 
 | .NET Version | Status | Notes |
 |--------------|--------|-------|
-| .NET 9 | ✅ Primary Target | Full optimization |
+| .NET 10 | ✅ Primary Target | Full optimization |
 | .NET 8 | 🚧 Planned (v1.2) | Reduced features |
 | .NET 7 | ❌ Not Planned | End of life |
 | .NET Framework | ❌ Not Supported | Architecture incompatible |

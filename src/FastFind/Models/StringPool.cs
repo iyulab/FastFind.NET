@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Buffers;
@@ -8,7 +8,7 @@ namespace FastFind.Models;
 
 /// <summary>
 /// Ultra-high performance string interning pool for massive memory savings
-/// Thread-safe and lock-free for maximum performance with .NET 9 optimizations
+/// Thread-safe and lock-free for maximum performance with .NET 10 optimizations
 /// </summary>
 public static class StringPool
 {
@@ -16,18 +16,18 @@ public static class StringPool
     private static readonly ConcurrentDictionary<string, int> _stringToId = new();
     private static readonly ConcurrentDictionary<int, string> _idToString = new();
 
-    // 경로별 최적화된 풀들 - .NET 9 개선된 초기 용량
+    // 경로별 최적화된 풀들 - .NET 10 개선된 초기 용량
     private static readonly ConcurrentDictionary<string, int> _pathPool = new(Environment.ProcessorCount, 16384);
     private static readonly ConcurrentDictionary<string, int> _extensionPool = new(Environment.ProcessorCount, 512);
     private static readonly ConcurrentDictionary<string, int> _namePool = new(Environment.ProcessorCount, 8192);
 
-    // 성능 통계 - object lock 사용 (.NET 9에서 Lock이 없는 경우 대비)
+    // 성능 통계 - object lock 사용 (.NET 10에서 Lock이 없는 경우 대비)
     private static readonly Lock _statsLock = new();
     private static long _internedCount = 0;
     private static long _memoryBytes = 0;
     private static int _nextId = 1;
 
-    // .NET 9 최적화: SearchValues for fast extension lookup
+    // .NET 10 최적화: SearchValues for fast extension lookup
     private static readonly System.Buffers.SearchValues<char> _pathSeparators =
         SearchValues.Create(['/', '\\']);
 
@@ -80,7 +80,7 @@ public static class StringPool
     public static string GetString(int id) => Get(id);
 
     /// <summary>
-    /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 9 Span 최적화
+    /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 10 Span 최적화
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternPath(string path)
@@ -88,7 +88,7 @@ public static class StringPool
         if (string.IsNullOrEmpty(path))
             return 0;
 
-        // .NET 9: Span을 사용한 고성능 경로 정규화
+        // .NET 10: Span을 사용한 고성능 경로 정규화
         Span<char> buffer = stackalloc char[path.Length];
         var span = path.AsSpan();
 
@@ -104,7 +104,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// 확장자 특화 인터닝 - .NET 9 최적화
+    /// 확장자 특화 인터닝 - .NET 10 최적화
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternExtension(string extension)
@@ -112,7 +112,7 @@ public static class StringPool
         if (string.IsNullOrEmpty(extension))
             return 0;
 
-        // .NET 9: string.Create for allocation optimization
+        // .NET 10: string.Create for allocation optimization
         var normalized = string.Create(extension.Length, extension, static (span, ext) =>
         {
             ext.AsSpan().ToLowerInvariant(span);
@@ -134,7 +134,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// .NET 9: 고성능 경로 파싱을 위한 유틸리티
+    /// .NET 10: 고성능 경로 파싱을 위한 유틸리티
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static (int directoryId, int nameId, int extensionId) InternPathComponents(string fullPath)
@@ -172,7 +172,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// 메모리 사용량 통계 - .NET 9 Lock 사용
+    /// 메모리 사용량 통계 - .NET 10 Lock 사용
     /// </summary>
     public static StringPoolStats GetStats()
     {
@@ -187,7 +187,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// 🧹 메모리 정리 (주기적 호출 권장) - .NET 9 개선된 알고리즘
+    /// 🧹 메모리 정리 (주기적 호출 권장) - .NET 10 개선된 알고리즘
     /// </summary>
     public static void Cleanup()
     {
@@ -196,7 +196,7 @@ public static class StringPool
             var totalMemory = GC.GetTotalMemory(false);
             var shouldAggressiveClean = totalMemory > 1_000_000_000; // 1GB 이상
 
-            // .NET 9: 더 효율적인 정리 전략
+            // .NET 10: 더 효율적인 정리 전략
             if (_stringToId.Count > (shouldAggressiveClean ? 50000 : 100000))
             {
                 var removalCount = shouldAggressiveClean ? 25000 : 10000;
@@ -224,7 +224,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// .NET 9: 메모리 압축 최적화
+    /// .NET 10: 메모리 압축 최적화
     /// </summary>
     public static void CompactMemory()
     {
@@ -257,7 +257,7 @@ public static class StringPool
     }
 
     /// <summary>
-    /// .NET 9: 고급 통계 정보
+    /// .NET 10: 고급 통계 정보
     /// </summary>
     public static StringPoolAdvancedStats GetAdvancedStats()
     {
@@ -318,7 +318,7 @@ public readonly struct StringPoolStats(long internedCount, long memoryUsageBytes
 }
 
 /// <summary>
-/// .NET 9: 고급 StringPool 통계
+/// .NET 10: 고급 StringPool 통계
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct StringPoolAdvancedStats(StringPoolStats basicStats, int gen0Collections, int gen1Collections,
