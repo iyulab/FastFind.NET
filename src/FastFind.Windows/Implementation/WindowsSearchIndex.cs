@@ -364,7 +364,21 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         // Always perform fallback if index is very small (suggests no or incomplete indexing)
         if (Count < 10)
+        {
+            if (Count == 0)
+            {
+                _logger.LogWarning(
+                    "Search index is empty. Did you call StartIndexingAsync() before searching? " +
+                    "Falling back to filesystem scanning which may be slower.");
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Search index contains only {Count} items. Consider running StartIndexingAsync() for better performance.",
+                    Count);
+            }
             return true;
+        }
 
         // Always perform fallback if we have specific search paths (BasePath or SearchLocations)
         // This ensures we always find files in user-specified directories

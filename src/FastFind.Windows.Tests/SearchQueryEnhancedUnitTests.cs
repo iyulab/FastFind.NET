@@ -130,7 +130,7 @@ public class SearchQueryEnhancedUnitTests
 
     [Theory]
     [InlineData("test", true, "non-empty search text should be valid")]
-    [InlineData("", false, "empty search text should be invalid according to validation logic")]
+    [InlineData("", true, "empty search text means 'match all files' and is valid")]
     public void SearchQuery_Validation_ShouldHandleSearchTextCorrectly(string searchText, bool expectedValid, string reason)
     {
         // Arrange
@@ -152,12 +152,13 @@ public class SearchQueryEnhancedUnitTests
     }
 
     [Fact]
-    public void SearchQuery_Validation_ShouldRequireSearchCriteria()
+    public void SearchQuery_Validation_EmptySearchCriteria_ShouldMatchAllFiles()
     {
-        // Arrange - Query with no search criteria (the actual validation logic)
+        // Arrange - Query with no search criteria means "match all files"
+        // This is by design - empty SearchText is valid and matches all files
         var query = new SearchQuery
         {
-            SearchText = "", // Empty search text
+            SearchText = "", // Empty search text = match all files
             ExtensionFilter = null,
             MinSize = null,
             MaxSize = null,
@@ -171,10 +172,9 @@ public class SearchQueryEnhancedUnitTests
         // Act
         var (isValid, errorMessage) = query.Validate();
 
-        // Assert
-        isValid.Should().BeFalse("query without search criteria should be invalid");
-        errorMessage.Should().NotBeNull();
-        errorMessage.Should().Contain("search criterion", "error should mention search criterion requirement");
+        // Assert - Empty criteria is valid, it means "match all files"
+        isValid.Should().BeTrue("empty search criteria means 'match all files' and is valid by design");
+        errorMessage.Should().BeNull("valid query should not have error message");
     }
 
     [Fact]

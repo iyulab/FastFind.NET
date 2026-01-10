@@ -98,9 +98,40 @@ if (validation.IsReady)
 }
 ```
 
+### ⚠️ Important: Index Before Search
+**You MUST build the index before searching!** FastFind.NET uses an in-memory index for ultra-fast searches. Without indexing, searches will return zero results or fall back to slower filesystem scanning.
+
+```csharp
+// Step 1: Build the index FIRST (required before searching)
+var indexingOptions = new IndexingOptions
+{
+    DriveLetters = ['C', 'D'],        // Drives to index
+    // Or specific directories:
+    // SpecificDirectories = [@"D:\Projects", @"C:\Users\Documents"],
+    ExcludedPaths = ["node_modules", "bin", "obj", ".git"],
+    IncludeHidden = false
+};
+
+await searchEngine.StartIndexingAsync(indexingOptions);
+
+// Wait for indexing to complete (optional progress monitoring)
+while (searchEngine.IsIndexing)
+{
+    var stats = await searchEngine.GetIndexingStatisticsAsync();
+    Console.WriteLine($"Indexing: {stats.FilesProcessed:N0} files...");
+    await Task.Delay(500);
+}
+
+Console.WriteLine($"✅ Indexed {searchEngine.TotalIndexedFiles:N0} files");
+
+// Step 2: NOW you can search
+var results = await searchEngine.SearchAsync("*.txt");
+```
+
 ### Ultra-Fast File Search with Streaming
 ```csharp
 // Simple text search with hardware acceleration and streaming
+// NOTE: Ensure StartIndexingAsync was called first!
 var results = await searchEngine.SearchAsync("*.txt");
 
 // IAsyncEnumerable streaming for memory efficiency

@@ -287,10 +287,12 @@ internal static class SqliteSchema
         """;
 
     /// <summary>
-    /// SQL for bulk FTS rebuild after bulk loading (more efficient than triggers)
+    /// SQL for bulk FTS rebuild after bulk loading.
+    /// Uses SQLite's official FTS5 'rebuild' command which is safer and more efficient
+    /// than DELETE+INSERT pattern that can cause "database disk image is malformed" errors.
+    /// See: https://sqlite.org/fts5.html#the_rebuild_command
     /// </summary>
     public const string BulkRebuildFts = """
-        DELETE FROM files_fts;
-        INSERT INTO files_fts(rowid, name, full_path) SELECT id, name, full_path FROM files;
+        INSERT INTO files_fts(files_fts) VALUES('rebuild');
         """;
 }
