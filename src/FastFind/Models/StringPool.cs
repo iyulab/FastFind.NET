@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Buffers;
 using System.Runtime;
+using System.Threading;
 
 namespace FastFind.Models;
 
@@ -136,18 +137,36 @@ public static class StringPool
         return _namePool.GetOrAdd(name, Intern);
     }
 
+    // Lock for thread-safe AlternateLookup initialization
+    private static readonly Lock _lookupLock = new();
+
     /// <summary>
     /// Gets the cached AlternateLookup for zero-allocation span lookups.
+    /// Thread-safe initialization with locking to handle concurrent Reset() calls.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> GetNamePoolLookup()
     {
-        return _namePoolLookup ??= _namePool.GetAlternateLookup<ReadOnlySpan<char>>();
+        var lookup = _namePoolLookup;
+        if (lookup.HasValue)
+            return lookup.Value;
+
+        lock (_lookupLock)
+        {
+            lookup = _namePoolLookup;
+            if (lookup.HasValue)
+                return lookup.Value;
+
+            var newLookup = _namePool.GetAlternateLookup<ReadOnlySpan<char>>();
+            _namePoolLookup = newLookup;
+            return newLookup;
+        }
     }
 
     /// <summary>
     /// .NET 9+: Zero-allocation Span-based interning using AlternateLookup.
     /// Optimized for MFT parsing where filenames are received as char spans.
+    /// Thread-safe: guaranteed to return consistent ID for the same string content.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternFromSpan(ReadOnlySpan<char> value)
@@ -160,9 +179,16 @@ public static class StringPool
         if (lookup.TryGetValue(value, out var existingId))
             return existingId;
 
-        // Cache miss: create string and intern
+        // Cache miss: create string and intern in main pool first
         var stringValue = new string(value);
-        return _namePool.GetOrAdd(stringValue, Intern);
+
+        // Use the main Intern to get a consistent ID (thread-safe)
+        var id = Intern(stringValue);
+
+        // Add to namePool for future span lookups (TryAdd is safe for concurrent calls)
+        _namePool.TryAdd(stringValue, id);
+
+        return id;
     }
 
     /// <summary>

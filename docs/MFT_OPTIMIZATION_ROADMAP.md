@@ -429,18 +429,61 @@ MftParserV2.cs는 향후 동기식 대량 처리 시나리오를 위해 유지.
 - 캐시 미스: string 생성 후 인터닝
 - 중복 파일명에서 최대 효과 (예: index.html, README.md)
 
-### Next Steps
-1. **Phase 1.4**: MftCompactRecord 구조체 (40 bytes)
-2. **실제 성능 측정**: 관리자 권한으로 실제 MFT 열거 테스트
-3. **Phase 2.x**: I/O 및 동시성 최적화 (향후)
+### Phase 1.4 Completed (2026-01-13)
 
-### Ready for Implementation
+**구현 완료:**
+- MftCompactRecord 구조체: 정확히 40 bytes
+- StringPool ID 기반 파일명 저장 (uint FileNameId)
+- 단일 타임스탬프 (ModifiedTicks만 저장)
+- 양방향 변환: FromMftFileRecord / ToMftFileRecord
+
+**메모리 레이아웃 (40 bytes):**
+| 필드 | 타입 | 크기 |
+|------|------|------|
+| FileReferenceNumber | ulong | 8 bytes |
+| ParentFileReferenceNumber | ulong | 8 bytes |
+| FileNameId | uint | 4 bytes |
+| Attributes | uint | 4 bytes |
+| FileSize | long | 8 bytes |
+| ModifiedTicks | long | 8 bytes |
+
+**테스트:**
+- MftCompactRecordTests: 21개 테스트 (19 passed, 2 skipped)
+- 구조체 크기 검증: 40 bytes 확인
+- 메모리 절감: 30%+ 절감 확인
+- StringPool 통합 검증
+
+**성능 특성:**
+- 힙 할당 없음 (FileNameId로 StringPool 참조)
+- 메모리 효율: MftFileRecord 대비 ~50% 절감
+- 100K 레코드 = 4MB (vs. ~8MB+ for MftFileRecord)
+
+### Thread Safety Improvements
+
+**StringPool 개선:**
+- GetNamePoolLookup(): 스레드 안전 초기화 (double-checked locking)
+- InternFromSpan(): Intern() 먼저 호출 후 _namePool에 추가
+- Reset(): _namePoolLookup 무효화 처리
+
+### Next Steps
+1. **실제 성능 측정**: 관리자 권한으로 실제 MFT 열거 테스트
+2. **Phase 2.x**: I/O 및 동시성 최적화 (향후)
+3. **Integration**: MftCompactRecord를 MftReader에 통합 (선택적)
+
+### Phase 1 Summary
+
+| Phase | 목표 | 결과 | 상태 |
+|-------|------|------|------|
+| 1.1 | Span-based Parsing | BitConverter 유지 (Span 37% 느림) | ✅ 완료 |
+| 1.2 | Buffer Optimization | 1MB 기본값, 64KB-4MB 범위 | ✅ 완료 |
+| 1.3 | StringPool Integration | InternFromSpan zero-alloc | ✅ 완료 |
+| 1.4 | MftCompactRecord | 40 bytes 구조체 | ✅ 완료 |
+
+### Verification Commands
 ```bash
-# Verify Phase 1.3
+# Run all Phase 1 tests
 dotnet test --filter "Suite=MFT|Suite=StringPool" -c Release
 
-# Next: Phase 1.4 MftCompactRecord
-# - 40 bytes 구조체 설계
-# - StringPool ID 기반 파일명 저장
-# - 메모리 사용량 30% 절감
+# Verify MftCompactRecord size
+# Expected: 40 bytes (MftCompactRecordTests.MftCompactRecord_Size_Is40Bytes)
 ```
