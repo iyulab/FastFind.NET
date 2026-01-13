@@ -304,37 +304,29 @@ internal class WindowsSearchIndex : ISearchIndex
         var returnedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Phase 1: Search indexed results (fast path)
-        // Collect results under lock, then yield outside the lock
-        List<FileItem> indexedResults;
-        _indexLock.EnterReadLock();
-        try
+        // Phase 3.1: Lock-free reads - ConcurrentDictionary provides thread-safe enumeration
+        // No read lock needed: eventual consistency is acceptable for search results
+        var indexedCandidates = GetSearchCandidatesSync(query);
+        _logger.LogDebug("Hybrid search: Processing indexed candidates");
+
+        List<FileItem> indexedResults = new List<FileItem>();
+        foreach (var candidate in indexedCandidates)
         {
-            var indexedCandidates = GetSearchCandidatesSync(query).ToList();
-            _logger.LogDebug("Hybrid search: Found {Count} indexed candidates", indexedCandidates.Count);
+            if (cancellationToken.IsCancellationRequested)
+                break;
 
-            indexedResults = new List<FileItem>();
-            foreach (var candidate in indexedCandidates)
+            if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
+                break;
+
+            if (MatchesQuery(candidate, query, regex, searchText))
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
-                if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
-                    break;
-
-                if (MatchesQuery(candidate, query, regex, searchText))
-                {
-                    returnedPaths.Add(candidate.FullPath);
-                    indexedResults.Add(candidate);
-                    matchCount++;
-                }
+                returnedPaths.Add(candidate.FullPath);
+                indexedResults.Add(candidate);
+                matchCount++;
             }
         }
-        finally
-        {
-            _indexLock.ExitReadLock();
-        }
 
-        // Yield indexed results outside the lock
+        // Yield indexed results
         foreach (var result in indexedResults)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -968,18 +960,11 @@ internal class WindowsSearchIndex : ISearchIndex
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Phase 3.1: Lock-free read - ConcurrentDictionary.TryGetValue is thread-safe
         return await Task.Run(() =>
         {
-            _indexLock.EnterReadLock();
-            try
-            {
-                var key = fullPath.ToLowerInvariant();
-                return _fileIndex.TryGetValue(key, out var fileItem) ? fileItem.ToFastFileItem() : (FastFileItem?)null;
-            }
-            finally
-            {
-                _indexLock.ExitReadLock();
-            }
+            var key = fullPath.ToLowerInvariant();
+            return _fileIndex.TryGetValue(key, out var fileItem) ? fileItem.ToFastFileItem() : (FastFileItem?)null;
         }, cancellationToken);
     }
 
@@ -989,18 +974,11 @@ internal class WindowsSearchIndex : ISearchIndex
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Phase 3.1: Lock-free read - ConcurrentDictionary.ContainsKey is thread-safe
         return await Task.Run(() =>
         {
-            _indexLock.EnterReadLock();
-            try
-            {
-                var key = fullPath.ToLowerInvariant();
-                return _fileIndex.ContainsKey(key);
-            }
-            finally
-            {
-                _indexLock.ExitReadLock();
-            }
+            var key = fullPath.ToLowerInvariant();
+            return _fileIndex.ContainsKey(key);
         }, cancellationToken);
     }
 
@@ -1014,33 +992,25 @@ internal class WindowsSearchIndex : ISearchIndex
 
         var normalizedPath = directoryPath.ToLowerInvariant().TrimEnd('\\', '/');
 
-        // Collect files while holding the lock, then release it
-        List<FileItem> files;
-
-        _indexLock.EnterReadLock();
-        try
+        // Phase 3.1: Lock-free read - ConcurrentDictionary operations are thread-safe
+        List<FileItem> files = new List<FileItem>();
+        if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
         {
-            files = new List<FileItem>();
-            if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
+            // Take a snapshot of file paths for iteration
+            var pathSnapshot = filePaths.ToArray();
+            foreach (var filePath in pathSnapshot)
             {
-                foreach (var filePath in filePaths)
+                if (_fileIndex.TryGetValue(filePath, out var fileItem))
                 {
-                    if (_fileIndex.TryGetValue(filePath, out var fileItem))
+                    if (recursive || fileItem.DirectoryPath.Equals(directoryPath, StringComparison.OrdinalIgnoreCase))
                     {
-                        if (recursive || fileItem.DirectoryPath.Equals(directoryPath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            files.Add(fileItem);
-                        }
+                        files.Add(fileItem);
                     }
                 }
             }
         }
-        finally
-        {
-            _indexLock.ExitReadLock();
-        }
 
-        // Yield files without holding the lock
+        // Yield files
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1120,29 +1090,24 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         ThrowIfDisposed();
 
+        // Phase 3.1: Lock-free read - ConcurrentDictionary operations are thread-safe
         return await Task.Run(() =>
         {
-            _indexLock.EnterReadLock();
-            try
-            {
-                var files = _fileIndex.Values.Where(f => !f.IsDirectory).ToArray();
-                var directories = _fileIndex.Values.Where(f => f.IsDirectory).ToArray();
+            // Take a snapshot of values for counting (thread-safe)
+            var allItems = _fileIndex.Values.ToArray();
+            var files = allItems.Where(f => !f.IsDirectory).ToArray();
+            var directories = allItems.Where(f => f.IsDirectory).ToArray();
 
-                return new IndexStatistics
-                {
-                    TotalItems = _fileIndex.Count,
-                    TotalFiles = files.Length,
-                    TotalDirectories = directories.Length,
-                    MemoryUsageBytes = MemoryUsage,
-                    PersistenceEnabled = _persistence != null,
-                    LastUpdated = DateTime.Now,
-                    UniqueExtensions = _extensionIndex.Count
-                };
-            }
-            finally
+            return new IndexStatistics
             {
-                _indexLock.ExitReadLock();
-            }
+                TotalItems = allItems.Length,
+                TotalFiles = files.Length,
+                TotalDirectories = directories.Length,
+                MemoryUsageBytes = MemoryUsage,
+                PersistenceEnabled = _persistence != null,
+                LastUpdated = DateTime.Now,
+                UniqueExtensions = _extensionIndex.Count
+            };
         }, cancellationToken);
     }
 
@@ -1196,17 +1161,8 @@ internal class WindowsSearchIndex : ISearchIndex
             return 0;
         }
 
-        List<FastFileItem> items;
-
-        _indexLock.EnterReadLock();
-        try
-        {
-            items = _fileIndex.Values.Select(f => f.ToFastFileItem()).ToList();
-        }
-        finally
-        {
-            _indexLock.ExitReadLock();
-        }
+        // Phase 3.1: Lock-free read - take a snapshot for persistence
+        var items = _fileIndex.Values.Select(f => f.ToFastFileItem()).ToList();
 
         var savedCount = await _persistence.AddBatchAsync(items, cancellationToken);
         _logger.LogInformation("Saved {Count} items to persistence", savedCount);
