@@ -384,13 +384,13 @@ public sealed class QueryOptimizer
 |------|------------|--------|--------|
 | 1.1 Path Prefix Trie | Medium | High | ✅ Completed |
 | 1.2 Smart Filesystem Fallback | Low | High | ✅ Completed |
-| 1.3 Extension Index | Low | Medium | 🔴 Pending |
+| 1.3 Extension Index | Low | Medium | ✅ Already Existed |
 
 ### Phase 2 (SIMD) - Priority: High
-| Task | Complexity | Impact |
-|------|------------|--------|
-| 2.1 Batch String Matching | High | High |
-| 2.2 Zero-Allocation Matching | Medium | Medium |
+| Task | Complexity | Impact | Status |
+|------|------------|--------|--------|
+| 2.1 SIMD String Matching | High | High | ✅ Completed |
+| 2.2 Zero-Allocation Matching | Medium | Medium | 🔴 Pending |
 
 ### Phase 3 (Architecture) - Priority: Medium
 | Task | Complexity | Impact |
@@ -464,8 +464,8 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 | Metric | Current | Target | Status |
 |--------|---------|--------|--------|
 | Search_WithBasePath | 189ms → TBD | <5ms | 🟡 Phase 1.1/1.2 implemented |
-| Search_FileNameOnly | 154ms | <10ms | 🔴 Phase 2 needed |
-| Memory per 1M files | ~500MB | <200MB | 🟡 |
+| Search_FileNameOnly | 154ms → TBD | <10ms | 🟡 Phase 2.1 SIMD integrated |
+| Memory per 1M files | ~500MB | <200MB | 🟡 Phase 2.2 pending |
 | First result latency | ~1s | <100ms | 🔴 Phase 3 needed |
 | Index rebuild time | N/A | <30s/1M files | 🟡 |
 
@@ -486,9 +486,11 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 
 1. ~~**Immediate**: Implement Phase 1.2 (Smart Filesystem Fallback)~~ ✅ Completed
 2. ~~**Short-term**: Implement Phase 1.1 (Path Trie Index)~~ ✅ Completed
-3. **Next**: Implement Phase 1.3 (Extension Index) - Quick win
-4. **Medium-term**: Implement Phase 2.1 (SIMD Batch Matching)
-5. **Long-term**: Implement Phase 3 & 4 for production-grade architecture
+3. ~~**Phase 1.3**: Extension Index~~ ✅ Already existed in codebase
+4. ~~**Phase 2.1**: SIMD String Matching~~ ✅ Completed
+5. **Next**: Implement Phase 2.2 (Zero-Allocation Matching)
+6. **Medium-term**: Implement Phase 3 (Lock-Free Architecture)
+7. **Long-term**: Implement Phase 4 (Query Optimizer)
 
 ---
 
