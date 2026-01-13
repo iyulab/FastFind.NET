@@ -397,16 +397,31 @@ Phase 1.1 결과를 바탕으로 전략 수정:
 
 MftParserV2.cs는 향후 동기식 대량 처리 시나리오를 위해 유지.
 
+### Phase 1.2 Completed (2026-01-13)
+
+**구현 완료:**
+- MftReaderOptions 클래스 생성
+- 기본 버퍼 크기: 64KB → 1MB (16배 증가)
+- 버퍼 크기 범위: 64KB ~ 4MB
+- 4KB 경계 자동 정렬
+- 시스템 메모리 기반 CreateOptimal() 팩토리
+
+**테스트:**
+- MftReaderOptionsTests: 12개 단위 테스트
+- MftBufferSizeTests: 13개 버퍼 테스트
+- 전체 MFT 테스트: 35개 통과, 2개 스킵
+
 ### Next Steps
-1. **Phase 1.2 시작**: 버퍼 크기 벤치마크
-2. **64KB → 256KB → 1MB → 4MB** 테스트
-3. **최적 버퍼 크기 결정**
+1. **Phase 1.3**: StringPool 통합 (메모리 최적화)
+2. **Phase 1.4**: MftCompactRecord 구조체 (40 bytes)
+3. **실제 성능 측정**: 관리자 권한으로 실제 MFT 열거 테스트
 
 ### Ready for Implementation
 ```bash
-# Verify current state
-dotnet test --filter "MftParserPerformanceTests" -c Release
+# Verify Phase 1.2
+dotnet test --filter "Suite=MFT" -c Release
 
-# Next: Phase 1.2 Buffer Optimization
-dotnet test --filter "MftBufferSizeTests" -c Release
+# Next: Phase 1.3 StringPool Integration
+# - Add InternFromSpan method to StringPool
+# - Integrate with MftParserV2.TryParseUsnRecordPooled
 ```
