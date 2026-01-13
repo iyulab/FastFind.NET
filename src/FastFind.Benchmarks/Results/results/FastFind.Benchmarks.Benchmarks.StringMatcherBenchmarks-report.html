@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>FastFind.Benchmarks.Benchmarks.StringMatcherBenchmarks-20260113-102635</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Windows 11 (10.0.26200.7462/25H2/2025Update/HudsonValley2)
+13th Gen Intel Core i7-1360P 2.20GHz, 1 CPU, 16 logical and 12 physical cores
+.NET SDK 10.0.101
+  [Host]   : .NET 10.0.1 (10.0.1, 10.0.125.57005), X64 RyuJIT x86-64-v3
+  ShortRun : .NET 10.0.1 (10.0.1, 10.0.125.57005), X64 RyuJIT x86-64-v3
+</code></pre>
+<pre><code>Job=ShortRun  IterationCount=3  LaunchCount=1  
+WarmupCount=3  
+</code></pre>
+
+<table>
+<thead><tr><th>Method                 </th><th>StringCount</th><th>Mean  </th><th>Error</th><th>StdDev</th><th>Median</th><th>Ratio</th><th>RatioSD</th><th>Rank</th><th>Allocated</th><th>Alloc Ratio</th>
+</tr>
+</thead><tbody><tr><td>Native_StringContains</td><td>1000</td><td>8.096 &mu;s</td><td>5.3797 &mu;s</td><td>0.2949 &mu;s</td><td>8.199 &mu;s</td><td>1.00</td><td>0.05</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>Native_StringContains_Ordinal</td><td>1000</td><td>5.659 &mu;s</td><td>0.5940 &mu;s</td><td>0.0326 &mu;s</td><td>5.650 &mu;s</td><td>0.70</td><td>0.02</td><td>1</td><td>-</td><td>NA</td>
+</tr><tr><td>Span_Contains</td><td>1000</td><td>7.549 &mu;s</td><td>3.8003 &mu;s</td><td>0.2083 &mu;s</td><td>7.431 &mu;s</td><td>0.93</td><td>0.04</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_Ordinal</td><td>1000</td><td>6.033 &mu;s</td><td>1.8821 &mu;s</td><td>0.1032 &mu;s</td><td>5.976 &mu;s</td><td>0.75</td><td>0.03</td><td>1</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_OrdinalIgnoreCase</td><td>1000</td><td>7.740 &mu;s</td><td>2.7030 &mu;s</td><td>0.1482 &mu;s</td><td>7.795 &mu;s</td><td>0.96</td><td>0.03</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>Native_StringContains</td><td>10000</td><td>161.174 &mu;s</td><td>21.6574 &mu;s</td><td>1.1871 &mu;s</td><td>160.747 &mu;s</td><td>1.00</td><td>0.01</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>Native_StringContains_Ordinal</td><td>10000</td><td>82.316 &mu;s</td><td>15.7247 &mu;s</td><td>0.8619 &mu;s</td><td>82.042 &mu;s</td><td>0.51</td><td>0.01</td><td>1</td><td>-</td><td>NA</td>
+</tr><tr><td>Span_Contains</td><td>10000</td><td>160.971 &mu;s</td><td>59.1732 &mu;s</td><td>3.2435 &mu;s</td><td>162.432 &mu;s</td><td>1.00</td><td>0.02</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_Ordinal</td><td>10000</td><td>82.221 &mu;s</td><td>14.5198 &mu;s</td><td>0.7959 &mu;s</td><td>82.620 &mu;s</td><td>0.51</td><td>0.01</td><td>1</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_OrdinalIgnoreCase</td><td>10000</td><td>179.742 &mu;s</td><td>29.0550 &mu;s</td><td>1.5926 &mu;s</td><td>180.516 &mu;s</td><td>1.12</td><td>0.01</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>Native_StringContains</td><td>50000</td><td>958.197 &mu;s</td><td>345.3760 &mu;s</td><td>18.9312 &mu;s</td><td>962.353 &mu;s</td><td>1.00</td><td>0.02</td><td>3</td><td>-</td><td>NA</td>
+</tr><tr><td>Native_StringContains_Ordinal</td><td>50000</td><td>623.595 &mu;s</td><td>253.0731 &mu;s</td><td>13.8718 &mu;s</td><td>617.087 &mu;s</td><td>0.65</td><td>0.02</td><td>1</td><td>-</td><td>NA</td>
+</tr><tr><td>Span_Contains</td><td>50000</td><td>1,010.713 &mu;s</td><td>100.0415 &mu;s</td><td>5.4836 &mu;s</td><td>1,008.503 &mu;s</td><td>1.06</td><td>0.02</td><td>3</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_Ordinal</td><td>50000</td><td>771.828 &mu;s</td><td>254.0157 &mu;s</td><td>13.9235 &mu;s</td><td>777.495 &mu;s</td><td>0.81</td><td>0.02</td><td>2</td><td>-</td><td>NA</td>
+</tr><tr><td>IndexOf_OrdinalIgnoreCase</td><td>50000</td><td>1,198.086 &mu;s</td><td>756.8912 &mu;s</td><td>41.4878 &mu;s</td><td>1,199.909 &mu;s</td><td>1.25</td><td>0.04</td><td>3</td><td>-</td><td>NA</td>
+</tr></tbody></table>
+</body>
+</html>

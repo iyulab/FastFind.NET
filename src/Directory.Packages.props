@@ -28,6 +28,7 @@
 
   <ItemGroup Label="Testing Utilities">
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.15.8" />
     <PackageVersion Include="FluentAssertions" Version="8.8.0" />
   </ItemGroup>
 
