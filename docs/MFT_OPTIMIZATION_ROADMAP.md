@@ -411,17 +411,36 @@ MftParserV2.cs는 향후 동기식 대량 처리 시나리오를 위해 유지.
 - MftBufferSizeTests: 13개 버퍼 테스트
 - 전체 MFT 테스트: 35개 통과, 2개 스킵
 
+### Phase 1.3 Completed (2026-01-13)
+
+**구현 완료:**
+- .NET 9+ `GetAlternateLookup<ReadOnlySpan<char>>()` 활용
+- `InternFromSpan()`: 캐시 히트 시 zero-allocation
+- `TryGetFromSpan()`: 존재 여부 확인 (할당 없음)
+- `MftParserV2.TryParseUsnRecordPooled` 업데이트
+
+**테스트:**
+- StringPoolSpanTests: 13개 테스트 통과
+- MFT 시뮬레이션: 500K 레코드 처리 검증
+- 전체: 48개 통과, 2개 스킵
+
+**성능 특성:**
+- 캐시 히트: zero-allocation (Span lookup)
+- 캐시 미스: string 생성 후 인터닝
+- 중복 파일명에서 최대 효과 (예: index.html, README.md)
+
 ### Next Steps
-1. **Phase 1.3**: StringPool 통합 (메모리 최적화)
-2. **Phase 1.4**: MftCompactRecord 구조체 (40 bytes)
-3. **실제 성능 측정**: 관리자 권한으로 실제 MFT 열거 테스트
+1. **Phase 1.4**: MftCompactRecord 구조체 (40 bytes)
+2. **실제 성능 측정**: 관리자 권한으로 실제 MFT 열거 테스트
+3. **Phase 2.x**: I/O 및 동시성 최적화 (향후)
 
 ### Ready for Implementation
 ```bash
-# Verify Phase 1.2
-dotnet test --filter "Suite=MFT" -c Release
+# Verify Phase 1.3
+dotnet test --filter "Suite=MFT|Suite=StringPool" -c Release
 
-# Next: Phase 1.3 StringPool Integration
-# - Add InternFromSpan method to StringPool
-# - Integrate with MftParserV2.TryParseUsnRecordPooled
+# Next: Phase 1.4 MftCompactRecord
+# - 40 bytes 구조체 설계
+# - StringPool ID 기반 파일명 저장
+# - 메모리 사용량 30% 절감
 ```
