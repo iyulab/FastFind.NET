@@ -22,7 +22,13 @@ public static class WindowsRegistration
     /// when the FastFind.Windows assembly is loaded. This ensures that users don't need
     /// to manually call EnsureRegistered() before using FastFinder.CreateWindowsSearchEngine().
     /// </summary>
+    /// <remarks>
+    /// CA2255 is suppressed because this library intentionally uses ModuleInitializer
+    /// to provide transparent factory registration when the assembly is loaded.
+    /// </remarks>
+#pragma warning disable CA2255
     [ModuleInitializer]
+#pragma warning restore CA2255
     internal static void Initialize()
     {
         EnsureRegistered();

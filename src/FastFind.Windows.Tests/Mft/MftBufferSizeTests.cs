@@ -113,7 +113,7 @@ public class MftBufferSizeTests
     }
 
     [Fact(Skip = "Requires admin rights and real NTFS volume - run manually")]
-    public void BufferSize_RealMftEnumeration_ComparePerformance()
+    public async Task BufferSize_RealMftEnumeration_ComparePerformance()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -144,15 +144,11 @@ public class MftBufferSizeTests
             // Note: Current MftReader uses fixed 64KB buffer
             // Phase 1.2 implementation will add configurable buffer size
             var enumerator = reader.EnumerateFilesAsync(driveToTest);
-            var task = Task.Run(async () =>
+            await foreach (var record in enumerator)
             {
-                await foreach (var record in enumerator)
-                {
-                    recordCount++;
-                    if (recordCount >= 100000) break; // Limit for test
-                }
-            });
-            task.Wait();
+                recordCount++;
+                if (recordCount >= 100000) break; // Limit for test
+            }
 
             sw.Stop();
             var rate = recordCount / sw.Elapsed.TotalSeconds;
