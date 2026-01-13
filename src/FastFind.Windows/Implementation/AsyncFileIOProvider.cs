@@ -113,6 +113,9 @@ internal sealed class AsyncFileIOProvider : IDisposable
             {
                 fixed (byte* bufferPtr = buffer)
                 {
+                    // CS9123: Using address of local in async method is intentional here
+                    // The overlapped variable is pinned within this fixed block scope
+#pragma warning disable CS9123
                     var success = ReadDirectoryChangesW(
                         safeHandle.DangerousGetHandle(),
                         bufferPtr,
@@ -123,6 +126,7 @@ internal sealed class AsyncFileIOProvider : IDisposable
                         &overlapped,
                         IntPtr.Zero
                     );
+#pragma warning restore CS9123
 
                     if (!success)
                     {

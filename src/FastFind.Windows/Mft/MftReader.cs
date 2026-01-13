@@ -19,24 +19,39 @@ namespace FastFind.Windows.Mft;
 public sealed class MftReader : IDisposable
 {
     private readonly ILogger<MftReader>? _logger;
+    private readonly MftReaderOptions _options;
     private readonly ArrayPool<byte> _bufferPool;
     private readonly ConcurrentDictionary<char, SafeFileHandle> _volumeHandles;
     private readonly ConcurrentDictionary<ulong, string> _directoryPathCache;
     private bool _disposed;
 
-    // Buffer size for MFT enumeration (64KB for optimal performance)
-    private const int MFT_BUFFER_SIZE = 64 * 1024;
-
     // Root directory file reference number
     private const ulong ROOT_DIRECTORY_FRN = 0x0005000000000005;
 
+    /// <summary>
+    /// Creates a new MFT reader with default options.
+    /// </summary>
     public MftReader(ILogger<MftReader>? logger = null)
+        : this(MftReaderOptions.Default, logger)
     {
+    }
+
+    /// <summary>
+    /// Creates a new MFT reader with specified options.
+    /// </summary>
+    public MftReader(MftReaderOptions options, ILogger<MftReader>? logger = null)
+    {
+        _options = options.Validate();
         _logger = logger;
         _bufferPool = ArrayPool<byte>.Shared;
         _volumeHandles = new ConcurrentDictionary<char, SafeFileHandle>();
         _directoryPathCache = new ConcurrentDictionary<ulong, string>();
     }
+
+    /// <summary>
+    /// Gets the current options.
+    /// </summary>
+    public MftReaderOptions Options => _options;
 
     /// <summary>
     /// Checks if MFT access is available (requires admin rights and NTFS)
@@ -137,7 +152,7 @@ public sealed class MftReader : IDisposable
         var rootPath = $"{driveLetter}:\\";
         _directoryPathCache[ROOT_DIRECTORY_FRN & 0x0000FFFFFFFFFFFF] = rootPath;
 
-        var buffer = _bufferPool.Rent(MFT_BUFFER_SIZE);
+        var buffer = _bufferPool.Rent(_options.BufferSize);
         var directoryRecords = new ConcurrentDictionary<ulong, MftFileRecord>();
 
         try
@@ -487,6 +502,44 @@ public sealed class MftReader : IDisposable
             dateTime,
             dateTime,
             dateTime);
+    }
+
+    /// <summary>
+    /// Parse all USN records in a buffer batch using optimized Span-based parsing.
+    /// Returns a list of records that can be safely yielded across async boundaries.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static List<MftFileRecord> ParseBufferBatch(
+        byte[] buffer,
+        int bytesReturned,
+        ConcurrentDictionary<ulong, MftFileRecord> directoryRecords)
+    {
+        var records = new List<MftFileRecord>(256); // Pre-allocate for typical batch size
+        var bufferSpan = buffer.AsSpan(0, bytesReturned);
+        var offset = 8; // Skip first 8 bytes (next file reference number)
+
+        while (offset < bytesReturned)
+        {
+            if (MftParserV2.TryParseUsnRecord(bufferSpan, ref offset, out var mftRecord))
+            {
+                // Cache directory records for path building
+                if (mftRecord.IsDirectory)
+                {
+                    directoryRecords[mftRecord.GetRecordNumber()] = mftRecord;
+                }
+
+                records.Add(mftRecord);
+            }
+            else
+            {
+                // If parsing failed and offset didn't advance, break to avoid infinite loop
+                var recordLength = MftParserV2.GetRecordLength(bufferSpan, offset);
+                if (recordLength == 0)
+                    break;
+            }
+        }
+
+        return records;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

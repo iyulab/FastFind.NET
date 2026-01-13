@@ -1,0 +1,94 @@
+name: Benchmark
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      run_full_benchmark:
+        description: 'Run full benchmark suite'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+  deployments: write
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+        dotnet-quality: 'preview'
+
+    - name: Restore dependencies
+      run: dotnet restore src/FastFind.sln
+
+    - name: Build solution
+      run: dotnet build src/FastFind.sln --configuration Release --no-restore
+
+    - name: Run benchmarks
+      run: |
+        cd src/FastFind.Benchmarks
+        dotnet run -c Release -- --exporters json --artifacts ../BenchmarkResults
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results-${{ github.sha }}
+        path: src/BenchmarkResults/
+        retention-days: 90
+
+    - name: Store benchmark result for tracking
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: FastFind.NET Benchmarks
+        tool: 'benchmarkdotnet'
+        output-file-path: src/BenchmarkResults/results/FastFind.Benchmarks.Benchmarks.StringMatcherBenchmarks-report-full-compressed.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        alert-threshold: '150%'
+        comment-on-alert: true
+        fail-on-alert: false
+        alert-comment-cc-users: '@iyulab'
+
+  quick-benchmark:
+    name: Quick Performance Check
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+        dotnet-quality: 'preview'
+
+    - name: Restore dependencies
+      run: dotnet restore src/FastFind.sln
+
+    - name: Build solution
+      run: dotnet build src/FastFind.sln --configuration Release --no-restore
+
+    - name: Run quick benchmark (StringMatcher only)
+      run: |
+        cd src/FastFind.Benchmarks
+        dotnet run -c Release -- --filter "*StringMatcher*" --job short
+      env:
+        DOTNET_CLI_TELEMETRY_OPTOUT: 1

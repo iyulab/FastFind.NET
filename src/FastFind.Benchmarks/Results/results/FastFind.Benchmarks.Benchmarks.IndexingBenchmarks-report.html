@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>FastFind.Benchmarks.Benchmarks.IndexingBenchmarks-20260113-103154</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Windows 11 (10.0.26200.7462/25H2/2025Update/HudsonValley2)
+13th Gen Intel Core i7-1360P 2.20GHz, 1 CPU, 16 logical and 12 physical cores
+.NET SDK 10.0.101
+  [Host]   : .NET 10.0.1 (10.0.1, 10.0.125.57005), X64 RyuJIT x86-64-v3
+  ShortRun : .NET 10.0.1 (10.0.1, 10.0.125.57005), X64 RyuJIT x86-64-v3
+</code></pre>
+<pre><code>Job=ShortRun  IterationCount=3  LaunchCount=1  
+WarmupCount=3  
+</code></pre>
+
+<table>
+<thead><tr><th>Method                           </th><th>Mean  </th><th>Error</th><th>StdDev</th><th>Median</th><th>Ratio</th><th>RatioSD</th><th>Rank</th><th>Gen0</th><th>Allocated</th><th>Alloc Ratio</th>
+</tr>
+</thead><tbody><tr><td>DirectoryEnumerate_GetFiles</td><td>9.561 ms</td><td>3.475 ms</td><td>0.1905 ms</td><td>9.551 ms</td><td>1.00</td><td>0.02</td><td>1</td><td>46.8750</td><td>503.03 KB</td><td>1.00</td>
+</tr><tr><td>DirectoryEnumerate_GetFileSystemEntries</td><td>9.619 ms</td><td>4.726 ms</td><td>0.2590 ms</td><td>9.531 ms</td><td>1.01</td><td>0.03</td><td>1</td><td>46.8750</td><td>545.24 KB</td><td>1.08</td>
+</tr><tr><td>SearchEngine_StartIndexing</td><td>2,119.807 ms</td><td>95.924 ms</td><td>5.2579 ms</td><td>2,122.364 ms</td><td>221.76</td><td>3.85</td><td>3</td><td>-</td><td>5031.07 KB</td><td>10.00</td>
+</tr><tr><td>FileInfo_Creation</td><td>22.636 ms</td><td>3.611 ms</td><td>0.1979 ms</td><td>22.700 ms</td><td>2.37</td><td>0.04</td><td>2</td><td>31.2500</td><td>323.34 KB</td><td>0.64</td>
+</tr></tbody></table>
+</body>
+</html>

@@ -1,6 +1,7 @@
 using FastFind.Interfaces;
 using FastFind.Models;
 using Microsoft.Extensions.Logging;
+using System.Reflection;
 
 namespace FastFind;
 
@@ -11,6 +12,75 @@ public static class FastFinder
 {
     private static readonly Dictionary<PlatformType, Func<ILoggerFactory?, ISearchEngine>> _factories = new();
     private static readonly Lock _lock = new();
+    private static volatile bool _platformAssemblyLoadAttempted = false;
+    private static readonly object _platformLoadLock = new();
+
+    /// <summary>
+    /// Platform-specific assembly names for auto-loading
+    /// </summary>
+    private static readonly Dictionary<PlatformType, string> _platformAssemblyNames = new()
+    {
+        { PlatformType.Windows, "FastFind.Windows" },
+        { PlatformType.Linux, "FastFind.Unix" },
+        { PlatformType.MacOS, "FastFind.Unix" },
+        { PlatformType.Unix, "FastFind.Unix" }
+    };
+
+    /// <summary>
+    /// Ensures the platform-specific assembly is loaded and its factory is registered.
+    /// This resolves Issue #6 where ModuleInitializer doesn't run until the assembly is loaded.
+    /// </summary>
+    private static void EnsurePlatformAssemblyLoaded()
+    {
+        if (_platformAssemblyLoadAttempted) return;
+
+        lock (_platformLoadLock)
+        {
+            if (_platformAssemblyLoadAttempted) return;
+            _platformAssemblyLoadAttempted = true;
+
+            var currentPlatform = GetCurrentPlatform();
+
+            if (_platformAssemblyNames.TryGetValue(currentPlatform, out var assemblyName))
+            {
+                TryLoadPlatformAssembly(assemblyName);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attempts to load a platform-specific assembly by name.
+    /// When loaded, the assembly's ModuleInitializer will automatically register its factory.
+    /// </summary>
+    /// <param name="assemblyName">Name of the assembly to load</param>
+    private static void TryLoadPlatformAssembly(string assemblyName)
+    {
+        try
+        {
+            // Try to load the assembly - this triggers ModuleInitializer
+            var assembly = Assembly.Load(assemblyName);
+
+            // As a fallback, try to call EnsureRegistered if ModuleInitializer didn't work
+            var registrationType = assembly.GetType($"{assemblyName}.WindowsRegistration")
+                                ?? assembly.GetType($"{assemblyName}.UnixRegistration");
+
+            if (registrationType != null)
+            {
+                var ensureMethod = registrationType.GetMethod("EnsureRegistered",
+                    BindingFlags.Public | BindingFlags.Static);
+                ensureMethod?.Invoke(null, null);
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            // Platform-specific assembly not installed - this is expected
+        }
+        catch (Exception)
+        {
+            // Other errors during loading - silently ignore
+            // User can still manually call EnsureRegistered()
+        }
+    }
 
     /// <summary>
     /// Creates a search engine for the current platform
@@ -19,6 +89,9 @@ public static class FastFinder
     /// <returns>Platform-optimized search engine</returns>
     public static ISearchEngine CreateSearchEngine(ILoggerFactory? loggerFactory = null)
     {
+        // Ensure platform assembly is loaded before trying to create engine
+        EnsurePlatformAssemblyLoaded();
+
         var platformType = GetCurrentPlatform();
         return CreateSearchEngine(platformType, loggerFactory);
     }
@@ -31,6 +104,9 @@ public static class FastFinder
     /// <returns>Platform-specific search engine</returns>
     public static ISearchEngine CreateSearchEngine(PlatformType platformType, ILoggerFactory? loggerFactory = null)
     {
+        // Ensure platform assembly is loaded before trying to create engine
+        EnsurePlatformAssemblyLoaded();
+
         lock (_lock)
         {
             if (_factories.TryGetValue(platformType, out var factory))
@@ -139,6 +215,9 @@ public static class FastFinder
     /// <returns>Validation result</returns>
     public static SystemValidationResult ValidateSystem()
     {
+        // Ensure platform assembly is loaded before validation
+        EnsurePlatformAssemblyLoaded();
+
         try
         {
             var platformType = GetCurrentPlatform();

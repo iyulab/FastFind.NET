@@ -368,3 +368,5 @@ CLAUDE.md
 .serena/
 local-docs/
 claudedocs/
+tmpclaude-*
+Results/

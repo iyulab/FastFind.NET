@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Buffers;
 using System.Runtime;
+using System.Threading;
 
 namespace FastFind.Models;
 
@@ -20,6 +21,9 @@ public static class StringPool
     private static readonly ConcurrentDictionary<string, int> _pathPool = new(Environment.ProcessorCount, 16384);
     private static readonly ConcurrentDictionary<string, int> _extensionPool = new(Environment.ProcessorCount, 512);
     private static readonly ConcurrentDictionary<string, int> _namePool = new(Environment.ProcessorCount, 8192);
+
+    // .NET 9+: Cached AlternateLookup for zero-allocation Span-based lookups
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>>? _namePoolLookup;
 
     // 성능 통계 - object lock 사용 (.NET 10에서 Lock이 없는 경우 대비)
     private static readonly Lock _statsLock = new();
@@ -80,6 +84,57 @@ public static class StringPool
     public static string GetString(int id) => Get(id);
 
     /// <summary>
+    /// Phase 2.2: Zero-allocation span access to interned string.
+    /// Returns a ReadOnlySpan view of the stored string without allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ReadOnlySpan<char> GetSpan(int id)
+    {
+        if (id == 0) return ReadOnlySpan<char>.Empty;
+
+        return _idToString.TryGetValue(id, out var value)
+            ? value.AsSpan()
+            : ReadOnlySpan<char>.Empty;
+    }
+
+    /// <summary>
+    /// Phase 2.2: Zero-allocation memory access for async scenarios.
+    /// Returns a ReadOnlyMemory view of the stored string.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ReadOnlyMemory<char> GetMemory(int id)
+    {
+        if (id == 0) return ReadOnlyMemory<char>.Empty;
+
+        return _idToString.TryGetValue(id, out var value)
+            ? value.AsMemory()
+            : ReadOnlyMemory<char>.Empty;
+    }
+
+    /// <summary>
+    /// Phase 2.2: Try to get span without exception on missing ID.
+    /// More efficient than GetSpan when ID validity is uncertain.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGetSpan(int id, out ReadOnlySpan<char> span)
+    {
+        if (id == 0)
+        {
+            span = ReadOnlySpan<char>.Empty;
+            return true; // ID 0 is valid (empty string)
+        }
+
+        if (_idToString.TryGetValue(id, out var value))
+        {
+            span = value.AsSpan();
+            return true;
+        }
+
+        span = ReadOnlySpan<char>.Empty;
+        return false;
+    }
+
+    /// <summary>
     /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 10 Span 최적화
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -131,6 +186,77 @@ public static class StringPool
             return 0;
 
         return _namePool.GetOrAdd(name, Intern);
+    }
+
+    // Lock for thread-safe AlternateLookup initialization
+    private static readonly Lock _lookupLock = new();
+
+    /// <summary>
+    /// Gets the cached AlternateLookup for zero-allocation span lookups.
+    /// Thread-safe initialization with locking to handle concurrent Reset() calls.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> GetNamePoolLookup()
+    {
+        var lookup = _namePoolLookup;
+        if (lookup.HasValue)
+            return lookup.Value;
+
+        lock (_lookupLock)
+        {
+            lookup = _namePoolLookup;
+            if (lookup.HasValue)
+                return lookup.Value;
+
+            var newLookup = _namePool.GetAlternateLookup<ReadOnlySpan<char>>();
+            _namePoolLookup = newLookup;
+            return newLookup;
+        }
+    }
+
+    /// <summary>
+    /// .NET 9+: Zero-allocation Span-based interning using AlternateLookup.
+    /// Optimized for MFT parsing where filenames are received as char spans.
+    /// Thread-safe: guaranteed to return consistent ID for the same string content.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int InternFromSpan(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty)
+            return 0;
+
+        // Try to find existing entry using cached AlternateLookup (zero-allocation on cache hit)
+        var lookup = GetNamePoolLookup();
+        if (lookup.TryGetValue(value, out var existingId))
+            return existingId;
+
+        // Cache miss: create string and intern in main pool first
+        var stringValue = new string(value);
+
+        // Use the main Intern to get a consistent ID (thread-safe)
+        var id = Intern(stringValue);
+
+        // Add to namePool for future span lookups (TryAdd is safe for concurrent calls)
+        _namePool.TryAdd(stringValue, id);
+
+        return id;
+    }
+
+    /// <summary>
+    /// .NET 9+: Try to get ID for existing interned string without allocation.
+    /// Returns false if the string has not been interned yet.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGetFromSpan(ReadOnlySpan<char> value, out int id)
+    {
+        if (value.IsEmpty)
+        {
+            id = 0;
+            return true; // Empty is always "found" as ID 0
+        }
+
+        var lookup = GetNamePoolLookup();
+        return lookup.TryGetValue(value, out id);
     }
 
     /// <summary>
@@ -207,19 +333,27 @@ public static class StringPool
                     if (_stringToId.TryRemove(key, out var id))
                     {
                         _idToString.TryRemove(id, out _);
+                        // Also remove from specialized pools to maintain consistency
+                        _pathPool.TryRemove(key, out _);
+                        _extensionPool.TryRemove(key, out _);
+                        _namePool.TryRemove(key, out _);
                         Interlocked.Decrement(ref _internedCount);
                         Interlocked.Add(ref _memoryBytes, -(key.Length * 2));
                     }
                 });
             }
 
-            // 특화 풀들도 정리 - 더 보수적인 임계값
-            if (_pathPool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                _pathPool.Clear();
-            if (_extensionPool.Count > (shouldAggressiveClean ? 500 : 1000))
-                _extensionPool.Clear();
-            if (_namePool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                _namePool.Clear();
+            // Specialized pools cleanup - only clear if main pool was also cleaned
+            // This maintains consistency between pools
+            if (_stringToId.Count > (shouldAggressiveClean ? 50000 : 100000))
+            {
+                if (_pathPool.Count > (shouldAggressiveClean ? 25000 : 50000))
+                    _pathPool.Clear();
+                if (_extensionPool.Count > (shouldAggressiveClean ? 500 : 1000))
+                    _extensionPool.Clear();
+                if (_namePool.Count > (shouldAggressiveClean ? 25000 : 50000))
+                    _namePool.Clear();
+            }
         }
     }
 
@@ -249,6 +383,9 @@ public static class StringPool
             _pathPool.Clear();
             _extensionPool.Clear();
             _namePool.Clear();
+
+            // Reset cached AlternateLookup (will be re-created on next use)
+            _namePoolLookup = null;
 
             Interlocked.Exchange(ref _internedCount, 0);
             Interlocked.Exchange(ref _memoryBytes, 0);

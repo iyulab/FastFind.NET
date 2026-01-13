@@ -2,6 +2,7 @@
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
+using FastFind.Windows.Mft;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
@@ -22,7 +23,13 @@ public static class WindowsRegistration
     /// when the FastFind.Windows assembly is loaded. This ensures that users don't need
     /// to manually call EnsureRegistered() before using FastFinder.CreateWindowsSearchEngine().
     /// </summary>
+    /// <remarks>
+    /// CA2255 is suppressed because this library intentionally uses ModuleInitializer
+    /// to provide transparent factory registration when the assembly is loaded.
+    /// </remarks>
+#pragma warning disable CA2255
     [ModuleInitializer]
+#pragma warning restore CA2255
     internal static void Initialize()
     {
         EnsureRegistered();
@@ -41,7 +48,8 @@ public static class WindowsRegistration
 
             if (OperatingSystem.IsWindows())
             {
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, WindowsSearchEngine.CreateWindowsSearchEngine);
+                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => WindowsSearchEngine.CreateWindowsSearchEngine(loggerFactory));
                 _isRegistered = true;
             }
         }
@@ -63,11 +71,12 @@ public static class WindowsSearchEngine
     /// </summary>
     static WindowsSearchEngine()
     {
-        try 
+        try
         {
             if (OperatingSystem.IsWindows())
             {
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, CreateWindowsSearchEngine);
+                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => CreateWindowsSearchEngine(loggerFactory));
             }
         }
         catch (Exception)
@@ -80,8 +89,11 @@ public static class WindowsSearchEngine
     /// Creates a Windows-optimized search engine with .NET 10 enhancements
     /// </summary>
     /// <param name="loggerFactory">Optional logger factory</param>
+    /// <param name="providerMode">File system provider mode (default: Auto for MFT when available)</param>
     /// <returns>Windows search engine instance</returns>
-    public static ISearchEngine CreateWindowsSearchEngine(ILoggerFactory? loggerFactory = null)
+    public static ISearchEngine CreateWindowsSearchEngine(
+        ILoggerFactory? loggerFactory = null,
+        ProviderMode providerMode = ProviderMode.Auto)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -103,7 +115,9 @@ public static class WindowsSearchEngine
 
         // Register enhanced Windows-specific implementations
         services.AddSingleton<WindowsSearchEngineOptions>(provider => CreateOptimizedOptions());
-        services.AddSingleton<IFileSystemProvider, WindowsFileSystemProvider>();
+        // Use HybridFileSystemProvider with specified mode
+        services.AddSingleton<IFileSystemProvider>(provider =>
+            new HybridFileSystemProvider(providerMode, loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
@@ -112,14 +126,26 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
+    /// Creates a Windows search engine for testing with Standard mode (no MFT)
+    /// </summary>
+    /// <param name="loggerFactory">Optional logger factory</param>
+    /// <returns>Windows search engine using standard file system enumeration</returns>
+    public static ISearchEngine CreateWindowsSearchEngineForTesting(ILoggerFactory? loggerFactory = null)
+    {
+        return CreateWindowsSearchEngine(loggerFactory, ProviderMode.Standard);
+    }
+
+    /// <summary>
     /// Creates a Windows search engine with advanced configuration
     /// </summary>
     /// <param name="configure">Configuration action</param>
     /// <param name="loggerFactory">Optional logger factory</param>
+    /// <param name="providerMode">File system provider mode (default: Auto)</param>
     /// <returns>Configured Windows search engine</returns>
     public static ISearchEngine CreateWindowsSearchEngine(
         Action<WindowsSearchEngineOptions> configure,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ProviderMode providerMode = ProviderMode.Auto)
     {
         var options = CreateOptimizedOptions();
         configure(options);
@@ -141,7 +167,9 @@ public static class WindowsSearchEngine
         services.AddSingleton(options);
 
         // Register Windows-specific implementations
-        services.AddSingleton<IFileSystemProvider, WindowsFileSystemProvider>();
+        // Use HybridFileSystemProvider with specified mode
+        services.AddSingleton<IFileSystemProvider>(provider =>
+            new HybridFileSystemProvider(providerMode, loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
