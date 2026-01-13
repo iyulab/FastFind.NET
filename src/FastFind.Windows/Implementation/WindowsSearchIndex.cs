@@ -305,15 +305,14 @@ internal class WindowsSearchIndex : ISearchIndex
 
         // Phase 1: Search indexed results (fast path)
         // Phase 3.1: Lock-free reads - ConcurrentDictionary provides thread-safe enumeration
-        // No read lock needed: eventual consistency is acceptable for search results
+        // Phase 3.2: Stream results immediately instead of batching
         var indexedCandidates = GetSearchCandidatesSync(query);
-        _logger.LogDebug("Hybrid search: Processing indexed candidates");
+        _logger.LogDebug("Hybrid search: Streaming indexed candidates");
 
-        List<FileItem> indexedResults = new List<FileItem>();
         foreach (var candidate in indexedCandidates)
         {
             if (cancellationToken.IsCancellationRequested)
-                break;
+                yield break;
 
             if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
                 break;
@@ -321,22 +320,15 @@ internal class WindowsSearchIndex : ISearchIndex
             if (MatchesQuery(candidate, query, regex, searchText))
             {
                 returnedPaths.Add(candidate.FullPath);
-                indexedResults.Add(candidate);
                 matchCount++;
+                
+                // Phase 3.2: Yield immediately for first-result latency reduction
+                yield return candidate;
+
+                // Yield control periodically for better responsiveness
+                if (matchCount % 50 == 0)
+                    await Task.Yield();
             }
-        }
-
-        // Yield indexed results
-        foreach (var result in indexedResults)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                yield break;
-
-            yield return result;
-
-            // Yield control periodically for better responsiveness
-            if (indexedResults.IndexOf(result) % 50 == 0)
-                await Task.Yield();
         }
 
         // Phase 2: Fill gaps with live filesystem search (for incomplete indexing)
