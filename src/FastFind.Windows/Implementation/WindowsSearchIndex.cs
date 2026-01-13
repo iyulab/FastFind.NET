@@ -56,6 +56,7 @@ internal class WindowsSearchIndex : ISearchIndex
     private readonly ConcurrentDictionary<string, FileItem> _fileIndex = new();
     private readonly ConcurrentDictionary<string, HashSet<string>> _directoryIndex = new();
     private readonly ConcurrentDictionary<string, HashSet<string>> _extensionIndex = new();
+    private readonly PathTrieIndex _pathTrieIndex = new();  // O(log n) path lookups
     private readonly ReaderWriterLockSlim _indexLock = new();
     private readonly object _statsLock = new();
 
@@ -301,35 +302,47 @@ internal class WindowsSearchIndex : ISearchIndex
         var returnedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Phase 1: Search indexed results (fast path)
+        // Collect results under lock, then yield outside the lock
+        List<FileItem> indexedResults;
         _indexLock.EnterReadLock();
         try
         {
             var indexedCandidates = GetSearchCandidatesSync(query).ToList();
             _logger.LogDebug("Hybrid search: Found {Count} indexed candidates", indexedCandidates.Count);
 
+            indexedResults = new List<FileItem>();
             foreach (var candidate in indexedCandidates)
             {
                 if (cancellationToken.IsCancellationRequested)
-                    yield break;
+                    break;
 
                 if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
-                    yield break;
+                    break;
 
                 if (MatchesQuery(candidate, query, regex, searchText))
                 {
                     returnedPaths.Add(candidate.FullPath);
+                    indexedResults.Add(candidate);
                     matchCount++;
-                    yield return candidate;
-
-                    // Yield control periodically for better responsiveness
-                    if (matchCount % 50 == 0)
-                        await Task.Yield();
                 }
             }
         }
         finally
         {
             _indexLock.ExitReadLock();
+        }
+
+        // Yield indexed results outside the lock
+        foreach (var result in indexedResults)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                yield break;
+
+            yield return result;
+
+            // Yield control periodically for better responsiveness
+            if (indexedResults.IndexOf(result) % 50 == 0)
+                await Task.Yield();
         }
 
         // Phase 2: Fill gaps with live filesystem search (for incomplete indexing)
@@ -358,7 +371,8 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <summary>
-    /// Determines if filesystem fallback search should be performed
+    /// Determines if filesystem fallback search should be performed.
+    /// Optimized to avoid unnecessary filesystem scans when index has adequate coverage.
     /// </summary>
     private bool ShouldPerformFilesystemFallback(SearchQuery query, int indexedMatches)
     {
@@ -380,10 +394,30 @@ internal class WindowsSearchIndex : ISearchIndex
             return true;
         }
 
-        // Always perform fallback if we have specific search paths (BasePath or SearchLocations)
-        // This ensures we always find files in user-specified directories
-        if (query.BasePath != null || query.SearchLocations.Count > 0)
+        // For BasePath queries: check if the path is covered by the index
+        if (!string.IsNullOrEmpty(query.BasePath))
+        {
+            if (IsPathCoveredByIndex(query.BasePath))
+            {
+                _logger.LogDebug("BasePath {Path} is covered by index, skipping filesystem fallback", query.BasePath);
+                return false;  // Index has this path - no need for filesystem scan
+            }
+            // Path not in index, need filesystem fallback
             return true;
+        }
+
+        // For SearchLocations queries: check if all locations are covered
+        if (query.SearchLocations.Count > 0)
+        {
+            var allCovered = query.SearchLocations.All(loc => IsPathCoveredByIndex(loc));
+            if (allCovered)
+            {
+                _logger.LogDebug("All SearchLocations are covered by index, skipping filesystem fallback");
+                return false;  // All locations indexed - no need for filesystem scan
+            }
+            // Some locations not in index, need filesystem fallback
+            return true;
+        }
 
         // Perform fallback if we found very few results from index
         if (indexedMatches < 5)
@@ -391,6 +425,19 @@ internal class WindowsSearchIndex : ISearchIndex
 
         // For broad searches with good index coverage, trust the index
         return false;
+    }
+
+    /// <summary>
+    /// Checks if a path is covered by the index (has indexed files under it).
+    /// Uses PathTrieIndex for O(log n) lookup instead of O(n) scan.
+    /// </summary>
+    private bool IsPathCoveredByIndex(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+
+        // Use PathTrieIndex for fast O(log n) check
+        return _pathTrieIndex.ContainsPath(path);
     }
 
     /// <summary>
@@ -871,29 +918,22 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         foreach (var location in locations)
         {
-            var normalizedPath = Path.GetFullPath(location).ToLowerInvariant().TrimEnd('\\', '/');
-
             if (includeSubdirectories)
             {
-                // Search in the specified directory and all subdirectories
-                foreach (var fileItem in _fileIndex.Values)
+                // Use PathTrieIndex for O(k) lookup where k = files under path
+                // This is a massive improvement over O(n) full index scan
+                foreach (var fileKey in _pathTrieIndex.GetFileKeysUnderPath(location))
                 {
-                    var itemDirectory = fileItem.DirectoryPath?.ToLowerInvariant().TrimEnd('\\', '/');
-                    if (itemDirectory != null)
+                    if (_fileIndex.TryGetValue(fileKey, out var fileItem))
                     {
-                        // More robust path matching
-                        if (itemDirectory == normalizedPath ||
-                            itemDirectory.StartsWith(normalizedPath + "\\") ||
-                            itemDirectory.StartsWith(normalizedPath + "/"))
-                        {
-                            yield return fileItem;
-                        }
+                        yield return fileItem;
                     }
                 }
             }
             else
             {
                 // Search only in the specified directory (exact match)
+                var normalizedPath = Path.GetFullPath(location).ToLowerInvariant().TrimEnd('\\', '/');
                 if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
                 {
                     foreach (var filePath in filePaths)
@@ -1021,6 +1061,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 _fileIndex.Clear();
                 _directoryIndex.Clear();
                 _extensionIndex.Clear();
+                _pathTrieIndex.Clear();  // Clear trie index
                 Interlocked.Exchange(ref _memoryUsage, 0);
 
                 _logger.LogInformation("Search index cleared");
@@ -1265,6 +1306,9 @@ internal class WindowsSearchIndex : ISearchIndex
                         return existing;
                     });
             }
+
+            // Update path trie index for O(log n) path lookups
+            _pathTrieIndex.Add(fileItem.FullPath, filePath);
         }
         else if (operation == IndexOperation.Remove)
         {
@@ -1287,6 +1331,9 @@ internal class WindowsSearchIndex : ISearchIndex
                     _extensionIndex.TryRemove(extension, out _);
                 }
             }
+
+            // Update path trie index
+            _pathTrieIndex.Remove(fileItem.FullPath, filePath);
         }
     }
 
@@ -1327,6 +1374,7 @@ internal class WindowsSearchIndex : ISearchIndex
         if (!_disposed)
         {
             _indexLock.Dispose();
+            _pathTrieIndex.Dispose();
             _disposed = true;
         }
     }
