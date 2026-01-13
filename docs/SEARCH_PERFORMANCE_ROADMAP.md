@@ -380,11 +380,11 @@ public sealed class QueryOptimizer
 ## Implementation Schedule
 
 ### Phase 1 (Foundation) - Priority: Critical
-| Task | Complexity | Impact |
-|------|------------|--------|
-| 1.1 Path Prefix Trie | Medium | High |
-| 1.2 Smart Filesystem Fallback | Low | High |
-| 1.3 Extension Index | Low | Medium |
+| Task | Complexity | Impact | Status |
+|------|------------|--------|--------|
+| 1.1 Path Prefix Trie | Medium | High | ✅ Completed |
+| 1.2 Smart Filesystem Fallback | Low | High | ✅ Completed |
+| 1.3 Extension Index | Low | Medium | 🔴 Pending |
 
 ### Phase 2 (SIMD) - Priority: High
 | Task | Complexity | Impact |
@@ -463,10 +463,10 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 
 | Metric | Current | Target | Status |
 |--------|---------|--------|--------|
-| Search_WithBasePath | 189ms | <5ms | 🔴 |
-| Search_FileNameOnly | 154ms | <10ms | 🔴 |
+| Search_WithBasePath | 189ms → TBD | <5ms | 🟡 Phase 1.1/1.2 implemented |
+| Search_FileNameOnly | 154ms | <10ms | 🔴 Phase 2 needed |
 | Memory per 1M files | ~500MB | <200MB | 🟡 |
-| First result latency | ~1s | <100ms | 🔴 |
+| First result latency | ~1s | <100ms | 🔴 Phase 3 needed |
 | Index rebuild time | N/A | <30s/1M files | 🟡 |
 
 ---
@@ -484,10 +484,11 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 
 ## Next Steps
 
-1. **Immediate**: Implement Phase 1.2 (Smart Filesystem Fallback) - Quick win
-2. **Short-term**: Implement Phase 1.1 (Path Trie Index) - Biggest impact
-3. **Medium-term**: Implement Phase 2.1 (SIMD Batch Matching)
-4. **Long-term**: Implement Phase 3 & 4 for production-grade architecture
+1. ~~**Immediate**: Implement Phase 1.2 (Smart Filesystem Fallback)~~ ✅ Completed
+2. ~~**Short-term**: Implement Phase 1.1 (Path Trie Index)~~ ✅ Completed
+3. **Next**: Implement Phase 1.3 (Extension Index) - Quick win
+4. **Medium-term**: Implement Phase 2.1 (SIMD Batch Matching)
+5. **Long-term**: Implement Phase 3 & 4 for production-grade architecture
 
 ---
 
