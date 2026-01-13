@@ -393,10 +393,10 @@ public sealed class QueryOptimizer
 | 2.2 Zero-Allocation Matching | Medium | Medium | ✅ Completed |
 
 ### Phase 3 (Architecture) - Priority: Medium
-| Task | Complexity | Impact |
-|------|------------|--------|
-| 3.1 Lock-Free Index | High | Medium |
-| 3.2 Streaming Results | Medium | Medium |
+| Task | Complexity | Impact | Status |
+|------|------------|--------|--------|
+| 3.1 Lock-Free Index | High | Medium | ✅ Completed |
+| 3.2 Streaming Results | Medium | Medium | 🔴 Pending |
 
 ### Phase 4 (Intelligence) - Priority: Low
 | Task | Complexity | Impact |
@@ -489,8 +489,8 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 3. ~~**Phase 1.3**: Extension Index~~ ✅ Already existed in codebase
 4. ~~**Phase 2.1**: SIMD String Matching~~ ✅ Completed
 5. ~~**Phase 2.2**: Zero-Allocation Matching~~ ✅ Completed
-6. **Next**: Implement Phase 3.1 (Lock-Free Index)
-7. **Medium-term**: Implement Phase 3.2 (Streaming Results)
+6. ~~**Phase 3.1**: Lock-Free Index~~ ✅ Completed
+7. **Next**: Implement Phase 3.2 (Streaming Results)
 8. **Long-term**: Implement Phase 4 (Query Optimizer)
 
 ---
