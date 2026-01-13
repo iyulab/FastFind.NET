@@ -84,6 +84,57 @@ public static class StringPool
     public static string GetString(int id) => Get(id);
 
     /// <summary>
+    /// Phase 2.2: Zero-allocation span access to interned string.
+    /// Returns a ReadOnlySpan view of the stored string without allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ReadOnlySpan<char> GetSpan(int id)
+    {
+        if (id == 0) return ReadOnlySpan<char>.Empty;
+
+        return _idToString.TryGetValue(id, out var value)
+            ? value.AsSpan()
+            : ReadOnlySpan<char>.Empty;
+    }
+
+    /// <summary>
+    /// Phase 2.2: Zero-allocation memory access for async scenarios.
+    /// Returns a ReadOnlyMemory view of the stored string.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ReadOnlyMemory<char> GetMemory(int id)
+    {
+        if (id == 0) return ReadOnlyMemory<char>.Empty;
+
+        return _idToString.TryGetValue(id, out var value)
+            ? value.AsMemory()
+            : ReadOnlyMemory<char>.Empty;
+    }
+
+    /// <summary>
+    /// Phase 2.2: Try to get span without exception on missing ID.
+    /// More efficient than GetSpan when ID validity is uncertain.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGetSpan(int id, out ReadOnlySpan<char> span)
+    {
+        if (id == 0)
+        {
+            span = ReadOnlySpan<char>.Empty;
+            return true; // ID 0 is valid (empty string)
+        }
+
+        if (_idToString.TryGetValue(id, out var value))
+        {
+            span = value.AsSpan();
+            return true;
+        }
+
+        span = ReadOnlySpan<char>.Empty;
+        return false;
+    }
+
+    /// <summary>
     /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 10 Span 최적화
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
