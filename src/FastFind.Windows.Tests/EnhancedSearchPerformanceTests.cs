@@ -264,7 +264,7 @@ public class EnhancedSearchPerformanceTests
     }
 
     [Fact(Skip = "Performance test - run manually")]
-    public void SearchQuery_ConcurrentAccess_ShouldBeThreadSafe()
+    public async Task SearchQuery_ConcurrentAccess_ShouldBeThreadSafe()
     {
         // Arrange
         const int threadsCount = 8;
@@ -309,7 +309,7 @@ public class EnhancedSearchPerformanceTests
             });
         }
 
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
         stopwatch.Stop();
 
         // Assert
