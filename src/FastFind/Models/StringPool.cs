@@ -21,6 +21,9 @@ public static class StringPool
     private static readonly ConcurrentDictionary<string, int> _extensionPool = new(Environment.ProcessorCount, 512);
     private static readonly ConcurrentDictionary<string, int> _namePool = new(Environment.ProcessorCount, 8192);
 
+    // .NET 9+: Cached AlternateLookup for zero-allocation Span-based lookups
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>>? _namePoolLookup;
+
     // 성능 통계 - object lock 사용 (.NET 10에서 Lock이 없는 경우 대비)
     private static readonly Lock _statsLock = new();
     private static long _internedCount = 0;
@@ -131,6 +134,52 @@ public static class StringPool
             return 0;
 
         return _namePool.GetOrAdd(name, Intern);
+    }
+
+    /// <summary>
+    /// Gets the cached AlternateLookup for zero-allocation span lookups.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> GetNamePoolLookup()
+    {
+        return _namePoolLookup ??= _namePool.GetAlternateLookup<ReadOnlySpan<char>>();
+    }
+
+    /// <summary>
+    /// .NET 9+: Zero-allocation Span-based interning using AlternateLookup.
+    /// Optimized for MFT parsing where filenames are received as char spans.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int InternFromSpan(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty)
+            return 0;
+
+        // Try to find existing entry using cached AlternateLookup (zero-allocation on cache hit)
+        var lookup = GetNamePoolLookup();
+        if (lookup.TryGetValue(value, out var existingId))
+            return existingId;
+
+        // Cache miss: create string and intern
+        var stringValue = new string(value);
+        return _namePool.GetOrAdd(stringValue, Intern);
+    }
+
+    /// <summary>
+    /// .NET 9+: Try to get ID for existing interned string without allocation.
+    /// Returns false if the string has not been interned yet.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGetFromSpan(ReadOnlySpan<char> value, out int id)
+    {
+        if (value.IsEmpty)
+        {
+            id = 0;
+            return true; // Empty is always "found" as ID 0
+        }
+
+        var lookup = GetNamePoolLookup();
+        return lookup.TryGetValue(value, out id);
     }
 
     /// <summary>
@@ -249,6 +298,9 @@ public static class StringPool
             _pathPool.Clear();
             _extensionPool.Clear();
             _namePool.Clear();
+
+            // Reset cached AlternateLookup (will be re-created on next use)
+            _namePoolLookup = null;
 
             Interlocked.Exchange(ref _internedCount, 0);
             Interlocked.Exchange(ref _memoryBytes, 0);

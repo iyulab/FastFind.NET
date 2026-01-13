@@ -163,8 +163,8 @@ public static class MftParserV2
         string fileName;
         if (useStringPool)
         {
-            // Use StringPool for interning (reduces memory for duplicate names)
-            var nameId = FastFind.Models.StringPool.InternName(new string(fileNameChars));
+            // Use StringPool.InternFromSpan for zero-allocation on cache hits (.NET 9+)
+            var nameId = FastFind.Models.StringPool.InternFromSpan(fileNameChars);
             fileName = FastFind.Models.StringPool.GetString(nameId);
         }
         else
