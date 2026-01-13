@@ -48,7 +48,8 @@ public static class WindowsRegistration
 
             if (OperatingSystem.IsWindows())
             {
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, WindowsSearchEngine.CreateWindowsSearchEngine);
+                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => WindowsSearchEngine.CreateWindowsSearchEngine(loggerFactory));
                 _isRegistered = true;
             }
         }
@@ -70,11 +71,12 @@ public static class WindowsSearchEngine
     /// </summary>
     static WindowsSearchEngine()
     {
-        try 
+        try
         {
             if (OperatingSystem.IsWindows())
             {
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, CreateWindowsSearchEngine);
+                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
+                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => CreateWindowsSearchEngine(loggerFactory));
             }
         }
         catch (Exception)
@@ -87,8 +89,11 @@ public static class WindowsSearchEngine
     /// Creates a Windows-optimized search engine with .NET 10 enhancements
     /// </summary>
     /// <param name="loggerFactory">Optional logger factory</param>
+    /// <param name="providerMode">File system provider mode (default: Auto for MFT when available)</param>
     /// <returns>Windows search engine instance</returns>
-    public static ISearchEngine CreateWindowsSearchEngine(ILoggerFactory? loggerFactory = null)
+    public static ISearchEngine CreateWindowsSearchEngine(
+        ILoggerFactory? loggerFactory = null,
+        ProviderMode providerMode = ProviderMode.Auto)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -110,9 +115,9 @@ public static class WindowsSearchEngine
 
         // Register enhanced Windows-specific implementations
         services.AddSingleton<WindowsSearchEngineOptions>(provider => CreateOptimizedOptions());
-        // Use HybridFileSystemProvider for automatic MFT detection and high-performance file enumeration
+        // Use HybridFileSystemProvider with specified mode
         services.AddSingleton<IFileSystemProvider>(provider =>
-            new HybridFileSystemProvider(loggerFactory));
+            new HybridFileSystemProvider(providerMode, loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
@@ -121,14 +126,26 @@ public static class WindowsSearchEngine
     }
 
     /// <summary>
+    /// Creates a Windows search engine for testing with Standard mode (no MFT)
+    /// </summary>
+    /// <param name="loggerFactory">Optional logger factory</param>
+    /// <returns>Windows search engine using standard file system enumeration</returns>
+    public static ISearchEngine CreateWindowsSearchEngineForTesting(ILoggerFactory? loggerFactory = null)
+    {
+        return CreateWindowsSearchEngine(loggerFactory, ProviderMode.Standard);
+    }
+
+    /// <summary>
     /// Creates a Windows search engine with advanced configuration
     /// </summary>
     /// <param name="configure">Configuration action</param>
     /// <param name="loggerFactory">Optional logger factory</param>
+    /// <param name="providerMode">File system provider mode (default: Auto)</param>
     /// <returns>Configured Windows search engine</returns>
     public static ISearchEngine CreateWindowsSearchEngine(
         Action<WindowsSearchEngineOptions> configure,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ProviderMode providerMode = ProviderMode.Auto)
     {
         var options = CreateOptimizedOptions();
         configure(options);
@@ -150,9 +167,9 @@ public static class WindowsSearchEngine
         services.AddSingleton(options);
 
         // Register Windows-specific implementations
-        // Use HybridFileSystemProvider for automatic MFT detection and high-performance file enumeration
+        // Use HybridFileSystemProvider with specified mode
         services.AddSingleton<IFileSystemProvider>(provider =>
-            new HybridFileSystemProvider(loggerFactory));
+            new HybridFileSystemProvider(providerMode, loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 

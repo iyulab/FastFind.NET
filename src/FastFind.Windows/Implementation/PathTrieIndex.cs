@@ -125,13 +125,16 @@ internal sealed class PathTrieIndex
     /// <returns>Enumerable of file keys under the path</returns>
     public IEnumerable<string> GetFileKeysUnderPath(string basePath)
     {
+        // Early validation without lock
         if (string.IsNullOrEmpty(basePath))
-            yield break;
+            return [];
 
         var segments = GetPathSegments(basePath);
         if (segments.Length == 0)
-            yield break;
+            return [];
 
+        // Collect results while holding lock, then return the list
+        // This avoids issues with iterator + lock combinations
         _lock.EnterReadLock();
         try
         {
@@ -140,15 +143,14 @@ internal sealed class PathTrieIndex
             foreach (var segment in segments)
             {
                 if (!node.Children.TryGetValue(segment, out var child))
-                    yield break; // Path not found
+                    return []; // Path not found
                 node = child;
             }
 
-            // Collect all file keys from this node and all descendants
-            foreach (var fileKey in GetAllDescendantFileKeys(node))
-            {
-                yield return fileKey;
-            }
+            // Collect all file keys from this node and all descendants into a list
+            var results = new List<string>();
+            CollectAllDescendantFileKeys(node, results);
+            return results;
         }
         finally
         {
@@ -163,13 +165,16 @@ internal sealed class PathTrieIndex
     /// <returns>Enumerable of file keys in the directory</returns>
     public IEnumerable<string> GetFileKeysInDirectory(string directoryPath)
     {
+        // Early validation without lock
         if (string.IsNullOrEmpty(directoryPath))
-            yield break;
+            return [];
 
         var segments = GetPathSegments(directoryPath);
         if (segments.Length == 0)
-            yield break;
+            return [];
 
+        // Collect results while holding lock, then return the list
+        // This avoids issues with iterator + lock combinations
         _lock.EnterReadLock();
         try
         {
@@ -178,15 +183,12 @@ internal sealed class PathTrieIndex
             foreach (var segment in segments)
             {
                 if (!node.Children.TryGetValue(segment, out var child))
-                    yield break; // Path not found
+                    return []; // Path not found
                 node = child;
             }
 
-            // Return only files at this exact level
-            foreach (var fileKey in node.FileKeys)
-            {
-                yield return fileKey;
-            }
+            // Return only files at this exact level (copy to list for thread safety)
+            return node.FileKeys.ToList();
         }
         finally
         {
@@ -280,23 +282,20 @@ internal sealed class PathTrieIndex
     }
 
     /// <summary>
-    /// Recursively collects all file keys from a node and its descendants.
+    /// Recursively collects all file keys from a node and its descendants into a list.
+    /// This method is used instead of an iterator to avoid lock issues with yield.
     /// </summary>
-    private static IEnumerable<string> GetAllDescendantFileKeys(TrieNode node)
+    /// <param name="node">The starting node</param>
+    /// <param name="results">The list to collect results into</param>
+    private static void CollectAllDescendantFileKeys(TrieNode node, List<string> results)
     {
-        // Yield files at this node
-        foreach (var fileKey in node.FileKeys)
-        {
-            yield return fileKey;
-        }
+        // Add files at this node
+        results.AddRange(node.FileKeys);
 
-        // Recursively yield files from children
+        // Recursively add files from children
         foreach (var child in node.Children.Values)
         {
-            foreach (var fileKey in GetAllDescendantFileKeys(child))
-            {
-                yield return fileKey;
-            }
+            CollectAllDescendantFileKeys(child, results);
         }
     }
 

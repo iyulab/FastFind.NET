@@ -19,8 +19,8 @@ public class EnhancedSearchOptionsTests : IDisposable
         // Ensure Windows registration
         WindowsRegistration.EnsureRegistered();
 
-        // Create search engine using public API
-        _searchEngine = WindowsSearchEngine.CreateWindowsSearchEngine();
+        // Create search engine using Standard mode (non-MFT) to avoid full drive scans in tests
+        _searchEngine = WindowsSearchEngine.CreateWindowsSearchEngineForTesting();
     }
 
     [Fact]
