@@ -282,19 +282,27 @@ public static class StringPool
                     if (_stringToId.TryRemove(key, out var id))
                     {
                         _idToString.TryRemove(id, out _);
+                        // Also remove from specialized pools to maintain consistency
+                        _pathPool.TryRemove(key, out _);
+                        _extensionPool.TryRemove(key, out _);
+                        _namePool.TryRemove(key, out _);
                         Interlocked.Decrement(ref _internedCount);
                         Interlocked.Add(ref _memoryBytes, -(key.Length * 2));
                     }
                 });
             }
 
-            // 특화 풀들도 정리 - 더 보수적인 임계값
-            if (_pathPool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                _pathPool.Clear();
-            if (_extensionPool.Count > (shouldAggressiveClean ? 500 : 1000))
-                _extensionPool.Clear();
-            if (_namePool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                _namePool.Clear();
+            // Specialized pools cleanup - only clear if main pool was also cleaned
+            // This maintains consistency between pools
+            if (_stringToId.Count > (shouldAggressiveClean ? 50000 : 100000))
+            {
+                if (_pathPool.Count > (shouldAggressiveClean ? 25000 : 50000))
+                    _pathPool.Clear();
+                if (_extensionPool.Count > (shouldAggressiveClean ? 500 : 1000))
+                    _extensionPool.Clear();
+                if (_namePool.Count > (shouldAggressiveClean ? 25000 : 50000))
+                    _namePool.Clear();
+            }
         }
     }
 

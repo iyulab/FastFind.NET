@@ -9,9 +9,12 @@ namespace FastFind.Windows.Tests.Core;
 /// <summary>
 /// Tests for StringPool Span-based interning using .NET 9+ AlternateLookup.
 /// Phase 1.3: Zero-allocation filename interning for MFT parsing.
+/// Uses Collection to run sequentially with other StringPool tests
+/// since StringPool is a static class with shared state.
 /// </summary>
 [Trait("Category", "Unit")]
 [Trait("Suite", "StringPool")]
+[Collection("StringPool")]
 public class StringPoolSpanTests
 {
     private readonly ITestOutputHelper _output;
@@ -210,6 +213,7 @@ public class StringPoolSpanTests
     }
 
     [Fact]
+    [Trait("Category", "Performance")]
     public void InternFromSpan_VsInternString_SpanShouldNotBeSlower()
     {
         // Arrange
