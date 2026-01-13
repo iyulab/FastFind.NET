@@ -2,6 +2,7 @@
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
+using FastFind.Windows.Mft;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
@@ -109,7 +110,9 @@ public static class WindowsSearchEngine
 
         // Register enhanced Windows-specific implementations
         services.AddSingleton<WindowsSearchEngineOptions>(provider => CreateOptimizedOptions());
-        services.AddSingleton<IFileSystemProvider, WindowsFileSystemProvider>();
+        // Use HybridFileSystemProvider for automatic MFT detection and high-performance file enumeration
+        services.AddSingleton<IFileSystemProvider>(provider =>
+            new HybridFileSystemProvider(loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
@@ -147,7 +150,9 @@ public static class WindowsSearchEngine
         services.AddSingleton(options);
 
         // Register Windows-specific implementations
-        services.AddSingleton<IFileSystemProvider, WindowsFileSystemProvider>();
+        // Use HybridFileSystemProvider for automatic MFT detection and high-performance file enumeration
+        services.AddSingleton<IFileSystemProvider>(provider =>
+            new HybridFileSystemProvider(loggerFactory));
         services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
