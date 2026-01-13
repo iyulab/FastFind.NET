@@ -396,7 +396,7 @@ public sealed class QueryOptimizer
 | Task | Complexity | Impact | Status |
 |------|------------|--------|--------|
 | 3.1 Lock-Free Index | High | Medium | ✅ Completed |
-| 3.2 Streaming Results | Medium | Medium | 🔴 Pending |
+| 3.2 Streaming Results | Medium | Medium | ✅ Completed |
 
 ### Phase 4 (Intelligence) - Priority: Low
 | Task | Complexity | Impact |
@@ -466,7 +466,7 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 | Search_WithBasePath | 189ms → TBD | <5ms | 🟡 Phase 1.1/1.2 implemented |
 | Search_FileNameOnly | 154ms → TBD | <10ms | 🟡 Phase 2.1 SIMD integrated |
 | Memory per 1M files | ~500MB | <200MB | ✅ Phase 2.2 GetSpan added |
-| First result latency | ~1s | <100ms | 🔴 Phase 3 needed |
+| First result latency | ~1s | <100ms | ✅ Phase 3.2 immediate streaming |
 | Index rebuild time | N/A | <30s/1M files | 🟡 |
 
 ---
@@ -490,8 +490,8 @@ public async Task SearchAsync_WithBasePath_UsesIndexNotFilesystem()
 4. ~~**Phase 2.1**: SIMD String Matching~~ ✅ Completed
 5. ~~**Phase 2.2**: Zero-Allocation Matching~~ ✅ Completed
 6. ~~**Phase 3.1**: Lock-Free Index~~ ✅ Completed
-7. **Next**: Implement Phase 3.2 (Streaming Results)
-8. **Long-term**: Implement Phase 4 (Query Optimizer)
+7. ~~**Phase 3.2**: Streaming Results~~ ✅ Completed
+8. **Next**: Implement Phase 4 (Query Optimizer)
 
 ---
 
