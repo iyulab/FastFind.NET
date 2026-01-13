@@ -19,24 +19,39 @@ namespace FastFind.Windows.Mft;
 public sealed class MftReader : IDisposable
 {
     private readonly ILogger<MftReader>? _logger;
+    private readonly MftReaderOptions _options;
     private readonly ArrayPool<byte> _bufferPool;
     private readonly ConcurrentDictionary<char, SafeFileHandle> _volumeHandles;
     private readonly ConcurrentDictionary<ulong, string> _directoryPathCache;
     private bool _disposed;
 
-    // Buffer size for MFT enumeration (64KB for optimal performance)
-    private const int MFT_BUFFER_SIZE = 64 * 1024;
-
     // Root directory file reference number
     private const ulong ROOT_DIRECTORY_FRN = 0x0005000000000005;
 
+    /// <summary>
+    /// Creates a new MFT reader with default options.
+    /// </summary>
     public MftReader(ILogger<MftReader>? logger = null)
+        : this(MftReaderOptions.Default, logger)
     {
+    }
+
+    /// <summary>
+    /// Creates a new MFT reader with specified options.
+    /// </summary>
+    public MftReader(MftReaderOptions options, ILogger<MftReader>? logger = null)
+    {
+        _options = options.Validate();
         _logger = logger;
         _bufferPool = ArrayPool<byte>.Shared;
         _volumeHandles = new ConcurrentDictionary<char, SafeFileHandle>();
         _directoryPathCache = new ConcurrentDictionary<ulong, string>();
     }
+
+    /// <summary>
+    /// Gets the current options.
+    /// </summary>
+    public MftReaderOptions Options => _options;
 
     /// <summary>
     /// Checks if MFT access is available (requires admin rights and NTFS)
@@ -137,7 +152,7 @@ public sealed class MftReader : IDisposable
         var rootPath = $"{driveLetter}:\\";
         _directoryPathCache[ROOT_DIRECTORY_FRN & 0x0000FFFFFFFFFFFF] = rootPath;
 
-        var buffer = _bufferPool.Rent(MFT_BUFFER_SIZE);
+        var buffer = _bufferPool.Rent(_options.BufferSize);
         var directoryRecords = new ConcurrentDictionary<ulong, MftFileRecord>();
 
         try
