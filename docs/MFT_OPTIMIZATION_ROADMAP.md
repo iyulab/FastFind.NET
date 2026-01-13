@@ -366,15 +366,47 @@ public class MftCompactRecordTests
 - [x] Phase 1 상세 태스크 도출
 - [x] 검증 테스트 설계
 - [x] 구현 로드맵 작성
+- [x] Phase 1.1 MftParserV2 구현
+- [x] Phase 1.1 성능 테스트 실행 및 분석
+
+### Phase 1.1 Research Findings (2026-01-13)
+
+**가설**: Span/BinaryPrimitives가 BitConverter보다 25%+ 빠를 것
+
+**실험 결과**:
+| 구현 | 성능 (records/sec) | 상대 속도 |
+|------|-------------------|----------|
+| BitConverter | 7,762,294 | 1.00x (baseline) |
+| Span/BinaryPrimitives | 4,858,558 | 0.63x (**37% 느림**) |
+
+**분석**:
+1. 현대 little-endian x64 시스템에서 BitConverter는 이미 고도로 최적화됨
+2. Span slicing 연산이 추가 오버헤드 발생
+3. MemoryMarshal.Cast<byte, char> 변환에서 추가 비용
+4. 정수 파싱은 이미 병목이 아님 - I/O와 문자열 할당이 주요 병목
+
+**결론**: Phase 1.1 (Span-based parsing) 가설 반증됨. 현재 BitConverter 구현 유지.
+
+### Revised Strategy
+
+Phase 1.1 결과를 바탕으로 전략 수정:
+
+1. **Phase 1.2 (버퍼 최적화)**: 더 높은 영향력 예상 - I/O 호출 감소
+2. **Phase 1.3 (StringPool 통합)**: 메모리 최적화 - 문자열 중복 제거
+3. **Phase 1.4 (MftCompactRecord)**: 메모리 레이아웃 최적화
+
+MftParserV2.cs는 향후 동기식 대량 처리 시나리오를 위해 유지.
 
 ### Next Steps
-1. **Phase 1.1 시작**: MftParserV2 테스트 작성
-2. **Baseline 측정**: 현재 파서 성능 기록
-3. **Span 구현**: BinaryPrimitives 기반 파서
-4. **검증**: 25% 성능 향상 확인
+1. **Phase 1.2 시작**: 버퍼 크기 벤치마크
+2. **64KB → 256KB → 1MB → 4MB** 테스트
+3. **최적 버퍼 크기 결정**
 
 ### Ready for Implementation
 ```bash
-# Start Phase 1.1
-dotnet test --filter "MftParserPerformanceTests" --list-tests
+# Verify current state
+dotnet test --filter "MftParserPerformanceTests" -c Release
+
+# Next: Phase 1.2 Buffer Optimization
+dotnet test --filter "MftBufferSizeTests" -c Release
 ```

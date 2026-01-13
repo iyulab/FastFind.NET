@@ -489,6 +489,44 @@ public sealed class MftReader : IDisposable
             dateTime);
     }
 
+    /// <summary>
+    /// Parse all USN records in a buffer batch using optimized Span-based parsing.
+    /// Returns a list of records that can be safely yielded across async boundaries.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static List<MftFileRecord> ParseBufferBatch(
+        byte[] buffer,
+        int bytesReturned,
+        ConcurrentDictionary<ulong, MftFileRecord> directoryRecords)
+    {
+        var records = new List<MftFileRecord>(256); // Pre-allocate for typical batch size
+        var bufferSpan = buffer.AsSpan(0, bytesReturned);
+        var offset = 8; // Skip first 8 bytes (next file reference number)
+
+        while (offset < bytesReturned)
+        {
+            if (MftParserV2.TryParseUsnRecord(bufferSpan, ref offset, out var mftRecord))
+            {
+                // Cache directory records for path building
+                if (mftRecord.IsDirectory)
+                {
+                    directoryRecords[mftRecord.GetRecordNumber()] = mftRecord;
+                }
+
+                records.Add(mftRecord);
+            }
+            else
+            {
+                // If parsing failed and offset didn't advance, break to avoid infinite loop
+                var recordLength = MftParserV2.GetRecordLength(bufferSpan, offset);
+                if (recordLength == 0)
+                    break;
+            }
+        }
+
+        return records;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ThrowIfDisposed()
     {
