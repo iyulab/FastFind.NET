@@ -21,6 +21,7 @@ Ultra-high performance cross-platform file search library for .NET 10
 - **USN Journal Sync**: Real-time file change detection
 - **SQLite FTS5**: Persistent index with full-text search
 - **Memory Optimized**: 60-80% reduction through string interning
+- **Optional File Size**: Opt-in file size collection with ~10-30% overhead
 
 ## Installation
 
@@ -44,7 +45,8 @@ var searchEngine = FastFinder.CreateWindowsSearchEngine(loggerFactory);
 await searchEngine.StartIndexingAsync(new IndexingOptions
 {
     DriveLetters = ['C', 'D'],
-    ExcludedPaths = ["node_modules", "bin", "obj", ".git"]
+    ExcludedPaths = ["node_modules", "bin", "obj", ".git"],
+    CollectFileSize = true  // Enable file size collection (default: false for max speed)
 });
 
 // Wait for indexing

@@ -182,7 +182,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             if (!IsPathInLocations(fullPath, locationFilters))
                 continue;
 
-            var fileItem = ConvertToFileItem(record, fullPath);
+            var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileSize);
             if (ShouldIncludeFile(fileItem, options))
             {
                 await writer.WriteAsync(fileItem, cancellationToken);
@@ -213,7 +213,8 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             if (!IsPathInLocations(fullPath, locationFilters))
                 continue;
 
-            var fileItem = ConvertToFileItem(record, fullPath);
+            // Directories don't need size collection (always 0)
+            var fileItem = ConvertToFileItem(record, fullPath, collectFileSize: false);
             if (ShouldIncludeFile(fileItem, options))
             {
                 await writer.WriteAsync(fileItem, cancellationToken);
@@ -289,10 +290,17 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         return false;
     }
 
-    private static FileItem ConvertToFileItem(MftFileRecord record, string fullPath)
+    private static FileItem ConvertToFileItem(MftFileRecord record, string fullPath, bool collectFileSize = false)
     {
         var directoryPath = Path.GetDirectoryName(fullPath) ?? string.Empty;
         var extension = record.IsDirectory ? string.Empty : Path.GetExtension(record.FileName);
+
+        // Performance optimization: Only collect file size when explicitly requested
+        var fileSize = record.FileSize;
+        if (collectFileSize && fileSize == 0 && !record.IsDirectory)
+        {
+            fileSize = GetFileSizeFast(fullPath);
+        }
 
         return new FileItem
         {
@@ -300,7 +308,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             Name = record.FileName,
             DirectoryPath = directoryPath,
             Extension = extension,
-            Size = record.FileSize,
+            Size = fileSize,
             CreatedTime = record.CreationTime,
             ModifiedTime = record.ModificationTime,
             AccessedTime = record.AccessTime,
@@ -608,6 +616,29 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         if (_disposed)
             throw new ObjectDisposedException(nameof(MftFileSystemProvider));
     }
+
+
+    #region File Size Collection (Performance-Optimized)
+
+    /// <summary>
+    /// Gets file size for a single file using optimized file system API.
+    /// Called during enumeration when CollectFileSize option is enabled.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long GetFileSizeFast(string filePath)
+    {
+        try
+        {
+            var info = new FileInfo(filePath);
+            return info.Exists ? info.Length : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    #endregion
 
     public void Dispose()
     {

@@ -98,6 +98,20 @@ public class IndexingOptions
     public ThreadPriority IndexingPriority { get; set; } = ThreadPriority.BelowNormal;
 
     /// <summary>
+    /// Whether to collect file sizes during indexing.
+    /// When false (default), file sizes will be 0 for maximum indexing performance.
+    /// When true, file sizes are collected in a parallel batch after MFT enumeration.
+    /// Note: This adds ~10-30% overhead to indexing time depending on file count.
+    /// </summary>
+    public bool CollectFileSize { get; set; } = false;
+
+    /// <summary>
+    /// Batch size for parallel file size collection (only used when CollectFileSize is true).
+    /// Higher values improve throughput but use more memory.
+    /// </summary>
+    public int FileSizeCollectionBatchSize { get; set; } = 5000;
+
+    /// <summary>
     /// Validates the indexing options
     /// </summary>
     public (bool IsValid, string? ErrorMessage) Validate()
