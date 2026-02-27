@@ -1,70 +1,23 @@
 # FastFind.NET API Reference
 
-## SearchQuery Class
-
-Search configuration with path-based options.
-
-```csharp
-public class SearchQuery
-{
-    // Path-Based Search
-    public string? BasePath { get; set; }               // Single base path for search
-    public string SearchText { get; set; } = string.Empty;  // Empty = match all files
-    public bool IncludeSubdirectories { get; set; } = true;
-    public bool SearchFileNameOnly { get; set; } = false;  // Default: search full paths
-
-    // Search Behavior
-    public bool UseRegex { get; set; } = false;
-    public bool CaseSensitive { get; set; } = false;
-
-    // File Filters
-    public string? ExtensionFilter { get; set; }
-    public bool IncludeFiles { get; set; } = true;
-    public bool IncludeDirectories { get; set; } = true;
-    public bool IncludeHidden { get; set; } = false;
-    public bool IncludeSystem { get; set; } = false;
-
-    // Size and Date Filters
-    public long? MinSize { get; set; }
-    public long? MaxSize { get; set; }
-    public DateTime? MinCreatedDate { get; set; }
-    public DateTime? MaxCreatedDate { get; set; }
-    public DateTime? MinModifiedDate { get; set; }
-    public DateTime? MaxModifiedDate { get; set; }
-
-    // Result Control
-    public int? MaxResults { get; set; }
-    public IList<string> SearchLocations { get; set; }   // Used if BasePath not set
-    public IList<string> ExcludedPaths { get; set; }
-
-    // Utility Methods
-    public (bool IsValid, string? ErrorMessage) Validate();
-    public SearchQuery Clone();
-    public Regex? GetCompiledRegex();
-    public Regex? GetWildcardRegex();
-}
-```
-
 ## Core Interfaces
 
 ### ISearchEngine
 
-Primary interface for file search operations.
-
 ```csharp
 public interface ISearchEngine : IDisposable
 {
-    // Core search operations
-    Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
-    Task<SearchResult> SearchAsync(string searchText, CancellationToken cancellationToken = default);
-    IAsyncEnumerable<SearchResult> SearchRealTimeAsync(SearchQuery query, CancellationToken cancellationToken = default);
+    // Search
+    Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default);
+    Task<SearchResult> SearchAsync(string searchText, CancellationToken ct = default);
+    IAsyncEnumerable<SearchResult> SearchRealTimeAsync(SearchQuery query, CancellationToken ct = default);
 
     // Index management
-    Task StartIndexingAsync(IndexingOptions options, CancellationToken cancellationToken = default);
-    Task StopIndexingAsync(CancellationToken cancellationToken = default);
-    Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken cancellationToken = default);
+    Task StartIndexingAsync(IndexingOptions options, CancellationToken ct = default);
+    Task StopIndexingAsync(CancellationToken ct = default);
+    Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken ct = default);
 
-    // Properties
+    // State
     bool IsIndexing { get; }
     bool IsMonitoring { get; }
     long TotalIndexedFiles { get; }
@@ -78,291 +31,141 @@ public interface ISearchEngine : IDisposable
 
 ### FastFileItem
 
-Ultra-optimized 61-byte struct with SIMD acceleration.
+Ultra-optimized 61-byte struct with SIMD acceleration and string interning.
 
 ```csharp
 public readonly struct FastFileItem
 {
-    // String-interned properties
-    public string FullPath => StringPool.GetString(FullPathId);
-    public string Name => StringPool.GetString(NameId);
-    public string DirectoryPath => StringPool.GetString(DirectoryId);
-    public string Extension => StringPool.GetString(ExtensionId);
+    // String-interned properties (resolved via StringPool)
+    public string FullPath { get; }
+    public string Name { get; }
+    public string DirectoryPath { get; }
+    public string Extension { get; }
 
-    // High-performance SIMD methods
+    // SIMD-accelerated matching
     public bool MatchesName(ReadOnlySpan<char> searchTerm);
     public bool MatchesPath(ReadOnlySpan<char> searchTerm);
     public bool MatchesWildcard(ReadOnlySpan<char> pattern);
 
-    // File metadata
+    // Metadata
     public long Size { get; }
+    public string SizeFormatted { get; }      // Lazy-cached: "1.5 MB"
+    public string FileType { get; }           // Lazy-cached: "C# Source"
     public DateTime CreatedTime { get; }
     public DateTime ModifiedTime { get; }
     public DateTime AccessedTime { get; }
     public FileAttributes Attributes { get; }
+    public bool IsDirectory { get; }
 }
 ```
 
-For search examples, see [Search Examples](search-examples.md).
-
-## Linux/Unix API
-
-### UnixSearchEngine Class
-Factory for creating Linux search engines.
+### SearchQuery
 
 ```csharp
-public static class UnixSearchEngine
+public class SearchQuery
 {
-    // Factory method
-    public static ISearchEngine CreateLinuxSearchEngine(
-        ILoggerFactory? loggerFactory = null);
+    // Path
+    public string? BasePath { get; set; }
+    public string SearchText { get; set; } = "";
+    public bool IncludeSubdirectories { get; set; } = true;
+    public bool SearchFileNameOnly { get; set; } = false;
+
+    // Behavior
+    public bool UseRegex { get; set; } = false;
+    public bool CaseSensitive { get; set; } = false;
+
+    // Filters
+    public string? ExtensionFilter { get; set; }
+    public bool IncludeFiles { get; set; } = true;
+    public bool IncludeDirectories { get; set; } = true;
+    public bool IncludeHidden { get; set; } = false;
+    public bool IncludeSystem { get; set; } = false;
+    public long? MinSize { get; set; }
+    public long? MaxSize { get; set; }
+    public DateTime? MinCreatedDate { get; set; }
+    public DateTime? MaxCreatedDate { get; set; }
+    public DateTime? MinModifiedDate { get; set; }
+    public DateTime? MaxModifiedDate { get; set; }
+
+    // Result control
+    public int? MaxResults { get; set; }
+    public IList<string> SearchLocations { get; set; }
+    public IList<string> ExcludedPaths { get; set; }
+
+    // Utility
+    public (bool IsValid, string? ErrorMessage) Validate();
+    public SearchQuery Clone();
 }
 ```
 
-### LinuxFileSystemProvider Class
-IFileSystemProvider implementation using Channel-based BFS parallel enumeration.
+## Platform APIs
+
+### Windows — MFT Direct Access
 
 ```csharp
+// MftReader: NTFS MFT enumeration (requires admin)
+public class MftReader : IDisposable
+{
+    public static bool IsAvailable();
+    public static char[] GetNtfsDrives();
+    public IAsyncEnumerable<MftFileRecord> EnumerateFilesAsync(char driveLetter, CancellationToken ct = default);
+}
+
+// MftSqlitePipeline: MFT → SQLite data flow
+public class MftSqlitePipeline : IDisposable
+{
+    public Task<int> IndexAllDrivesAsync(IIndexPersistence persistence, IProgress<IndexingProgress>? progress = null, CancellationToken ct = default);
+    public Task<int> IndexDrivesAsync(char[] driveLetters, IIndexPersistence persistence, IProgress<IndexingProgress>? progress = null, CancellationToken ct = default);
+}
+
+// UsnSqliteSyncService: Real-time USN Journal sync
+public class UsnSqliteSyncService : IAsyncDisposable
+{
+    public Task StartAsync(CancellationToken ct = default);
+    public Task StartAsync(char[] driveLetters, CancellationToken ct = default);
+    public Task StopAsync();
+    public bool IsRunning { get; }
+    public SyncStatistics Statistics { get; }
+}
+```
+
+### Linux — Channel-based BFS
+
+```csharp
+// LinuxFileSystemProvider: parallel file enumeration
 public class LinuxFileSystemProvider : IFileSystemProvider
 {
-    // File enumeration (Channel-based BFS, depth-aware parallelism)
-    IAsyncEnumerable<FileItem> EnumerateFilesAsync(
-        IndexingOptions options, CancellationToken cancellationToken = default);
-
-    // Mount point discovery (parses /proc/mounts)
-    Task<IReadOnlyList<DriveInfo>> GetAvailableLocationsAsync(
-        CancellationToken cancellationToken = default);
-
-    // File change monitoring (inotify via FileSystemWatcher)
-    IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(
-        MonitoringOptions options, CancellationToken cancellationToken = default);
-
-    // File system type detection (reads /proc/mounts)
-    Task<string> GetFileSystemTypeAsync(
-        string path, CancellationToken cancellationToken = default);
-
-    // Single file info
-    Task<FileItem?> GetFileInfoAsync(
-        string path, CancellationToken cancellationToken = default);
-
-    // Platform availability
-    bool IsAvailable { get; }  // true on Linux
+    public IAsyncEnumerable<FileItem> EnumerateFilesAsync(IndexingOptions options, CancellationToken ct = default);
+    public Task<IReadOnlyList<DriveInfo>> GetAvailableLocationsAsync(CancellationToken ct = default);
+    public IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(MonitoringOptions options, CancellationToken ct = default);
+    public Task<string> GetFileSystemTypeAsync(string path, CancellationToken ct = default);
+    public bool IsAvailable { get; }
 }
 ```
 
-### Usage Example
-```csharp
-using FastFind.Unix;
-using FastFind.Unix.Linux;
-
-// Direct provider usage
-var provider = new LinuxFileSystemProvider(logger);
-
-// Enumerate files from /home
-var options = new IndexingOptions { MountPoints = ["/home"] };
-await foreach (var file in provider.EnumerateFilesAsync(options))
-{
-    Console.WriteLine($"{file.FullPath} ({file.Size} bytes)");
-}
-
-// Discover mount points (physical disks only, excludes tmpfs/proc/sysfs)
-var locations = await provider.GetAvailableLocationsAsync();
-foreach (var loc in locations)
-{
-    Console.WriteLine($"{loc.Name} ({loc.DriveType})");
-}
-
-// Monitor file changes
-var monitorOptions = new MonitoringOptions { Paths = ["/home/user/documents"] };
-await foreach (var change in provider.MonitorChangesAsync(monitorOptions))
-{
-    Console.WriteLine($"{change.ChangeType}: {change.FullPath}");
-}
-```
-
-## SQLite Persistence API
-
-### SqlitePersistence Class
-High-performance SQLite persistence with FTS5 full-text search.
+### SQLite Persistence
 
 ```csharp
 public class SqlitePersistence : IIndexPersistence
 {
-    // Factory methods
+    // Factory
     public static SqlitePersistence Create(string databasePath, ILogger? logger = null);
     public static SqlitePersistence CreateHighPerformance(string databasePath, ILogger? logger = null);
 
-    // Initialization
-    public Task InitializeAsync(CancellationToken cancellationToken = default);
+    // CRUD
+    public Task InitializeAsync(CancellationToken ct = default);
+    public Task AddAsync(FastFileItem item, CancellationToken ct = default);
+    public Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken ct = default);
+    public Task<int> AddFromStreamAsync(IAsyncEnumerable<FastFileItem> items, int bufferSize = 5000, IProgress<int>? progress = null, CancellationToken ct = default);
 
-    // Add operations
-    public Task AddAsync(FastFileItem item, CancellationToken cancellationToken = default);
-    public Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default);
-    public Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default);
-    public Task<int> AddFromStreamAsync(IAsyncEnumerable<FastFileItem> items, int bufferSize = 5000, IProgress<int>? progress = null, CancellationToken cancellationToken = default);
-
-    // Query operations
-    public IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
-    public IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken cancellationToken = default);
-    public IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, CancellationToken cancellationToken = default);
-    public Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default);
+    // Query (FTS5)
+    public IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken ct = default);
+    public IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken ct = default);
+    public IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, CancellationToken ct = default);
 
     // Maintenance
-    public Task OptimizeAsync(CancellationToken cancellationToken = default);
-    public Task VacuumAsync(CancellationToken cancellationToken = default);
-    public Task<PersistenceStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default);
-
-    // Properties
-    public long Count { get; }
-    public bool IsReady { get; }
-    public string StoragePath { get; }
-}
-```
-
-### Usage Example
-```csharp
-using FastFind.SQLite;
-
-// Create high-performance SQLite persistence
-await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
-await persistence.InitializeAsync();
-
-// Bulk insert files
-var items = GetFileItems();
-var inserted = await persistence.AddBulkOptimizedAsync(items);
-
-// FTS5 search
-var results = await persistence.SearchAsync(new SearchQuery
-{
-    SearchText = "document",
-    ExtensionFilter = ".pdf",
-    MaxResults = 100
-}).ToListAsync();
-
-// Get statistics
-var stats = await persistence.GetStatisticsAsync();
-Console.WriteLine($"Total: {stats.TotalItems}, Files: {stats.TotalFiles}, Dirs: {stats.TotalDirectories}");
-```
-
-## MFT Direct Access API
-
-### MftSqlitePipeline Class
-High-throughput pipeline connecting MFT enumeration to SQLite persistence.
-
-```csharp
-public class MftSqlitePipeline : IDisposable
-{
-    // Main indexing methods
-    public Task<int> IndexAllDrivesAsync(
-        IIndexPersistence persistence,
-        IProgress<IndexingProgress>? progress = null,
-        CancellationToken cancellationToken = default);
-
-    public Task<int> IndexDrivesAsync(
-        char[] driveLetters,
-        IIndexPersistence persistence,
-        IProgress<IndexingProgress>? progress = null,
-        CancellationToken cancellationToken = default);
-
-    // Statistics
-    public PipelineStatistics Statistics { get; }
-}
-```
-
-### MftReader Class
-Direct NTFS MFT enumeration for ultra-fast file discovery.
-
-```csharp
-public class MftReader : IDisposable
-{
-    // Static utility methods
-    public static bool IsAvailable();
-    public static char[] GetNtfsDrives();
-
-    // Enumeration
-    public IAsyncEnumerable<MftFileRecord> EnumerateFilesAsync(
-        char driveLetter,
-        CancellationToken cancellationToken = default);
-}
-```
-
-### Usage Example
-```csharp
-using FastFind.Windows.Mft;
-using FastFind.SQLite;
-
-// Check MFT availability (requires admin)
-if (!MftReader.IsAvailable())
-{
-    Console.WriteLine("MFT access requires administrator privileges");
-    return;
-}
-
-// Create persistence and pipeline
-await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
-await persistence.InitializeAsync();
-
-using var pipeline = new MftSqlitePipeline();
-
-// Index all NTFS drives
-var progress = new Progress<IndexingProgress>(p =>
-    Console.WriteLine($"Indexed: {p.TotalIndexed:N0} - {p.CurrentOperation}"));
-
-var total = await pipeline.IndexAllDrivesAsync(persistence, progress);
-
-Console.WriteLine($"Indexed {total:N0} files at {pipeline.Statistics.RecordsPerSecond:N0}/sec");
-```
-
-## USN Journal Real-Time Sync API
-
-### UsnSqliteSyncService Class
-Real-time file change synchronization using USN Journal.
-
-```csharp
-public class UsnSqliteSyncService : IAsyncDisposable
-{
-    // Start/Stop
-    public Task StartAsync(CancellationToken cancellationToken = default);
-    public Task StartAsync(char[] driveLetters, CancellationToken cancellationToken = default);
-    public Task StopAsync();
-
-    // Properties
-    public bool IsRunning { get; }
-    public SyncStatistics Statistics { get; }
-}
-
-public class SyncStatistics
-{
-    public long TotalChangesReceived { get; }
-    public long Additions { get; }
-    public long Updates { get; }
-    public long Deletions { get; }
-    public long Errors { get; }
-    public TimeSpan Duration { get; }
-    public double ChangesPerSecond { get; }
-}
-```
-
-### Usage Example
-```csharp
-using FastFind.Windows.Mft;
-using FastFind.SQLite;
-
-// Initialize persistence
-await using var persistence = SqlitePersistence.CreateHighPerformance("index.db");
-await persistence.InitializeAsync();
-
-// Start real-time sync
-await using var syncService = new UsnSqliteSyncService(persistence);
-await syncService.StartAsync(new[] { 'C', 'D' });
-
-Console.WriteLine("Monitoring file changes...");
-
-// Monitor statistics
-while (syncService.IsRunning)
-{
-    var stats = syncService.Statistics;
-    Console.WriteLine($"Changes: {stats.TotalChangesReceived:N0} ({stats.ChangesPerSecond:F1}/sec)");
-    await Task.Delay(5000);
+    public Task OptimizeAsync(CancellationToken ct = default);
+    public Task VacuumAsync(CancellationToken ct = default);
+    public Task<PersistenceStatistics> GetStatisticsAsync(CancellationToken ct = default);
 }
 ```

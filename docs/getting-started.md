@@ -12,109 +12,37 @@ dotnet add package FastFind.Unix       # Linux / macOS
 dotnet add package FastFind.SQLite     # Optional: SQLite persistence
 ```
 
-See [README](../README.md) for full package list and version badges.
-
-## Quick Start (Windows)
-
-### 1. Create Search Engine
+## Quick Start
 
 ```csharp
 using FastFind;
-using Microsoft.Extensions.Logging;
 
-// Create logger (optional)
-using var loggerFactory = LoggerFactory.Create(builder =>
-    builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+// Platform auto-detected — creates Windows or Linux engine
+using var engine = FastFinder.CreateSearchEngine();
 
-// Windows factory is auto-registered via ModuleInitializer
-using var searchEngine = FastFinder.CreateWindowsSearchEngine(loggerFactory);
-```
-
-### 2. Build Index
-
-```csharp
-await searchEngine.StartIndexingAsync(new IndexingOptions
+// Index target directories
+await engine.StartIndexingAsync(new IndexingOptions
 {
-    DriveLetters = ['C', 'D'],
-    ExcludedPaths = ["node_modules", "bin", "obj", ".git"],
-    CollectFileSize = true,  // Enable file size collection (default: false for max speed)
-    ParallelThreads = Environment.ProcessorCount
+    SpecificDirectories = [@"D:\Projects"],       // Windows
+    // MountPoints = ["/home", "/opt"],           // Linux
+    ExcludedPaths = ["node_modules", ".git", "bin", "obj"],
+    CollectFileSize = true
 });
 
-// Wait for indexing to complete
-while (searchEngine.IsIndexing)
-{
-    await Task.Delay(500);
-}
-```
+while (engine.IsIndexing) await Task.Delay(500);
 
-### 3. Search
-
-```csharp
-var results = await searchEngine.SearchAsync(new SearchQuery
+// Search
+var results = await engine.SearchAsync(new SearchQuery
 {
     BasePath = @"D:\Projects",
-    SearchText = "Controller",
+    SearchText = "controller",
     ExtensionFilter = ".cs",
-    IncludeSubdirectories = true,
     MaxResults = 100
 });
 
-// Stream results for memory efficiency
 await foreach (var file in results.Files)
 {
     Console.WriteLine($"{file.Name} ({file.SizeFormatted}) - {file.DirectoryPath}");
-}
-```
-
-## Quick Start (Linux)
-
-### 1. Create Search Engine
-
-```csharp
-using FastFind;
-using FastFind.Unix;
-using Microsoft.Extensions.Logging;
-
-using var loggerFactory = LoggerFactory.Create(builder =>
-    builder.AddConsole().SetMinimumLevel(LogLevel.Information));
-
-// Linux factory is auto-registered via ModuleInitializer
-using var searchEngine = UnixSearchEngine.CreateLinuxSearchEngine(loggerFactory);
-```
-
-### 2. Build Index
-
-```csharp
-await searchEngine.StartIndexingAsync(new IndexingOptions
-{
-    MountPoints = ["/home", "/opt", "/var"],
-    ExcludedPaths = ["node_modules", ".git", "__pycache__", ".cache"],
-    CollectFileSize = true,
-    ParallelThreads = Environment.ProcessorCount
-});
-
-while (searchEngine.IsIndexing)
-{
-    await Task.Delay(500);
-}
-```
-
-### 3. Search
-
-```csharp
-var results = await searchEngine.SearchAsync(new SearchQuery
-{
-    BasePath = "/home/user/projects",
-    SearchText = "config",
-    ExtensionFilter = ".json",
-    IncludeSubdirectories = true,
-    MaxResults = 100
-});
-
-await foreach (var file in results.Files)
-{
-    Console.WriteLine($"{file.Name} - {file.DirectoryPath}");
 }
 ```
 
@@ -125,18 +53,20 @@ await foreach (var file in results.Files)
 ```csharp
 var options = new IndexingOptions
 {
-    // Location
-    DriveLetters = ['C', 'D'],
-    SpecificDirectories = [@"C:\Projects", @"D:\Documents"],
+    // Location (choose one)
+    DriveLetters = ['C', 'D'],                              // Windows: drive letters
+    SpecificDirectories = [@"C:\Projects", @"D:\Documents"], // Windows: specific dirs
+    MountPoints = ["/home", "/opt"],                         // Linux: mount points
 
     // Filtering
-    ExcludedPaths = ["temp", "cache", "node_modules", ".git", "bin", "obj"],
+    ExcludedPaths = ["node_modules", ".git", "bin", "obj"],
     ExcludedExtensions = [".tmp", ".cache", ".log"],
-    IncludeHidden = false,
-    IncludeSystem = false,
+    IncludeHidden = false,      // Linux: dotfiles, Windows: Hidden attribute
+    IncludeSystem = false,      // Windows only (no effect on Linux)
 
     // Performance
-    MaxFileSize = 100 * 1024 * 1024, // 100MB
+    CollectFileSize = false,    // false = max indexing speed
+    MaxFileSize = 100 * 1024 * 1024,
     ParallelThreads = Environment.ProcessorCount,
     BatchSize = 1000
 };
@@ -147,11 +77,10 @@ var options = new IndexingOptions
 ```csharp
 var query = new SearchQuery
 {
-    // Path options
-    BasePath = @"C:\MyProject",
+    BasePath = @"D:\Projects",
     SearchText = "search term",
     IncludeSubdirectories = true,
-    SearchFileNameOnly = false,       // false = search full paths (default)
+    SearchFileNameOnly = false,       // false = search full paths
 
     // Search behavior
     UseRegex = false,
@@ -161,45 +90,88 @@ var query = new SearchQuery
     ExtensionFilter = ".cs",
     MinSize = 1024,
     MaxSize = 1024 * 1024,
-    MinCreatedDate = DateTime.Now.AddDays(-30),
+    MinModifiedDate = DateTime.Now.AddDays(-30),
 
     // Limits
     MaxResults = 1000
 };
 ```
 
-## Monitoring Progress
+## Search Examples
 
-### Indexing Progress
-
+### Regex Pattern Search
 ```csharp
-searchEngine.IndexingProgressChanged += (sender, args) =>
+var results = await engine.SearchAsync(new SearchQuery
 {
-    Console.WriteLine($"Indexing: {args.ProcessedFiles:N0} files " +
-                     $"({args.ProgressPercentage:F1}%) - {args.FilesPerSecond:F0} files/sec");
-};
+    BasePath = @"D:\Projects\WebApp",
+    SearchText = @"Service|Repository|Controller",
+    UseRegex = true,
+    ExtensionFilter = ".cs",
+    IncludeSubdirectories = true
+});
 ```
 
-### Search Statistics
-
+### Date & Size Filtering
 ```csharp
-var stats = await searchEngine.GetSearchStatisticsAsync();
-Console.WriteLine($"Performance: {stats.AverageSearchTime.TotalMilliseconds:F1}ms avg, " +
-                 $"{stats.CacheHitRate:P1} cache hit rate");
+// Recent large files
+var results = await engine.SearchAsync(new SearchQuery
+{
+    BasePath = @"D:\Downloads",
+    MinSize = 100 * 1024 * 1024,      // > 100MB
+    MinModifiedDate = DateTime.Now.AddDays(-7),
+    IncludeSubdirectories = true
+});
 ```
 
-## System Validation
-
+### Streaming vs Batch Collection
 ```csharp
-var validation = FastFinder.ValidateSystem();
-if (!validation.IsReady)
+// Streaming (memory efficient)
+await foreach (var file in results.Files)
 {
-    Console.WriteLine($"System validation failed: {validation.GetSummary()}");
-    return;
+    await ProcessFileAsync(file);
 }
 
-Console.WriteLine($"Platform: {validation.Platform}");
-Console.WriteLine($"Available Features: {string.Join(", ", validation.AvailableFeatures)}");
+// Batch (when you need all results)
+var allFiles = new List<FastFileItem>();
+await foreach (var file in results.Files)
+{
+    allFiles.Add(file);
+}
+```
+
+### Linux-Specific
+```csharp
+// Find nginx config files
+var results = await engine.SearchAsync(new SearchQuery
+{
+    BasePath = "/etc",
+    SearchText = "nginx",
+    ExtensionFilter = ".conf",
+    IncludeSubdirectories = true
+});
+
+// Find large log files
+var results = await engine.SearchAsync(new SearchQuery
+{
+    BasePath = "/var/log",
+    MinSize = 100 * 1024 * 1024,
+    ExtensionFilter = ".log",
+    IncludeSubdirectories = true
+});
+```
+
+## Monitoring & Validation
+
+```csharp
+// Indexing progress
+engine.IndexingProgressChanged += (sender, args) =>
+{
+    Console.WriteLine($"Indexing: {args.ProcessedFiles:N0} files ({args.ProgressPercentage:F1}%)");
+};
+
+// System validation
+var validation = FastFinder.ValidateSystem();
+Console.WriteLine($"Platform: {validation.Platform}, Ready: {validation.IsReady}");
 ```
 
 ## Performance Tips
@@ -209,25 +181,9 @@ Console.WriteLine($"Available Features: {string.Join(", ", validation.AvailableF
 - **Use `SearchFileNameOnly = true`** for faster filename-only searches
 - **Set `MaxResults`** to limit memory usage for large result sets
 - **Use `CollectFileSize = false`** (default) for maximum indexing speed
-- **Use cancellation tokens** for responsive UI applications
-
-## Platform Detection
-
-FastFind.NET automatically detects the platform and registers the appropriate search engine factory:
-
-```csharp
-// Platform-agnostic creation (requires platform package reference)
-var validation = FastFinder.ValidateSystem();
-Console.WriteLine($"Platform: {validation.Platform}");
-// Windows → PlatformType.Windows
-// Linux   → PlatformType.Linux
-```
-
-The `ModuleInitializer` in each platform package (`FastFind.Windows`, `FastFind.Unix`) automatically registers itself when the assembly is loaded. No manual registration is needed.
 
 ## Next Steps
 
-- [API Reference](api-reference.md) - Complete API documentation
-- [Search Examples](search-examples.md) - Practical search scenarios
-- [Performance Benchmarks](BENCHMARKS.md) - Detailed performance data
-- [Roadmap](roadmap.md) - Future plans and development status
+- [API Reference](api-reference.md) — Interface and class signatures
+- [Performance Benchmarks](BENCHMARKS.md) — Detailed performance data
+- [Roadmap](roadmap.md) — Development plans
