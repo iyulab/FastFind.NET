@@ -9,17 +9,18 @@ namespace FastFind.Unix.Tests.MacOS;
 public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDisposable
 {
     private readonly TestFileTreeFixture _fixture;
-    private readonly Interfaces.ISearchEngine _engine;
+    private readonly Interfaces.ISearchEngine? _engine;
 
     public MacOSSearchEngineTests(TestFileTreeFixture fixture)
     {
         _fixture = fixture;
-        _engine = UnixSearchEngine.CreateMacOSSearchEngine();
+        if (OperatingSystem.IsMacOS())
+            _engine = UnixSearchEngine.CreateMacOSSearchEngine();
     }
 
     private async Task EnsureIndexedAsync()
     {
-        if (_engine.TotalIndexedFiles > 0) return;
+        if (_engine!.TotalIndexedFiles > 0) return;
 
         var options = new IndexingOptions
         {
@@ -29,7 +30,7 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
             ExcludedPaths = new List<string>(),
             ExcludedExtensions = new List<string>()
         };
-        await _engine.StartIndexingAsync(options);
+        await _engine!.StartIndexingAsync(options);
     }
 
     [Fact]
@@ -39,7 +40,7 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
 
         await EnsureIndexedAsync();
 
-        var result = await _engine.SearchAsync("file1");
+        var result = await _engine!.SearchAsync("file1");
         result.TotalMatches.Should().BeGreaterThan(0);
 
         var items = new List<FastFileItem>();
@@ -56,7 +57,7 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
 
         await EnsureIndexedAsync();
 
-        var result = await _engine.SearchAsync("nonexistent_xyz_12345");
+        var result = await _engine!.SearchAsync("nonexistent_xyz_12345");
         result.TotalMatches.Should().Be(0);
     }
 
@@ -68,7 +69,7 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
         await EnsureIndexedAsync();
 
         var query = new SearchQuery { ExtensionFilter = ".txt" };
-        var result = await _engine.SearchAsync(query);
+        var result = await _engine!.SearchAsync(query);
 
         var items = new List<FastFileItem>();
         await foreach (var item in result.Files)
@@ -85,7 +86,7 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
 
         await EnsureIndexedAsync();
 
-        var stats = await _engine.GetIndexingStatisticsAsync();
+        var stats = await _engine!.GetIndexingStatisticsAsync();
         stats.TotalFiles.Should().BeGreaterThan(0);
     }
 
@@ -94,12 +95,12 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
     {
         if (!OperatingSystem.IsMacOS()) return;
 
-        var act = () => _engine.StopIndexingAsync();
+        var act = () => _engine!.StopIndexingAsync();
         await act.Should().NotThrowAsync();
     }
 
     public void Dispose()
     {
-        _engine.Dispose();
+        _engine?.Dispose();
     }
 }

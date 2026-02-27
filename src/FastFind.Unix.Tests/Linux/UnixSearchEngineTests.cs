@@ -9,17 +9,18 @@ namespace FastFind.Unix.Tests.Linux;
 public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDisposable
 {
     private readonly TestFileTreeFixture _fixture;
-    private readonly Interfaces.ISearchEngine _engine;
+    private readonly Interfaces.ISearchEngine? _engine;
 
     public UnixSearchEngineTests(TestFileTreeFixture fixture)
     {
         _fixture = fixture;
-        _engine = UnixSearchEngine.CreateLinuxSearchEngine();
+        if (OperatingSystem.IsLinux())
+            _engine = UnixSearchEngine.CreateLinuxSearchEngine();
     }
 
     private async Task EnsureIndexedAsync()
     {
-        if (_engine.TotalIndexedFiles > 0) return;
+        if (_engine!.TotalIndexedFiles > 0) return;
 
         var options = new IndexingOptions
         {
@@ -29,7 +30,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
             ExcludedPaths = new List<string>(),
             ExcludedExtensions = new List<string>()
         };
-        await _engine.StartIndexingAsync(options);
+        await _engine!.StartIndexingAsync(options);
     }
 
     [Fact]
@@ -37,7 +38,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
     {
         if (!OperatingSystem.IsLinux()) return;
 
-        var act = () => _engine.SaveIndexAsync();
+        var act = () => _engine!.SaveIndexAsync();
         await act.Should().ThrowAsync<NotSupportedException>();
     }
 
@@ -46,7 +47,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
     {
         if (!OperatingSystem.IsLinux()) return;
 
-        var act = () => _engine.LoadIndexAsync();
+        var act = () => _engine!.LoadIndexAsync();
         await act.Should().ThrowAsync<NotSupportedException>();
     }
 
@@ -55,7 +56,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
     {
         if (!OperatingSystem.IsLinux()) return;
 
-        var act = () => _engine.OptimizeIndexAsync();
+        var act = () => _engine!.OptimizeIndexAsync();
         await act.Should().NotThrowAsync();
     }
 
@@ -65,13 +66,13 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         if (!OperatingSystem.IsLinux()) return;
 
         await EnsureIndexedAsync();
-        var countBefore = _engine.TotalIndexedFiles;
+        var countBefore = _engine!.TotalIndexedFiles;
         countBefore.Should().BeGreaterThan(0);
 
         // Refresh should re-index the same location
-        await _engine.RefreshIndexAsync(new[] { _fixture.RootPath });
+        await _engine!.RefreshIndexAsync(new[] { _fixture.RootPath });
 
-        _engine.TotalIndexedFiles.Should().BeGreaterThan(0);
+        _engine!.TotalIndexedFiles.Should().BeGreaterThan(0);
     }
 
     [Fact]
@@ -80,11 +81,11 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         if (!OperatingSystem.IsLinux()) return;
 
         await EnsureIndexedAsync();
-        var countBefore = _engine.TotalIndexedFiles;
+        var countBefore = _engine!.TotalIndexedFiles;
 
-        await _engine.RefreshIndexAsync();
+        await _engine!.RefreshIndexAsync();
 
-        _engine.TotalIndexedFiles.Should().Be(countBefore);
+        _engine!.TotalIndexedFiles.Should().Be(countBefore);
     }
 
     [Fact]
@@ -94,7 +95,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
 
         await EnsureIndexedAsync();
 
-        var result = await _engine.SearchAsync("file1");
+        var result = await _engine!.SearchAsync("file1");
         result.TotalMatches.Should().BeGreaterThan(0);
 
         var items = new List<FastFileItem>();
@@ -111,7 +112,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
 
         await EnsureIndexedAsync();
 
-        var result = await _engine.SearchAsync("nonexistent_xyz_12345");
+        var result = await _engine!.SearchAsync("nonexistent_xyz_12345");
         result.TotalMatches.Should().Be(0);
     }
 
@@ -123,7 +124,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         await EnsureIndexedAsync();
 
         var query = new SearchQuery { ExtensionFilter = ".txt" };
-        var result = await _engine.SearchAsync(query);
+        var result = await _engine!.SearchAsync(query);
 
         var items = new List<FastFileItem>();
         await foreach (var item in result.Files)
@@ -140,7 +141,7 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
 
         await EnsureIndexedAsync();
 
-        var stats = await _engine.GetIndexingStatisticsAsync();
+        var stats = await _engine!.GetIndexingStatisticsAsync();
         stats.TotalFiles.Should().BeGreaterThan(0);
     }
 
@@ -149,12 +150,12 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
     {
         if (!OperatingSystem.IsLinux()) return;
 
-        var act = () => _engine.StopIndexingAsync();
+        var act = () => _engine!.StopIndexingAsync();
         await act.Should().NotThrowAsync();
     }
 
     public void Dispose()
     {
-        _engine.Dispose();
+        _engine?.Dispose();
     }
 }

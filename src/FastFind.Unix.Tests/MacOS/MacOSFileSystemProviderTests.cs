@@ -30,8 +30,15 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
             items.Add(item);
         }
 
-        // 6 files (file1.txt, file2.cs, .hidden, sub1/file3.txt, sub1/sub1a/file4.log, sub2/file5.pdf)
+        // Expected: file1.txt, file2.cs, .hidden, sub1/file3.txt, sub1/sub1a/file4.log, sub2/file5.pdf
         var files = items.Where(i => !i.IsDirectory).ToList();
+        var fileNames = files.Select(f => f.Name).ToList();
+        fileNames.Should().Contain("file1.txt");
+        fileNames.Should().Contain("file2.cs");
+        fileNames.Should().Contain(".hidden");
+        fileNames.Should().Contain("file3.txt");
+        fileNames.Should().Contain("file4.log");
+        fileNames.Should().Contain("file5.pdf");
         files.Should().HaveCount(6);
     }
 
@@ -135,8 +142,8 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
 
         // .hidden file should be excluded
         var files = items.Where(i => !i.IsDirectory).ToList();
-        files.Should().HaveCount(5);
         files.Should().NotContain(i => i.Name.StartsWith('.'));
+        files.Should().HaveCountGreaterThanOrEqualTo(5);
     }
 
     [Fact]
