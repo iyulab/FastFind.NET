@@ -1,6 +1,7 @@
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Unix.Linux;
+using FastFind.Unix.MacOS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
@@ -29,6 +30,23 @@ public static class UnixSearchEngine
         }
 
         var provider = new LinuxFileSystemProvider(loggerFactory);
+        return new UnixSearchEngineImpl(provider, loggerFactory);
+    }
+
+    /// <summary>
+    /// Creates a macOS-optimized search engine
+    /// </summary>
+    /// <param name="loggerFactory">Optional logger factory</param>
+    /// <returns>macOS search engine instance</returns>
+    public static ISearchEngine CreateMacOSSearchEngine(ILoggerFactory? loggerFactory = null)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException(
+                "macOS search engine can only be used on macOS platforms");
+        }
+
+        var provider = new MacOSFileSystemProvider(loggerFactory);
         return new UnixSearchEngineImpl(provider, loggerFactory);
     }
 }
