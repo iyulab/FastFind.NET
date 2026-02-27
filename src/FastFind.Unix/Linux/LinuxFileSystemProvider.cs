@@ -563,17 +563,29 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
             var mounts = ParseProcMounts();
             var fullPath = Path.GetFullPath(path);
 
-            // Find the longest matching mount point
+            // Find the longest matching mount point (physical FS first, then any FS)
             MountEntry? bestMatch = null;
+            MountEntry? fallbackMatch = null;
             int bestLength = -1;
+            int fallbackLength = -1;
 
             foreach (var mount in mounts)
             {
-                if (UnixPathHelper.IsVirtualFileSystem(mount.FsType))
+                if (!fullPath.StartsWith(mount.MountPoint, StringComparison.Ordinal))
                     continue;
 
-                if (fullPath.StartsWith(mount.MountPoint, StringComparison.Ordinal) &&
-                    mount.MountPoint.Length > bestLength)
+                if (UnixPathHelper.IsVirtualFileSystem(mount.FsType))
+                {
+                    // Track as fallback (e.g., overlay in Docker containers)
+                    if (mount.MountPoint.Length > fallbackLength)
+                    {
+                        fallbackMatch = mount;
+                        fallbackLength = mount.MountPoint.Length;
+                    }
+                    continue;
+                }
+
+                if (mount.MountPoint.Length > bestLength)
                 {
                     bestMatch = mount;
                     bestLength = mount.MountPoint.Length;
@@ -583,6 +595,12 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
             if (bestMatch != null)
             {
                 return Task.FromResult(bestMatch.FsType);
+            }
+
+            // Fallback to virtual FS type (e.g., overlay in containers)
+            if (fallbackMatch != null)
+            {
+                return Task.FromResult(fallbackMatch.FsType);
             }
         }
         catch (Exception ex)
