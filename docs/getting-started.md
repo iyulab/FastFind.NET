@@ -17,7 +17,7 @@ dotnet add package FastFind.SQLite     # Optional: SQLite persistence
 ```csharp
 using FastFind;
 
-// Platform auto-detected — creates Windows or Linux engine
+// Platform auto-detected — creates Windows, Linux, or macOS engine
 using var engine = FastFinder.CreateSearchEngine();
 
 // Index target directories
@@ -56,13 +56,13 @@ var options = new IndexingOptions
     // Location (choose one)
     DriveLetters = ['C', 'D'],                              // Windows: drive letters
     SpecificDirectories = [@"C:\Projects", @"D:\Documents"], // Windows: specific dirs
-    MountPoints = ["/home", "/opt"],                         // Linux: mount points
+    MountPoints = ["/home", "/opt"],                         // Linux/macOS: mount points
 
     // Filtering
     ExcludedPaths = ["node_modules", ".git", "bin", "obj"],
     ExcludedExtensions = [".tmp", ".cache", ".log"],
-    IncludeHidden = false,      // Linux: dotfiles, Windows: Hidden attribute
-    IncludeSystem = false,      // Windows only (no effect on Linux)
+    IncludeHidden = false,      // Linux/macOS: dotfiles, Windows: Hidden attribute
+    IncludeSystem = false,      // Windows only (no effect on Linux/macOS)
 
     // Performance
     CollectFileSize = false,    // false = max indexing speed
@@ -139,7 +139,7 @@ await foreach (var file in results.Files)
 }
 ```
 
-### Linux-Specific
+### Linux/macOS-Specific
 ```csharp
 // Find nginx config files
 var results = await engine.SearchAsync(new SearchQuery

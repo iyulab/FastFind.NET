@@ -143,6 +143,20 @@ public class LinuxFileSystemProvider : IFileSystemProvider
 }
 ```
 
+### macOS — Channel-based BFS
+
+```csharp
+// MacOSFileSystemProvider: parallel file enumeration with DriveInfo + /Volumes mount detection
+public class MacOSFileSystemProvider : IFileSystemProvider
+{
+    public IAsyncEnumerable<FileItem> EnumerateFilesAsync(IndexingOptions options, CancellationToken ct = default);
+    public Task<IReadOnlyList<DriveInfo>> GetAvailableLocationsAsync(CancellationToken ct = default);
+    public IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(MonitoringOptions options, CancellationToken ct = default);
+    public Task<string> GetFileSystemTypeAsync(string path, CancellationToken ct = default);
+    public bool IsAvailable { get; }
+}
+```
+
 ### SQLite Persistence
 
 ```csharp

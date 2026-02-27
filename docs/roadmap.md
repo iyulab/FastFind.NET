@@ -1,6 +1,6 @@
 # FastFind.NET Roadmap
 
-## Current Status (v1.0.14)
+## Current Status (v1.3.0)
 
 ### Core (FastFind.Core)
 - Cross-Platform SIMD: Vector256/Vector128 auto-dispatch (AVX2, SSE2, NEON)
@@ -19,16 +19,21 @@
 - inotify change tracking via FileSystemWatcher
 - /proc/mounts parsing, virtual FS filtering
 - ModuleInitializer auto-registration
-- 29 tests passing (WSL Ubuntu 24.04)
+
+### macOS (FastFind.Unix) — Preview
+- Channel-based BFS parallel file enumeration (shared with Linux)
+- FSEvents change tracking via FileSystemWatcher
+- DriveInfo + /Volumes mount detection
+- ModuleInitializer auto-registration
 
 ### SQLite (FastFind.SQLite) — Production
 - FTS5 full-text search, WAL mode, bulk insert
 - MftSqlitePipeline for MFT → SQLite data flow
 
 ### CI/CD
-- PR validation (Windows + Linux), macOS (manual trigger)
-- Docker multi-distro testing
-- NuGet auto-publish on version tags
+- PR validation (Windows + Linux auto, macOS manual trigger)
+- Docker multi-distro testing (SDK container)
+- NuGet auto-publish on version change
 
 ---
 
@@ -45,30 +50,38 @@
 
 ---
 
-## v1.2.0 — Cross-Platform MVP
+## v1.2.0 — Cross-Platform MVP (Completed)
 
-> 3개 플랫폼 기능적 동등성. 최적 성능보다 동작하는 크로스 플랫폼 우선.
-
-- [x] SIMD Vector128/Vector256 크로스 플랫폼 리팩터링
-- [x] Linux Channel-based BFS 구현
-- [x] FastFind.Unix NuGet 패키지
+- [x] SIMD Vector128/Vector256 cross-platform refactoring
+- [x] Linux Channel-based BFS implementation
+- [x] FastFind.Unix NuGet package
 - [x] CI/CD Linux + macOS jobs
-- [ ] Capability discovery 패턴 (ISearchCapability)
-- [ ] IChangeTracking / IFastEnumeration 인터페이스
-- [ ] PlatformProfile record
-- [ ] macOS fts_read + FSEvents 구현
 
-## v1.3.0 — Platform-Specific Optimization
+---
 
-- [ ] Linux: getdents64 직접 호출, fanotify (5.9+)
+## v1.3.0 — macOS Support + BFS Stability (Completed)
+
+- [x] macOS FileSystemProvider (DriveInfo + /Volumes mount detection)
+- [x] macOS FileSystemWatcher monitoring (FSEvents)
+- [x] macOS factory registration (ModuleInitializer)
+- [x] macOS CI test suite (20 tests passing)
+- [x] BFS Channel worker race condition fix (pendingWork counter)
+- [x] Cross-platform test constructor safety (nullable engine pattern)
+
+---
+
+## v1.4.0 — Platform-Specific Optimization
+
+- [ ] Linux: getdents64 direct syscall, fanotify (5.9+)
 - [ ] macOS: searchfs, getattrlistbulk
-- [ ] ARM64 AdvSimd 최적화
+- [ ] ARM64 AdvSimd optimization
+- [ ] Capability discovery pattern (ISearchCapability)
 
 ## Future
 
-- [ ] Btrfs/io_uring/eBPF 고급 기능
+- [ ] Btrfs/io_uring/eBPF advanced features
 - [ ] Trigram posting list (sub-ms substring matching)
-- [ ] systemd/LaunchDaemon 서비스 패키징
+- [ ] systemd/LaunchDaemon service packaging
 - [ ] Network storage, content search, OpenTelemetry
 
 ---
@@ -79,6 +92,6 @@
 |----------|--------|---------|
 | Windows 10/11, Server 2019+ | Production | FastFind.Windows |
 | Linux (Ubuntu, RHEL, Alpine) | Preview | FastFind.Unix |
-| macOS | Planned (v1.2.0) | FastFind.Unix |
+| macOS (Ventura+) | Preview | FastFind.Unix |
 
 **Last Updated**: February 2026
