@@ -306,16 +306,6 @@ public readonly struct FastFileItem
         };
     }
 
-    // SearchOptimizedFileItem으로 변환
-    public SearchOptimizedFileItem ToSearchOptimized()
-    {
-        return new SearchOptimizedFileItem(
-            FullPath, Name, DirectoryPath, Extension,
-            Size, CreatedTime, ModifiedTime, AccessedTime,
-            Attributes, DriveLetter, FileRecordNumber
-        );
-    }
-
     public override string ToString() => Name;
 }
 

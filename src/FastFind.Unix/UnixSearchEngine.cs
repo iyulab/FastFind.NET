@@ -337,39 +337,79 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Unix implementation uses in-memory indexing only. Persistence is not supported.
+    /// Use FastFind.SQLite for persistent index storage.
+    /// </remarks>
     public Task SaveIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // Stub: persistence not yet implemented for Unix
-        _logger.LogDebug("SaveIndexAsync: not yet implemented for Unix");
-        return Task.CompletedTask;
+        throw new NotSupportedException(
+            "Unix search engine uses in-memory indexing only. " +
+            "Use FastFind.SQLite for persistent index storage.");
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Unix implementation uses in-memory indexing only. Persistence is not supported.
+    /// Use FastFind.SQLite for persistent index storage.
+    /// </remarks>
     public Task LoadIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // Stub: persistence not yet implemented for Unix
-        _logger.LogDebug("LoadIndexAsync: not yet implemented for Unix");
-        return Task.CompletedTask;
+        throw new NotSupportedException(
+            "Unix search engine uses in-memory indexing only. " +
+            "Use FastFind.SQLite for persistent index storage.");
     }
 
     /// <inheritdoc/>
     public Task OptimizeIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // Stub: in-memory ConcurrentDictionary doesn't need optimization
-        _logger.LogDebug("OptimizeIndexAsync: no-op for in-memory index");
+        // ConcurrentDictionary in-memory index does not require optimization
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken cancellationToken = default)
+    public async Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // Stub: a full re-index would be needed
-        _logger.LogDebug("RefreshIndexAsync: not yet implemented for Unix");
-        return Task.CompletedTask;
+
+        var paths = locations?.ToArray();
+        if (paths == null || paths.Length == 0)
+        {
+            _logger.LogWarning("RefreshIndexAsync: no locations specified, nothing to refresh");
+            return;
+        }
+
+        _logger.LogInformation("Refreshing index for {Count} locations", paths.Length);
+
+        // Remove stale entries for the specified locations
+        var keysToRemove = _index.Keys
+            .Where(k => paths.Any(p => k.StartsWith(p, StringComparison.Ordinal)))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+            _index.TryRemove(key, out _);
+
+        // Re-enumerate the locations
+        var options = new IndexingOptions
+        {
+            IncludeHidden = true,
+            ExcludedPaths = new List<string>(),
+            ExcludedExtensions = new List<string>()
+        };
+
+        long refreshed = 0;
+        await foreach (var item in _provider.EnumerateFilesAsync(paths, options, cancellationToken)
+                           .ConfigureAwait(false))
+        {
+            _index[item.FullPath] = item;
+            refreshed++;
+        }
+
+        Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
+        _logger.LogInformation("Refresh completed: {Refreshed} items re-indexed", refreshed);
     }
 
     /// <inheritdoc/>
@@ -378,8 +418,12 @@ internal class UnixSearchEngineImpl : ISearchEngine
         if (_disposed) return;
         _disposed = true;
 
-        try { _indexingCts?.Cancel(); } catch { }
-        try { _indexingCts?.Dispose(); } catch { }
+        try { _indexingCts?.Cancel(); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Error cancelling indexing CTS during dispose"); }
+
+        try { _indexingCts?.Dispose(); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Error disposing indexing CTS"); }
+
         StopMonitoring();
         _provider.Dispose();
         _index.Clear();

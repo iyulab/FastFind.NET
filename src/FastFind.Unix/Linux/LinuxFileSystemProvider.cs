@@ -274,9 +274,14 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
 
             try
             {
-                // Skip hidden entries unless requested
+                // Skip hidden entries unless requested (dotfiles on Linux)
                 if (!options.IncludeHidden && entry.Name.StartsWith('.'))
                     continue;
+
+                // Note: IncludeSystem is not filtered here because Linux/Unix does not
+                // have a "system file" concept. FileAttributes.System is never set by
+                // .NET on Linux. Filtering is handled in UnixSearchEngine.SearchIndex
+                // for cross-platform API consistency.
 
                 // Skip symlinks unless following
                 if (!options.FollowSymlinks && entry.LinkTarget != null)
@@ -699,12 +704,22 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
     {
         foreach (var excluded in excludedPaths)
         {
-            // Simple substring match for common patterns
-            var pattern = excluded.Replace("**", "").Replace("*", "").Trim('/');
-            if (!string.IsNullOrEmpty(pattern) &&
-                path.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-            {
+            if (string.IsNullOrEmpty(excluded))
+                continue;
+
+            // Exact path prefix match (most common usage: "/path/to/exclude")
+            if (path.StartsWith(excluded, StringComparison.Ordinal))
                 return true;
+
+            // Path segment match for bare names (e.g., "node_modules", ".git")
+            // Matches /path/to/node_modules or /path/to/node_modules/...
+            if (!excluded.Contains('/'))
+            {
+                var segment = "/" + excluded + "/";
+                var trailing = "/" + excluded;
+                if (path.Contains(segment, StringComparison.Ordinal) ||
+                    path.EndsWith(trailing, StringComparison.Ordinal))
+                    return true;
             }
         }
         return false;

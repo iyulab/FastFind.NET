@@ -806,7 +806,41 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 
     public void Dispose()
     {
-        DisposeAsync().AsTask().GetAwaiter().GetResult();
+        if (_disposed) return;
+        _disposed = true;
+
+        _logger.LogDebug("Disposing WindowsFileSystemProvider (sync)");
+
+        foreach (var watcher in _watchers.Values)
+        {
+            try
+            {
+                watcher.EnableRaisingEvents = false;
+                watcher.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error disposing file system watcher");
+            }
+        }
+        _watchers.Clear();
+
+        try { _enumerationSemaphore.Dispose(); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Error disposing enumeration semaphore"); }
+
+        try
+        {
+            // AsyncFileEnumerator.DisposeAsync() is synchronous in practice
+            // (only Cancel + Dispose calls, no I/O), safe to block here
+            _asyncEnumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _asyncIOProvider.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error disposing async components");
+        }
+
+        _logger.LogDebug("WindowsFileSystemProvider disposal completed");
     }
 
     public async ValueTask DisposeAsync()

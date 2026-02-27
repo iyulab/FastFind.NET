@@ -11,9 +11,9 @@ namespace FastFind;
 public static class FastFinder
 {
     private static readonly Dictionary<PlatformType, Func<ILoggerFactory?, ISearchEngine>> _factories = new();
-    private static readonly Lock _lock = new();
+    private static readonly Lock _factoryLock = new();
     private static volatile bool _platformAssemblyLoadAttempted = false;
-    private static readonly object _platformLoadLock = new();
+    private static readonly Lock _platformLoadLock = new();
 
     /// <summary>
     /// Platform-specific assembly names for auto-loading
@@ -107,7 +107,7 @@ public static class FastFinder
         // Ensure platform assembly is loaded before trying to create engine
         EnsurePlatformAssemblyLoaded();
 
-        lock (_lock)
+        lock (_factoryLock)
         {
             if (_factories.TryGetValue(platformType, out var factory))
             {
@@ -131,7 +131,7 @@ public static class FastFinder
     /// <param name="factory">Factory function</param>
     public static void RegisterSearchEngineFactory(PlatformType platformType, Func<ILoggerFactory?, ISearchEngine> factory)
     {
-        lock (_lock)
+        lock (_factoryLock)
         {
             _factories[platformType] = factory;
         }
@@ -143,7 +143,7 @@ public static class FastFinder
     /// <returns>Available platform types</returns>
     public static IEnumerable<PlatformType> GetAvailablePlatforms()
     {
-        lock (_lock)
+        lock (_factoryLock)
         {
             return _factories.Keys.ToArray();
         }

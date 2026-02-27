@@ -119,6 +119,89 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
     }
 
     [Fact]
+    public async Task EnumerateFilesAsync_ShouldExcludeHiddenWhenNotRequested()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+        options.IncludeHidden = false;
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        // .hidden file should be excluded
+        var files = items.Where(i => !i.IsDirectory).ToList();
+        files.Should().HaveCount(5);
+        files.Should().NotContain(i => i.Name.StartsWith('.'));
+    }
+
+    [Fact]
+    public async Task EnumerateFilesAsync_ShouldReturnDirectories()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        // 3 directories (sub1, sub1a, sub2)
+        var dirs = items.Where(i => i.IsDirectory).ToList();
+        dirs.Should().HaveCount(3);
+        dirs.Select(d => d.Name).Should().Contain(new[] { "sub1", "sub1a", "sub2" });
+    }
+
+    [Fact]
+    public async Task EnumerateFilesAsync_ShouldRespectExcludedPaths()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+        options.ExcludedPaths = new List<string> { Path.Combine(_fixture.RootPath, "sub1") };
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        // sub1 and sub1a should be excluded, so no file3.txt or file4.log
+        var files = items.Where(i => !i.IsDirectory).ToList();
+        files.Should().NotContain(i => i.Name == "file3.txt");
+        files.Should().NotContain(i => i.Name == "file4.log");
+    }
+
+    [Fact]
+    public async Task EnumerateFilesAsync_ShouldRespectMaxFileSize()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+        options.MaxFileSize = 200; // bytes
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        // Only files <= 200 bytes: file1.txt(100), file2.cs(200), .hidden(50), file3.txt(150)
+        var files = items.Where(i => !i.IsDirectory).ToList();
+        files.Should().NotContain(i => i.Name == "file4.log"); // 300 bytes
+        files.Should().NotContain(i => i.Name == "file5.pdf"); // 500 bytes
+    }
+
+    [Fact]
     public void IsAvailable_OnLinux_ShouldBeTrue()
     {
         if (!OperatingSystem.IsLinux()) return;

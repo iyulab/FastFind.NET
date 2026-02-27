@@ -681,10 +681,10 @@ internal class WindowsSearchIndex : ISearchIndex
                             {
                                 excludePaths.Add(fullPath);
 
-                                // Write to channel (non-blocking)
+                                // Write to channel — TryWrite is non-blocking; fallback uses blocking
+                                // wait which is safe here (inside Task.Run, no SynchronizationContext)
                                 if (!writer.TryWrite(fileItem))
                                 {
-                                    // Channel is full, wait and retry
                                     writer.WriteAsync(fileItem, cancellationToken).AsTask().Wait(cancellationToken);
                                 }
                             }
