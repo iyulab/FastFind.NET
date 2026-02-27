@@ -143,7 +143,7 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         // .hidden file should be excluded
         var files = items.Where(i => !i.IsDirectory).ToList();
         files.Should().NotContain(i => i.Name.StartsWith('.'));
-        files.Should().HaveCountGreaterThanOrEqualTo(5);
+        files.Should().HaveCount(5);
     }
 
     [Fact]

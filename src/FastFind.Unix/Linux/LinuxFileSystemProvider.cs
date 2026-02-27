@@ -112,18 +112,19 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
         var workChannel = Channel.CreateUnbounded<(string Path, int Depth)>(
             new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
 
+        var pendingWork = new int[] { 0 };
+
         // Seed the work channel with root locations
         foreach (var location in locations)
         {
             if (Directory.Exists(location))
             {
+                Interlocked.Increment(ref pendingWork[0]);
                 await workChannel.Writer.WriteAsync((location, 0), cancellationToken)
                     .ConfigureAwait(false);
             }
         }
 
-        var activeWorkers = 0;
-        var workerLock = new object();
         var allDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var workers = new Task[maxParallelism];
@@ -145,24 +146,19 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
                         }
                         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                         {
-                            // Timeout — check if all workers are idle and no work remains
-                            lock (workerLock)
+                            // Timeout — check if all dispatched work has been processed
+                            if (Volatile.Read(ref pendingWork[0]) == 0)
                             {
-                                if (activeWorkers == 0 && workChannel.Reader.Count == 0)
-                                {
-                                    allDone.TrySetResult();
-                                    return;
-                                }
+                                allDone.TrySetResult();
+                                return;
                             }
                             continue;
                         }
 
-                        lock (workerLock) { activeWorkers++; }
-
                         try
                         {
                             await ProcessDirectoryAsync(
-                                item.dirPath, item.depth, options, writer, workChannel.Writer, cancellationToken)
+                                item.dirPath, item.depth, options, writer, workChannel.Writer, pendingWork, cancellationToken)
                                 .ConfigureAwait(false);
                         }
                         catch (OperationCanceledException)
@@ -179,13 +175,9 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
                         }
                         finally
                         {
-                            lock (workerLock)
+                            if (Interlocked.Decrement(ref pendingWork[0]) == 0)
                             {
-                                activeWorkers--;
-                                if (activeWorkers == 0 && workChannel.Reader.Count == 0)
-                                {
-                                    allDone.TrySetResult();
-                                }
+                                allDone.TrySetResult();
                             }
                         }
                     }
@@ -230,6 +222,7 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
         IndexingOptions options,
         ChannelWriter<FileItem> output,
         ChannelWriter<(string Path, int Depth)> workQueue,
+        int[] pendingWork,
         CancellationToken cancellationToken)
     {
         if (options.MaxDepth.HasValue && depth > options.MaxDepth.Value)
@@ -305,6 +298,7 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
                     if (depth <= 2)
                     {
                         // Dispatch to work queue for parallel processing
+                        Interlocked.Increment(ref pendingWork[0]);
                         await workQueue.WriteAsync((subDir.FullName, depth + 1), cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -312,7 +306,7 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
                     {
                         // Inline traversal for deeper directories
                         await ProcessDirectoryAsync(
-                            subDir.FullName, depth + 1, options, output, workQueue, cancellationToken)
+                            subDir.FullName, depth + 1, options, output, workQueue, pendingWork, cancellationToken)
                             .ConfigureAwait(false);
                     }
                 }
