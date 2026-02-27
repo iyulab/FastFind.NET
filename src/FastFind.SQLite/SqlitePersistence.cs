@@ -315,13 +315,17 @@ public sealed class SqlitePersistence : IIndexPersistence
     {
         try
         {
-            // Try the official FTS5 rebuild command
+            // Drop and recreate the FTS table, then rebuild from content table
+            _logger?.LogWarning("Attempting FTS recovery: DROP → CREATE → REBUILD");
+            await ExecuteNonQueryAsync("DROP TABLE IF EXISTS files_fts;", cancellationToken);
+            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTable, cancellationToken);
             await ExecuteNonQueryAsync("INSERT INTO files_fts(files_fts) VALUES('rebuild');", cancellationToken);
-            _logger?.LogInformation("FTS index recovered successfully using rebuild command");
+            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
+            _logger?.LogInformation("FTS index recovered successfully via DROP/CREATE/REBUILD");
         }
         catch (Exception rebuildEx)
         {
-            _logger?.LogError(rebuildEx, "FTS rebuild failed. FTS search may not work correctly until database is recreated.");
+            _logger?.LogError(rebuildEx, "FTS recovery failed. FTS search may not work correctly until database is recreated.");
         }
     }
 

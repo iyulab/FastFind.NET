@@ -6,7 +6,9 @@ using FastFind.Windows.Mft;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 using System.Runtime.Versioning;
+using System.Security.Principal;
 
 namespace FastFind.Windows;
 
@@ -48,11 +50,16 @@ public static class WindowsRegistration
 
             if (OperatingSystem.IsWindows())
             {
-                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => WindowsSearchEngine.CreateWindowsSearchEngine(loggerFactory));
+                RegisterWindowsFactory();
                 _isRegistered = true;
             }
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void RegisterWindowsFactory()
+    {
+        FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => WindowsSearchEngine.CreateWindowsSearchEngine(loggerFactory));
     }
 }
 
@@ -66,24 +73,8 @@ public static class WindowsSearchEngine
     private static readonly ThreadLocal<WindowsCapabilityCache> _capabilityCache =
         new(() => new WindowsCapabilityCache());
 
-    /// <summary>
-    /// Registers Windows-specific implementations
-    /// </summary>
-    static WindowsSearchEngine()
-    {
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                // Use lambda to match expected signature (ILoggerFactory? -> ISearchEngine)
-                FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => CreateWindowsSearchEngine(loggerFactory));
-            }
-        }
-        catch (Exception)
-        {
-            // Ignore registration errors
-        }
-    }
+    // Factory registration is handled by WindowsRegistration.EnsureRegistered() via ModuleInitializer.
+    // No static constructor needed — avoids duplicate registration.
 
     /// <summary>
     /// Creates a Windows-optimized search engine with .NET 10 enhancements
@@ -346,34 +337,40 @@ public static class WindowsSearchEngine
     }
 
     // Helper methods for capability detection
-    private static bool CheckCompressionSupport(System.IO.DriveInfo drive)
+    private static bool IsNtfsDrive(System.IO.DriveInfo drive)
     {
-        // Implementation would check for NTFS compression support
-        return true; // Simplified for example
+        return drive.IsReady &&
+               drive.DriveFormat.Equals("NTFS", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool CheckEncryptionSupport(System.IO.DriveInfo drive)
-    {
-        // Implementation would check for BitLocker/EFS support
-        return true; // Simplified for example
-    }
+    // NTFS natively supports both compression and EFS encryption
+    private static bool CheckCompressionSupport(System.IO.DriveInfo drive) => IsNtfsDrive(drive);
+    private static bool CheckEncryptionSupport(System.IO.DriveInfo drive) => IsNtfsDrive(drive);
 
     private static bool CheckAdministrativePrivileges()
     {
-        // Implementation would check for admin privileges
-        return false; // Simplified for example
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool CheckVssSupport()
     {
-        // Implementation would check for VSS support
-        return true; // Simplified for example
+        // VSS is available on Windows Server and Windows 10+ with admin privileges
+        var version = Environment.OSVersion.Version;
+        return version.Major >= 10 && CheckAdministrativePrivileges();
     }
 
     private static bool CheckAVX2Support()
     {
-        // Implementation would check for AVX2 support
-        return true; // Simplified for example
+        return Avx2.IsSupported;
     }
 }
 

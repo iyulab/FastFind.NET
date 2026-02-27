@@ -199,6 +199,64 @@ public class SearchQueryEnhancedUnitTests
     }
 
     [Fact]
+    public void SearchQuery_Validation_NegativeMinSize_ShouldFail()
+    {
+        var query = new SearchQuery { MinSize = -1 };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("negative");
+    }
+
+    [Fact]
+    public void SearchQuery_Validation_NegativeMaxSize_ShouldFail()
+    {
+        var query = new SearchQuery { MaxSize = -100 };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("negative");
+    }
+
+    [Fact]
+    public void SearchQuery_Validation_InvalidRegex_ShouldFail()
+    {
+        var query = new SearchQuery { SearchText = "[invalid(", UseRegex = true };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("regex");
+    }
+
+    [Fact]
+    public void SearchQuery_Validation_MinSizeGreaterThanMaxSize_ShouldFail()
+    {
+        var query = new SearchQuery { MinSize = 1000, MaxSize = 500 };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("greater");
+    }
+
+    [Fact]
+    public void SearchQuery_Validation_MinDateAfterMaxDate_ShouldFail()
+    {
+        var query = new SearchQuery
+        {
+            MinCreatedDate = new DateTime(2026, 1, 1),
+            MaxCreatedDate = new DateTime(2025, 1, 1)
+        };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("date");
+    }
+
+    [Fact]
+    public void SearchQuery_Validation_ZeroMaxResults_ShouldFail()
+    {
+        var query = new SearchQuery { MaxResults = 0 };
+        var (isValid, errorMessage) = query.Validate();
+        isValid.Should().BeFalse();
+        errorMessage.Should().Contain("positive");
+    }
+
+    [Fact]
     public void SearchQuery_Korean_Annotations_ShouldBeDocumented()
     {
         // This test documents the Korean feature names for reference

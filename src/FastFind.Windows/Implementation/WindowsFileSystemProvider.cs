@@ -2,6 +2,7 @@
 using FastFind.Models;
 using FastFind.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
@@ -31,9 +32,9 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         var maxConcurrentOperations = Environment.ProcessorCount * 2;
         _enumerationSemaphore = new SemaphoreSlim(maxConcurrentOperations, maxConcurrentOperations);
         _asyncEnumerator = new AsyncFileEnumerator(logger as ILogger<AsyncFileEnumerator> ??
-            new LoggerFactory().CreateLogger<AsyncFileEnumerator>());
+            NullLoggerFactory.Instance.CreateLogger<AsyncFileEnumerator>());
         _asyncIOProvider = new AsyncFileIOProvider(logger as ILogger<AsyncFileIOProvider> ??
-            new LoggerFactory().CreateLogger<AsyncFileIOProvider>());
+            NullLoggerFactory.Instance.CreateLogger<AsyncFileIOProvider>());
     }
 
     /// <inheritdoc/>

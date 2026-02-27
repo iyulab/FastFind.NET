@@ -12,50 +12,51 @@ Ultra-high performance cross-platform file search library for .NET 10
 |---------|---------|-------------|
 | **FastFind.Core** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Core interfaces and models |
 | **FastFind.Windows** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | Windows-optimized with MFT & USN Journal |
+| **FastFind.Unix** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Unix.svg)](https://www.nuget.org/packages/FastFind.Unix) | Linux/macOS with parallel enumeration & inotify |
 | **FastFind.SQLite** | [![NuGet](https://img.shields.io/nuget/v/FastFind.SQLite.svg)](https://www.nuget.org/packages/FastFind.SQLite) | SQLite persistence with FTS5 search |
 
 ## Key Features
 
-- **SIMD-Accelerated Search**: 1.87M ops/sec with AVX2 hardware acceleration
-- **MFT Direct Access**: 31K+ files/sec NTFS enumeration (30x faster than standard APIs)
-- **USN Journal Sync**: Real-time file change detection
+- **Cross-Platform SIMD**: Vector256/Vector128 auto-dispatch (AVX2, SSE2, NEON) — 1.87M ops/sec
+- **MFT Direct Access** (Windows): 31K+ files/sec NTFS enumeration (30x faster than standard APIs)
+- **Parallel File Enumeration** (Linux): Channel-based BFS with depth-aware parallelism
+- **USN Journal Sync** (Windows) / **inotify** (Linux): Real-time file change detection
 - **SQLite FTS5**: Persistent index with full-text search
 - **Memory Optimized**: 60-80% reduction through string interning
-- **Optional File Size**: Opt-in file size collection with ~10-30% overhead
+- **Auto Platform Detection**: ModuleInitializer auto-registration per platform
 
 ## Installation
 
 ```bash
 dotnet add package FastFind.Core
-dotnet add package FastFind.Windows    # Windows implementation
+
+# Platform-specific (auto-registered at runtime)
+dotnet add package FastFind.Windows    # Windows
+dotnet add package FastFind.Unix       # Linux / macOS
+
 dotnet add package FastFind.SQLite     # Optional: SQLite persistence
 ```
 
 ## Quick Start
 
+### Windows
+
 ```csharp
 using FastFind;
 using Microsoft.Extensions.Logging;
 
-// Create search engine
 using var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
 var searchEngine = FastFinder.CreateWindowsSearchEngine(loggerFactory);
 
-// Build index first (required before searching)
 await searchEngine.StartIndexingAsync(new IndexingOptions
 {
     DriveLetters = ['C', 'D'],
     ExcludedPaths = ["node_modules", "bin", "obj", ".git"],
-    CollectFileSize = true  // Enable file size collection (default: false for max speed)
+    CollectFileSize = true
 });
 
-// Wait for indexing
-while (searchEngine.IsIndexing)
-{
-    await Task.Delay(500);
-}
+while (searchEngine.IsIndexing) await Task.Delay(500);
 
-// Search
 var results = await searchEngine.SearchAsync(new SearchQuery
 {
     BasePath = @"D:\Projects",
@@ -70,15 +71,48 @@ await foreach (var file in results.Files)
 }
 ```
 
+### Linux
+
+```csharp
+using FastFind;
+using FastFind.Unix;
+using Microsoft.Extensions.Logging;
+
+using var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+var searchEngine = UnixSearchEngine.CreateLinuxSearchEngine(loggerFactory);
+
+await searchEngine.StartIndexingAsync(new IndexingOptions
+{
+    MountPoints = ["/home", "/opt"],
+    ExcludedPaths = ["node_modules", ".git", "__pycache__"],
+    CollectFileSize = true
+});
+
+while (searchEngine.IsIndexing) await Task.Delay(500);
+
+var results = await searchEngine.SearchAsync(new SearchQuery
+{
+    BasePath = "/home/user/projects",
+    SearchText = "config",
+    ExtensionFilter = ".json",
+    MaxResults = 100
+});
+
+await foreach (var file in results.Files)
+{
+    Console.WriteLine($"{file.Name} - {file.DirectoryPath}");
+}
+```
+
 ## Performance
 
-| Metric | Result |
-|--------|--------|
-| SIMD String Matching | 1,877,459 ops/sec |
-| MFT File Enumeration | 31,073 files/sec |
-| File Indexing | 243,856 files/sec |
-| Search Operations | 1,680,631 ops/sec |
-| StringPool Interning | 6,437 paths/sec |
+| Metric | Windows | Linux |
+|--------|---------|-------|
+| SIMD String Matching | 1,877,459 ops/sec | 1,877,459 ops/sec (same Vector256) |
+| File Enumeration | 31,073 files/sec (MFT) | Channel BFS parallel |
+| File Indexing | 243,856 files/sec | Channel-based async |
+| Search Operations | 1,680,631 ops/sec | 1,680,631 ops/sec |
+| StringPool Interning | 6,437 paths/sec | 6,437 paths/sec |
 
 See [Performance Benchmarks](docs/BENCHMARKS.md) for detailed results.
 
@@ -92,10 +126,11 @@ See [Performance Benchmarks](docs/BENCHMARKS.md) for detailed results.
 
 ## Platform Support
 
-| Platform | Status |
-|----------|--------|
-| Windows 10/11, Server 2019+ | Production Ready |
-| Linux/macOS | Planned (Q2 2026) |
+| Platform | Status | Package |
+|----------|--------|---------|
+| Windows 10/11, Server 2019+ | Production Ready | FastFind.Windows |
+| Linux (Ubuntu, RHEL, Alpine) | Preview | FastFind.Unix |
+| macOS | Planned (Phase 2) | FastFind.Unix |
 
 ## License
 

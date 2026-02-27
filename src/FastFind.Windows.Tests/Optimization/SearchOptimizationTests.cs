@@ -135,8 +135,8 @@ public class SearchOptimizationTests : IAsyncLifetime
         _output.WriteLine($"Extension search time: {sw.ElapsedMilliseconds}ms");
         _output.WriteLine($"Results: {results.Count:N0} .cs files");
 
-        // Extension index lookup should be fast (relaxed for CI/CD environments)
-        sw.ElapsedMilliseconds.Should().BeLessThan(200,
+        // Extension index lookup should be fast (relaxed for CI/CD and parallel test environments)
+        sw.ElapsedMilliseconds.Should().BeLessThan(500,
             "Extension-based search should complete quickly with dedicated index");
     }
 

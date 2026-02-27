@@ -1,16 +1,16 @@
 # FastFind.NET Search Examples
 
-Complete guide to using the enhanced search options in FastFind.NET.
+Complete guide to using the search options in FastFind.NET.
 
-## 🎯 Core Search Options
+## Core Search Options
 
 FastFind.NET provides three essential search options:
 
-1. **BasePath** (기준경로) - Specify the starting directory for your search
-2. **SearchText** (search-text) - Define the pattern to find in paths and filenames
-3. **IncludeSubdirectories** (subdirectory) - Control whether to search in subdirectories
+1. **BasePath** - Specify the starting directory for your search
+2. **SearchText** - Define the pattern to find in paths and filenames
+3. **IncludeSubdirectories** - Control whether to search in subdirectories
 
-## 🚀 Basic Examples
+## Basic Examples
 
 ### Example 1: Search from Specific Directory
 ```csharp
@@ -38,7 +38,7 @@ Console.WriteLine($"Found {results.TotalMatches} files containing 'claude'");
 // Stream results efficiently
 await foreach (var file in results.Files)
 {
-    Console.WriteLine($"📄 {file.FullPath} ({file.Size:N0} bytes)");
+    Console.WriteLine($"{file.FullPath} ({file.Size:N0} bytes)");
 }
 ```
 
@@ -104,7 +104,7 @@ Console.WriteLine($"Direct only: {directResults.TotalMatches} files");
 Console.WriteLine($"Recursive: {recursiveResults.TotalMatches} files");
 ```
 
-## 📂 Real-World Scenarios
+## Real-World Scenarios
 
 ### Scenario 1: Find Project Files
 ```csharp
@@ -128,7 +128,7 @@ await foreach (var file in results.Files)
     // - Controllers\HomeController.cs
     // - Controllers\Api\UserController.cs
     // - Areas\Admin\Controllers\DashboardController.cs
-    Console.WriteLine($"🎯 {file.FullPath}");
+    Console.WriteLine($"{file.FullPath}");
 }
 ```
 
@@ -168,25 +168,24 @@ var largeFiles = await searchEngine.SearchAsync(cleanupQuery);
 Console.WriteLine($"Found {largeFiles.TotalMatches} large files to clean up");
 ```
 
-### Scenario 4: Source Code Analysis
+### Scenario 4: Regex Pattern Search
 ```csharp
-// Find TODO comments in source code
-var todoQuery = new SearchQuery
+// Find files matching multiple name patterns using regex
+var regexQuery = new SearchQuery
 {
     BasePath = @"D:\SourceCode\MyProject",
-    SearchText = @"TODO|FIXME|HACK|BUG",
+    SearchText = @"Service|Repository|Controller",
     UseRegex = true,                     // Enable regex for multiple patterns
-    SearchFileNameOnly = false,          // Search in file contents would require indexing
+    SearchFileNameOnly = true,           // Match filenames only
     ExtensionFilter = ".cs",
     IncludeSubdirectories = true,
     CaseSensitive = false
 };
 
-// Note: This searches for filenames/paths containing TODO, etc.
-// For actual content search, you'd need to implement content indexing
+// Finds files like: UserService.cs, OrderRepository.cs, HomeController.cs
 ```
 
-## ⚡ Advanced Filtering
+## Advanced Filtering
 
 ### Date-Based Search
 ```csharp
@@ -234,11 +233,11 @@ var complexQuery = new SearchQuery
 };
 ```
 
-## 🔧 Performance Tips
+## Performance Tips
 
 ### 1. Use BasePath for Targeted Searches
 ```csharp
-// ✅ Good: Targeted search
+// Good: Targeted search
 var targeted = new SearchQuery
 {
     BasePath = @"D:\MyProject",          // Start from specific directory
@@ -246,7 +245,7 @@ var targeted = new SearchQuery
     IncludeSubdirectories = true
 };
 
-// ❌ Avoid: System-wide search
+// Avoid: System-wide search
 var systemWide = new SearchQuery
 {
     SearchLocations = { @"C:\", @"D:\" }, // Searches entire drives
@@ -256,7 +255,7 @@ var systemWide = new SearchQuery
 
 ### 2. Control Subdirectory Traversal
 ```csharp
-// ✅ Good: Limit scope when possible
+// Good: Limit scope when possible
 var limited = new SearchQuery
 {
     BasePath = @"C:\Users\Downloads",
@@ -264,7 +263,7 @@ var limited = new SearchQuery
     IncludeSubdirectories = false        // Only direct files
 };
 
-// ⚠️ Use carefully: Deep recursion
+// Use carefully: Deep recursion
 var recursive = new SearchQuery
 {
     BasePath = @"C:\",
@@ -292,7 +291,7 @@ var pathSearch = new SearchQuery
 };
 ```
 
-## 📊 Result Processing
+## Result Processing
 
 ### Streaming Processing (Memory Efficient)
 ```csharp
@@ -337,7 +336,7 @@ await foreach (var file in results.Files)
 ProcessAllFiles(allFiles);
 ```
 
-## 🎯 Migration from Old API
+## Migration from Old API
 
 If you're upgrading from an older version, here's how the API has evolved:
 
@@ -363,7 +362,67 @@ var newQuery = new SearchQuery
 ```
 
 The new API provides:
-- ✅ Clearer intent with `BasePath` vs `SearchLocations`
-- ✅ Explicit subdirectory control
-- ✅ Full path search by default (more useful)
-- ✅ Better performance with targeted searches
+- Clearer intent with `BasePath` vs `SearchLocations`
+- Explicit subdirectory control
+- Full path search by default (more useful)
+- Better performance with targeted searches
+
+## Linux Examples
+
+### Setup
+```csharp
+using FastFind;
+using FastFind.Unix;
+
+// Create Linux search engine (auto-registered via ModuleInitializer)
+using var searchEngine = UnixSearchEngine.CreateLinuxSearchEngine();
+
+// Index mount points
+await searchEngine.StartIndexingAsync(new IndexingOptions
+{
+    MountPoints = ["/home", "/opt"],
+    ExcludedPaths = ["node_modules", ".git", "__pycache__", ".cache", "venv"],
+    CollectFileSize = true
+});
+
+while (searchEngine.IsIndexing) await Task.Delay(500);
+```
+
+### Find Config Files
+```csharp
+var results = await searchEngine.SearchAsync(new SearchQuery
+{
+    BasePath = "/etc",
+    SearchText = "nginx",
+    IncludeSubdirectories = true,
+    ExtensionFilter = ".conf"
+});
+
+await foreach (var file in results.Files)
+{
+    Console.WriteLine($"{file.FullPath}");
+}
+```
+
+### Search Home Directory
+```csharp
+var results = await searchEngine.SearchAsync(new SearchQuery
+{
+    BasePath = "/home/user/projects",
+    SearchText = "Dockerfile",
+    SearchFileNameOnly = true,
+    IncludeSubdirectories = true,
+    MaxResults = 50
+});
+```
+
+### Find Large Log Files
+```csharp
+var results = await searchEngine.SearchAsync(new SearchQuery
+{
+    BasePath = "/var/log",
+    MinSize = 100 * 1024 * 1024,  // > 100MB
+    ExtensionFilter = ".log",
+    IncludeSubdirectories = true
+});
+```

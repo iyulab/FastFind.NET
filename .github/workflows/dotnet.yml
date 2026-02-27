@@ -26,6 +26,110 @@ env:
   SOLUTION_PATH: 'src/FastFind.sln'
   
 jobs:
+  # 🔍 PR 빌드 검증
+  validate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+    - name: Build solution
+      run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore
+
+  # 🐧 Linux 테스트 (PR + push to main)
+  test-linux:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore & Build
+      run: dotnet build src/FastFind.sln --configuration Release
+
+    - name: Run Linux Tests
+      run: dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: linux-test-results
+        path: ./test-results/
+
+  # 🍎 macOS 테스트 (수동 트리거 전용)
+  test-macos:
+    runs-on: macos-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore & Build
+      run: dotnet build src/FastFind.sln --configuration Release
+
+    - name: Run macOS Tests
+      run: dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "OS=MacOS&Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
+      continue-on-error: true
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: macos-test-results
+        path: ./test-results/
+
+  # 🐳 Linux 호환성 테스트 (수동 트리거 전용)
+  test-linux-compat:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        container: ['mcr.microsoft.com/dotnet/sdk:10.0']
+    container:
+      image: ${{ matrix.container }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build & Test
+      run: |
+        dotnet build src/FastFind.sln --configuration Release
+        dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "Category!=Performance"
+
   # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
   pack-and-publish:
     runs-on: ubuntu-latest
@@ -42,9 +146,8 @@ jobs:
             name: 'FastFind.Windows'
           - path: 'src/FastFind.SQLite/FastFind.SQLite.csproj'
             name: 'FastFind.SQLite'
-          # Unix 구현시 활성화 예정
-          # - path: 'src/FastFind.Unix/FastFind.Unix.csproj'
-          #   name: 'FastFind.Unix'
+          - path: 'src/FastFind.Unix/FastFind.Unix.csproj'
+            name: 'FastFind.Unix'
     
     steps:
     - uses: actions/checkout@v4
@@ -60,7 +163,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
         restore-keys: |
           ${{ runner.os }}-nuget-
     

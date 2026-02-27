@@ -189,6 +189,16 @@ public class SearchQuery
             }
         }
 
+        if (MinSize.HasValue && MinSize.Value < 0)
+        {
+            return (false, "Minimum size cannot be negative");
+        }
+
+        if (MaxSize.HasValue && MaxSize.Value < 0)
+        {
+            return (false, "Maximum size cannot be negative");
+        }
+
         if (MinSize.HasValue && MaxSize.HasValue && MinSize.Value > MaxSize.Value)
         {
             return (false, "Minimum size cannot be greater than maximum size");

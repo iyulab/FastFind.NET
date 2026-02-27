@@ -1,31 +1,30 @@
 # FastFind.NET API Reference
 
-## Enhanced Search Query API ⚡
+## SearchQuery Class
 
-### SearchQuery Class
-Comprehensive search configuration with enhanced path-based options.
+Search configuration with path-based options.
 
 ```csharp
 public class SearchQuery
 {
-    // 🎯 Enhanced Path-Based Search Options
+    // Path-Based Search
     public string? BasePath { get; set; }               // Single base path for search
     public string SearchText { get; set; } = string.Empty;  // Empty = match all files
     public bool IncludeSubdirectories { get; set; } = true;
     public bool SearchFileNameOnly { get; set; } = false;  // Default: search full paths
 
-    // 🔍 Search Behavior
+    // Search Behavior
     public bool UseRegex { get; set; } = false;
     public bool CaseSensitive { get; set; } = false;
 
-    // 📂 File Filters
+    // File Filters
     public string? ExtensionFilter { get; set; }
     public bool IncludeFiles { get; set; } = true;
     public bool IncludeDirectories { get; set; } = true;
     public bool IncludeHidden { get; set; } = false;
     public bool IncludeSystem { get; set; } = false;
 
-    // 📏 Size and Date Filters
+    // Size and Date Filters
     public long? MinSize { get; set; }
     public long? MaxSize { get; set; }
     public DateTime? MinCreatedDate { get; set; }
@@ -33,12 +32,12 @@ public class SearchQuery
     public DateTime? MinModifiedDate { get; set; }
     public DateTime? MaxModifiedDate { get; set; }
 
-    // 📊 Result Control
+    // Result Control
     public int? MaxResults { get; set; }
     public IList<string> SearchLocations { get; set; }   // Used if BasePath not set
     public IList<string> ExcludedPaths { get; set; }
 
-    // 🔧 Utility Methods
+    // Utility Methods
     public (bool IsValid, string? ErrorMessage) Validate();
     public SearchQuery Clone();
     public Regex? GetCompiledRegex();
@@ -49,7 +48,8 @@ public class SearchQuery
 ## Core Interfaces
 
 ### ISearchEngine
-Primary interface for file search operations with enhanced async support.
+
+Primary interface for file search operations.
 
 ```csharp
 public interface ISearchEngine : IDisposable
@@ -77,6 +77,7 @@ public interface ISearchEngine : IDisposable
 ```
 
 ### FastFileItem
+
 Ultra-optimized 61-byte struct with SIMD acceleration.
 
 ```csharp
@@ -102,72 +103,81 @@ public readonly struct FastFileItem
 }
 ```
 
-## Enhanced Search Examples
+For search examples, see [Search Examples](search-examples.md).
 
-### 1. Base Path Search
+## Linux/Unix API
+
+### UnixSearchEngine Class
+Factory for creating Linux search engines.
+
 ```csharp
-// Search from specific directory with subdirectories
-var query = new SearchQuery
+public static class UnixSearchEngine
 {
-    BasePath = @"D:\Projects",          // 기준경로: Start from this path
-    SearchText = "Controller",          // search-text: Pattern to find
-    IncludeSubdirectories = true,       // subdirectory: Include subdirs
-    SearchFileNameOnly = false,         // Search in full paths
-    ExtensionFilter = ".cs"
-};
-
-WindowsRegistration.EnsureRegistered();
-using var searchEngine = FastFinder.CreateWindowsSearchEngine();
-
-var results = await searchEngine.SearchAsync(query);
-await foreach (var file in results.Files)
-{
-    Console.WriteLine($"📄 {file.FullPath}");
+    // Factory method
+    public static ISearchEngine CreateLinuxSearchEngine(
+        ILoggerFactory? loggerFactory = null);
 }
 ```
 
-### 2. Filename vs Full Path Search
+### LinuxFileSystemProvider Class
+IFileSystemProvider implementation using Channel-based BFS parallel enumeration.
+
 ```csharp
-// Compare filename-only vs full-path search
-var filenameQuery = new SearchQuery
+public class LinuxFileSystemProvider : IFileSystemProvider
 {
-    SearchText = "config",
-    SearchFileNameOnly = true,          // Only search filenames
-    BasePath = @"C:\Program Files"
-};
+    // File enumeration (Channel-based BFS, depth-aware parallelism)
+    IAsyncEnumerable<FileItem> EnumerateFilesAsync(
+        IndexingOptions options, CancellationToken cancellationToken = default);
 
-var fullPathQuery = new SearchQuery
-{
-    SearchText = "config",
-    SearchFileNameOnly = false,         // Search full paths + filenames
-    BasePath = @"C:\Program Files"
-};
+    // Mount point discovery (parses /proc/mounts)
+    Task<IReadOnlyList<DriveInfo>> GetAvailableLocationsAsync(
+        CancellationToken cancellationToken = default);
 
-var filenameResults = await searchEngine.SearchAsync(filenameQuery);
-var fullPathResults = await searchEngine.SearchAsync(fullPathQuery);
+    // File change monitoring (inotify via FileSystemWatcher)
+    IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(
+        MonitoringOptions options, CancellationToken cancellationToken = default);
 
-Console.WriteLine($"Filename only: {filenameResults.TotalMatches} matches");
-Console.WriteLine($"Full path: {fullPathResults.TotalMatches} matches");
+    // File system type detection (reads /proc/mounts)
+    Task<string> GetFileSystemTypeAsync(
+        string path, CancellationToken cancellationToken = default);
+
+    // Single file info
+    Task<FileItem?> GetFileInfoAsync(
+        string path, CancellationToken cancellationToken = default);
+
+    // Platform availability
+    bool IsAvailable { get; }  // true on Linux
+}
 ```
 
-### 3. Subdirectory Control
+### Usage Example
 ```csharp
-// Search with and without subdirectories
-var directOnlyQuery = new SearchQuery
-{
-    BasePath = @"C:\Users\Downloads",
-    SearchText = ".exe",
-    IncludeSubdirectories = false,      // Only direct files
-    SearchFileNameOnly = false
-};
+using FastFind.Unix;
+using FastFind.Unix.Linux;
 
-var recursiveQuery = new SearchQuery
+// Direct provider usage
+var provider = new LinuxFileSystemProvider(logger);
+
+// Enumerate files from /home
+var options = new IndexingOptions { MountPoints = ["/home"] };
+await foreach (var file in provider.EnumerateFilesAsync(options))
 {
-    BasePath = @"C:\Users\Downloads",
-    SearchText = ".exe",
-    IncludeSubdirectories = true,       // Include all subdirectories
-    SearchFileNameOnly = false
-};
+    Console.WriteLine($"{file.FullPath} ({file.Size} bytes)");
+}
+
+// Discover mount points (physical disks only, excludes tmpfs/proc/sysfs)
+var locations = await provider.GetAvailableLocationsAsync();
+foreach (var loc in locations)
+{
+    Console.WriteLine($"{loc.Name} ({loc.DriveType})");
+}
+
+// Monitor file changes
+var monitorOptions = new MonitoringOptions { Paths = ["/home/user/documents"] };
+await foreach (var change in provider.MonitorChangesAsync(monitorOptions))
+{
+    Console.WriteLine($"{change.ChangeType}: {change.FullPath}");
+}
 ```
 
 ## SQLite Persistence API
@@ -300,7 +310,7 @@ var progress = new Progress<IndexingProgress>(p =>
 
 var total = await pipeline.IndexAllDrivesAsync(persistence, progress);
 
-Console.WriteLine($"✅ Indexed {total:N0} files at {pipeline.Statistics.RecordsPerSecond:N0}/sec");
+Console.WriteLine($"Indexed {total:N0} files at {pipeline.Statistics.RecordsPerSecond:N0}/sec");
 ```
 
 ## USN Journal Real-Time Sync API

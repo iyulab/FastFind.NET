@@ -849,13 +849,13 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 {
                     if (innerEx is not OperationCanceledException)
                     {
-                        _logger.LogDebug(innerEx, "Exception during disposal cleanup");
+                        _logger.LogWarning(innerEx, "Exception during disposal cleanup");
                     }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogDebug(ex, "Exception during disposal cleanup");
+                _logger.LogWarning(ex, "Exception during disposal cleanup");
             }
         }
 
@@ -869,7 +869,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Error disposing resources");
+            _logger.LogWarning(ex, "Error disposing resources");
         }
     }
 }

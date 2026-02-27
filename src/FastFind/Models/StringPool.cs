@@ -31,6 +31,10 @@ public static class StringPool
     private static long _memoryBytes = 0;
     private static int _nextId = 1;
 
+    // Hit/miss tracking for cache ratio statistics
+    private static long _hitCount = 0;
+    private static long _missCount = 0;
+
     // .NET 10 최적화: SearchValues for fast extension lookup
     private static readonly System.Buffers.SearchValues<char> _pathSeparators =
         SearchValues.Create(['/', '\\']);
@@ -46,7 +50,12 @@ public static class StringPool
 
         // 이미 인터닝된 문자열인지 확인 (O(1) 성능)
         if (_stringToId.TryGetValue(value, out var existingId))
+        {
+            Interlocked.Increment(ref _hitCount);
             return existingId;
+        }
+
+        Interlocked.Increment(ref _missCount);
 
         // 새로운 ID 생성 및 양방향 매핑
         var newId = Interlocked.Increment(ref _nextId);
@@ -378,18 +387,24 @@ public static class StringPool
     {
         lock (_statsLock)
         {
+            // Invalidate cached lookup FIRST under its own lock to prevent
+            // GetNamePoolLookup() from returning a stale reference while we clear pools
+            lock (_lookupLock)
+            {
+                _namePoolLookup = null;
+            }
+
             _stringToId.Clear();
             _idToString.Clear();
             _pathPool.Clear();
             _extensionPool.Clear();
             _namePool.Clear();
 
-            // Reset cached AlternateLookup (will be re-created on next use)
-            _namePoolLookup = null;
-
             Interlocked.Exchange(ref _internedCount, 0);
             Interlocked.Exchange(ref _memoryBytes, 0);
             Interlocked.Exchange(ref _nextId, 1);
+            Interlocked.Exchange(ref _hitCount, 0);
+            Interlocked.Exchange(ref _missCount, 0);
         }
     }
 
@@ -425,9 +440,10 @@ public static class StringPool
 
     private static double CalculateHitRatio()
     {
-        // 실제 구현에서는 히트/미스 카운터 필요
-        // 여기서는 추정값 반환
-        return 0.85; // 85% 추정 히트율
+        var hits = Interlocked.Read(ref _hitCount);
+        var misses = Interlocked.Read(ref _missCount);
+        var total = hits + misses;
+        return total > 0 ? (double)hits / total : 0;
     }
 }
 

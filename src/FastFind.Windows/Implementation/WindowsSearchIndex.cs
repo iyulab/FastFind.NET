@@ -887,7 +887,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
     private IEnumerable<FileItem> GetFilesByExtensionSync(string extension)
     {
-        var normalizedExtension = extension.ToLowerInvariant();
+        var normalizedExtension = extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
         if (_extensionIndex.TryGetValue(normalizedExtension, out var filePaths))
         {
             foreach (var filePath in filePaths)
@@ -936,7 +936,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
     private IEnumerable<FileItem> ApplyExtensionFilter(IEnumerable<FileItem> candidates, string extension)
     {
-        var normalizedExtension = extension.ToLowerInvariant();
+        var normalizedExtension = extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
         foreach (var candidate in candidates)
         {
             if (candidate.Extension.ToLowerInvariant() == normalizedExtension)
@@ -1198,10 +1198,11 @@ internal class WindowsSearchIndex : ISearchIndex
         if (query.MinModifiedDate.HasValue && file.ModifiedTime < query.MinModifiedDate.Value) return false;
         if (query.MaxModifiedDate.HasValue && file.ModifiedTime > query.MaxModifiedDate.Value) return false;
 
-        // Extension filter
+        // Extension filter (normalize: "cs" → ".cs")
         if (!string.IsNullOrEmpty(query.ExtensionFilter))
         {
-            if (!file.Extension.Equals(query.ExtensionFilter, StringComparison.OrdinalIgnoreCase))
+            var extFilter = query.ExtensionFilter.StartsWith('.') ? query.ExtensionFilter : $".{query.ExtensionFilter}";
+            if (!file.Extension.Equals(extFilter, StringComparison.OrdinalIgnoreCase))
                 return false;
         }
 

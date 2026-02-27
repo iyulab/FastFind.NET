@@ -38,6 +38,18 @@ Comprehensive performance benchmarks for FastFind.NET demonstrating production-r
 
 ## SIMD String Matching Performance
 
+### Cross-Platform Architecture
+
+SIMDStringMatcher uses a 3-tier fallback strategy with JIT dead-branch elimination:
+
+| Tier | Instruction Set | Platforms | Chars/iteration |
+|------|----------------|-----------|-----------------|
+| **Vector256** | AVX2 | x86-64 (Intel/AMD) | 16 |
+| **Vector128** | SSE2 / NEON | x86-64, ARM64 (Apple Silicon) | 8 |
+| **Scalar** | None | All platforms | 1 |
+
+The JIT compiler eliminates unused code paths at runtime based on `Vector256.IsHardwareAccelerated` / `Vector128.IsHardwareAccelerated` checks.
+
 ### Hardware-Accelerated Search
 
 | Metric | Result | Target | Status |
@@ -155,8 +167,44 @@ Rate: 31,073 files/sec
 
 ---
 
+## Linux Test Results (WSL)
+
+### Test Environment
+
+| Component | Specification |
+|-----------|---------------|
+| **OS** | Ubuntu 24.04 (WSL2) |
+| **Runtime** | .NET 10.0.103 |
+| **File System** | ext4 (via /mnt/d, DrvFs) |
+
+### Test Suite Results
+
+| Test Category | Tests | Status | Time |
+|---------------|-------|--------|------|
+| Factory Registration | 3 | ✅ All Passed | 444ms |
+| LinuxFileSystemProvider | 8 | ✅ All Passed | 508ms |
+| LinuxFileMonitor | 1 | ✅ All Passed | 917ms |
+| E2E Integration | 3 | ✅ All Passed | 636ms |
+| **Total** | **15** | **✅ All Passed** | **4.87s** |
+
+### Linux Enumeration Architecture
+
+LinuxFileSystemProvider uses Channel-based BFS parallel traversal:
+
+| Feature | Implementation |
+|---------|---------------|
+| **Parallelism** | BoundedChannel(1000) with multiple worker tasks |
+| **Depth Strategy** | depth ≤ 2 → queue dispatch, deeper → inline |
+| **Change Tracking** | FileSystemWatcher (inotify) with DropOldest backpressure |
+| **Mount Discovery** | /proc/mounts parsing, virtual FS filtering |
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
 | v1.0.10 | 2026-01 | MFT integration, HybridFileSystemProvider |
+| v1.0.13 | 2026-02 | Capability checks, StringPool improvements |
+| v1.0.14 | 2026-02 | Extension normalization, FTS5 recovery, disposal logging |
+| v1.0.14+ | 2026-02 | Linux cross-platform support, SIMD Vector128/256 migration |

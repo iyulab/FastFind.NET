@@ -1,0 +1,8 @@
+services:
+  test-dotnet-sdk:
+    build:
+      context: ..
+      dockerfile: docker/test-linux.dockerfile
+      target: test
+    volumes:
+      - ./results:/results

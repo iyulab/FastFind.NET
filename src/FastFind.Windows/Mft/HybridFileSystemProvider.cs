@@ -2,6 +2,7 @@ using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 
@@ -47,8 +48,7 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
         {
             _logger?.LogInformation("MFT access not available - using standard Windows provider");
             _activeProvider = new WindowsFileSystemProvider(
-                loggerFactory?.CreateLogger<WindowsFileSystemProvider>() ??
-                new LoggerFactory().CreateLogger<WindowsFileSystemProvider>());
+                (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<WindowsFileSystemProvider>());
             _mode = ProviderMode.Standard;
         }
     }
@@ -74,8 +74,7 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
 
             case ProviderMode.Standard:
                 _activeProvider = new WindowsFileSystemProvider(
-                    loggerFactory?.CreateLogger<WindowsFileSystemProvider>() ??
-                    new LoggerFactory().CreateLogger<WindowsFileSystemProvider>());
+                    (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<WindowsFileSystemProvider>());
                 break;
 
             case ProviderMode.Auto:
@@ -89,8 +88,7 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
                 else
                 {
                     _activeProvider = new WindowsFileSystemProvider(
-                        loggerFactory?.CreateLogger<WindowsFileSystemProvider>() ??
-                        new LoggerFactory().CreateLogger<WindowsFileSystemProvider>());
+                        (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<WindowsFileSystemProvider>());
                     _mode = ProviderMode.Standard;
                 }
                 break;
