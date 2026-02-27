@@ -30,9 +30,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
             items.Add(item);
         }
 
-        // 5 files + 3 directories
+        // 6 files (file1.txt, file2.cs, .hidden, sub1/file3.txt, sub1/sub1a/file4.log, sub2/file5.pdf)
         var files = items.Where(i => !i.IsDirectory).ToList();
-        files.Should().HaveCount(5);
+        files.Should().HaveCount(6);
     }
 
     [Fact]
