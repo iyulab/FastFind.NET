@@ -74,11 +74,11 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nuget-
 
-    - name: Restore & Build
-      run: dotnet build src/FastFind.sln --configuration Release
+    - name: Build Unix Tests
+      run: dotnet build src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release
 
     - name: Run Linux Tests
-      run: dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
+      run: dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -87,7 +87,7 @@ jobs:
         name: linux-test-results
         path: ./test-results/
 
-  # 🍎 macOS 테스트 (수동 트리거 전용)
+  # 🍎 macOS 빌드 검증 (수동 트리거 전용 — 비용 최소화)
   test-macos:
     runs-on: macos-latest
     if: github.event_name == 'workflow_dispatch'
@@ -99,19 +99,18 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Restore & Build
-      run: dotnet build src/FastFind.sln --configuration Release
+    - name: Build Core + Unix
+      run: |
+        dotnet build src/FastFind/FastFind.csproj --configuration Release
+        dotnet build src/FastFind.Unix/FastFind.Unix.csproj --configuration Release
 
-    - name: Run macOS Tests
-      run: dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "OS=MacOS&Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
-      continue-on-error: true
-
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: macos-test-results
-        path: ./test-results/
+    - name: Verify SIMD cross-platform compilation
+      run: |
+        echo "=== macOS Build Verification ==="
+        echo "Architecture: $(uname -m)"
+        echo "OS: $(uname -s)"
+        dotnet --info | head -5
+        echo "FastFind.Core and FastFind.Unix build successful on macOS"
 
   # 🐳 Linux 호환성 테스트 (수동 트리거 전용)
   test-linux-compat:
@@ -127,8 +126,8 @@ jobs:
 
     - name: Build & Test
       run: |
-        dotnet build src/FastFind.sln --configuration Release
-        dotnet test src/FastFind.Unix.Tests/ --configuration Release --no-build --filter "Category!=Performance"
+        dotnet build src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release
+        dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build
 
   # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
   pack-and-publish:
@@ -331,20 +330,18 @@ jobs:
           ## FastFind.NET ${{ steps.version.outputs.VERSION }}
           
           ### 📦 Published Packages
-          - **FastFind.Core**: Core interfaces and models for cross-platform file search
-          - **FastFind.Windows**: Windows-optimized implementation with SIMD acceleration
-          - **FastFind.SQLite**: SQLite persistence provider with FTS5 full-text search
+          - **FastFind.Core**: Core interfaces, models, cross-platform SIMD string matching
+          - **FastFind.Windows**: Windows-optimized implementation (MFT, USN Journal)
+          - **FastFind.Unix**: Linux implementation (Channel BFS, inotify)
+          - **FastFind.SQLite**: SQLite persistence with FTS5 full-text search
 
           ### 🚀 Key Features
-          - High-performance file search with SIMD string matching
-          - Memory-optimized string pooling
-          - Real-time file system monitoring
-          - Windows-specific optimizations (NTFS, MFT, USN Journal)
-          - SQLite persistence with FTS5 full-text search support
-          
-          ### 🚧 Roadmap
-          - **FastFind.Unix**: Unix/Linux implementation (coming soon)
-          - **FastFind.MacOS**: macOS-specific optimizations (planned)
+          - Cross-platform SIMD string matching (Vector256/Vector128 auto-dispatch)
+          - Memory-optimized string pooling (60-80% reduction)
+          - Real-time file system monitoring (USN Journal / inotify)
+          - Windows: NTFS MFT direct access (31K+ files/sec)
+          - Linux: Channel-based BFS parallel enumeration
+          - SQLite persistence with FTS5 full-text search
           
           ${{ steps.changelog.outputs.CHANGELOG }}
           

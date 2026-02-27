@@ -9,6 +9,12 @@
     <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
+  <!-- Windows-only: skip compilation on non-Windows platforms -->
+  <PropertyGroup Condition="'$(OS)' != 'Windows_NT'">
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Condition="'$(OS)' == 'Windows_NT'" />
