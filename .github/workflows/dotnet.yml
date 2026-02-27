@@ -87,7 +87,7 @@ jobs:
         name: linux-test-results
         path: ./test-results/
 
-  # 🍎 macOS 빌드 검증 (수동 트리거 전용 — 비용 최소화)
+  # 🍎 macOS 테스트 (수동 트리거 전용 — 비용 최소화)
   test-macos:
     runs-on: macos-latest
     if: github.event_name == 'workflow_dispatch'
@@ -99,18 +99,26 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Build Core + Unix
-      run: |
-        dotnet build src/FastFind/FastFind.csproj --configuration Release
-        dotnet build src/FastFind.Unix/FastFind.Unix.csproj --configuration Release
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
 
-    - name: Verify SIMD cross-platform compilation
-      run: |
-        echo "=== macOS Build Verification ==="
-        echo "Architecture: $(uname -m)"
-        echo "OS: $(uname -s)"
-        dotnet --info | head -5
-        echo "FastFind.Core and FastFind.Unix build successful on macOS"
+    - name: Build Unix Tests
+      run: dotnet build src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release
+
+    - name: Run macOS Tests
+      run: dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: macos-test-results
+        path: ./test-results/
 
   # 🐳 Linux 호환성 테스트 (수동 트리거 전용)
   test-linux-compat:
