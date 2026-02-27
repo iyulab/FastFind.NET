@@ -32,7 +32,9 @@ internal static class UnixPathHelper
         "ramfs",
         "rpc_pipefs",
         "nsfs",
-        "overlay"
+        "overlay",
+        "devfs",
+        "volfs"
     };
 
     /// <summary>
