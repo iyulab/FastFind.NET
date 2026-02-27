@@ -50,14 +50,13 @@ public static class UnixRegistration
                 _isRegistered = true;
             }
 
-            // macOS registration — Phase 2
-            // if (OperatingSystem.IsMacOS())
-            // {
-            //     FastFinder.RegisterSearchEngineFactory(
-            //         PlatformType.MacOS,
-            //         loggerFactory => UnixSearchEngine.CreateMacOSSearchEngine(loggerFactory));
-            //     _isRegistered = true;
-            // }
+            if (OperatingSystem.IsMacOS())
+            {
+                FastFinder.RegisterSearchEngineFactory(
+                    PlatformType.MacOS,
+                    loggerFactory => UnixSearchEngine.CreateMacOSSearchEngine(loggerFactory));
+                _isRegistered = true;
+            }
         }
     }
 }
