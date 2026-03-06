@@ -854,9 +854,9 @@ public sealed class SqlitePersistence : IIndexPersistence
         var directoryPath = reader.GetString(reader.GetOrdinal("directory_path"));
         var extension = reader.GetString(reader.GetOrdinal("extension"));
         var size = reader.GetInt64(reader.GetOrdinal("size"));
-        var createdTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("created_time"))).DateTime;
-        var modifiedTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("modified_time"))).DateTime;
-        var accessedTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("accessed_time"))).DateTime;
+        var createdTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("created_time"))).UtcDateTime;
+        var modifiedTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("modified_time"))).UtcDateTime;
+        var accessedTime = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(reader.GetOrdinal("accessed_time"))).UtcDateTime;
         var attributes = (FileAttributes)reader.GetInt32(reader.GetOrdinal("attributes"));
         var driveLetter = reader.GetString(reader.GetOrdinal("drive_letter"))[0];
 

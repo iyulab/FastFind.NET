@@ -43,9 +43,9 @@ public readonly struct FastFileItem
         _extensionId = StringPool.InternExtension(extension);
 
         Size = size;
-        CreatedTicks = created.Ticks;
-        ModifiedTicks = modified.Ticks;
-        AccessedTicks = accessed.Ticks;
+        CreatedTicks = created.Kind == DateTimeKind.Utc ? created.Ticks : created.ToUniversalTime().Ticks;
+        ModifiedTicks = modified.Kind == DateTimeKind.Utc ? modified.Ticks : modified.ToUniversalTime().Ticks;
+        AccessedTicks = accessed.Kind == DateTimeKind.Utc ? accessed.Ticks : accessed.ToUniversalTime().Ticks;
         Attributes = attributes;
         DriveLetter = driveLetter;
         FileRecordNumber = fileRecordNumber ?? 0;
@@ -79,19 +79,19 @@ public readonly struct FastFileItem
     public DateTime CreatedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new DateTime(CreatedTicks);
+        get => new DateTime(CreatedTicks, DateTimeKind.Utc);
     }
 
     public DateTime ModifiedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new DateTime(ModifiedTicks);
+        get => new DateTime(ModifiedTicks, DateTimeKind.Utc);
     }
 
     public DateTime AccessedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new DateTime(AccessedTicks);
+        get => new DateTime(AccessedTicks, DateTimeKind.Utc);
     }
 
     // 비트 연산으로 최대 성능
