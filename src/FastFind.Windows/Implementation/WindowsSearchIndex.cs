@@ -1097,7 +1097,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 TotalDirectories = directories.Length,
                 MemoryUsageBytes = MemoryUsage,
                 PersistenceEnabled = _persistence != null,
-                LastUpdated = DateTime.Now,
+                LastUpdated = DateTime.UtcNow,
                 UniqueExtensions = _extensionIndex.Count
             };
         }, cancellationToken);
