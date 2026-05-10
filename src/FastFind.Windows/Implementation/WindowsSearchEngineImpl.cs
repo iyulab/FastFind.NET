@@ -141,9 +141,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         if (_fileChangeProcessingTask == null || _fileChangeProcessingTask.IsCompleted)
             _fileChangeProcessingTask = ProcessFileChangesAsync(_engineLifetimeCts.Token);
 
-        // .NET 10: Enhanced cancellation token linking with timeout
+        // Indexing gets a timeout-bound CTS; monitoring gets a separate CTS with no timeout
+        // so that indexing completion or timeout does not cancel monitoring.
         var indexingCts = new CancellationTokenSource(_options.FileOperationTimeout);
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(runCts.Token, indexingCts.Token);
+        var monitoringCts = CancellationTokenSource.CreateLinkedTokenSource(runCts.Token);
 
         _indexingTask = Task.Run(async () =>
         {
@@ -166,13 +168,13 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             }
         }, combinedCts.Token);
 
-        if (_options.EnableRealtimeMonitoring)
+        if (_options.EnableRealtimeMonitoring && options.EnableMonitoring)
         {
             _monitoringTask = Task.Run(async () =>
             {
                 try
                 {
-                    await MonitoringWorkerAsync(options, combinedCts.Token).ConfigureAwait(false);
+                    await MonitoringWorkerAsync(options, monitoringCts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -182,7 +184,15 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 {
                     _logger.LogError(ex, "Error in monitoring worker");
                 }
-            }, combinedCts.Token);
+                finally
+                {
+                    monitoringCts.Dispose();
+                }
+            }, monitoringCts.Token);
+        }
+        else
+        {
+            monitoringCts.Dispose();
         }
 
         _logger.LogInformation("Indexing started successfully with enhanced .NET 10 optimizations");
