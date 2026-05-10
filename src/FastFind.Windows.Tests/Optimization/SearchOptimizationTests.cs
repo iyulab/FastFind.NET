@@ -114,6 +114,7 @@ public class SearchOptimizationTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Performance")]
     public async Task SearchWithExtensionFilter_UsesExtensionIndex()
     {
         // Arrange

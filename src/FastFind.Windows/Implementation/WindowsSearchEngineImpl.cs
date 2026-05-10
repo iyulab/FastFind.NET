@@ -24,7 +24,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     // .NET 10: Enhanced concurrent collections and performance monitoring
     private readonly ConcurrentDictionary<string, SearchStatistics> _searchStats = new();
     private readonly object _statisticsLock = new();
-    private readonly CancellationTokenSource _lifecycleCancellationSource = new();
+    // Engine lifetime CTS — cancelled only on Dispose, drives _fileChangeProcessingTask
+    private readonly CancellationTokenSource _engineLifetimeCts = new();
+    // Per-run CTS — replaced on each StartIndexingAsync, cancelled on StopIndexingAsync
+    private CancellationTokenSource? _runCts;
+    private readonly object _runLock = new();
 
     // .NET 10: Channel-based high-performance communication
     private readonly Channel<FileChangeEventArgs> _fileChangeChannel;
@@ -73,8 +77,8 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         // .NET 10: Object pooling for better memory management
         _listPool = new SimpleObjectPool<List<FileItem>>(() => new List<FileItem>(), list => list.Clear());
 
-        // Start file change processing task
-        _fileChangeProcessingTask = ProcessFileChangesAsync(_lifecycleCancellationSource.Token);
+        // Start file change processing task (tied to engine lifetime, not per-run CTS)
+        _fileChangeProcessingTask = ProcessFileChangesAsync(_engineLifetimeCts.Token);
 
         _logger.LogInformation("WindowsSearchEngineImpl initialized with .NET 10 optimizations");
     }
@@ -124,10 +128,22 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         _currentIndexingOptions = options;
 
+        // Create a fresh per-run CTS so Stop/Start cycles don't inherit a cancelled token
+        CancellationTokenSource runCts;
+        lock (_runLock)
+        {
+            _runCts?.Dispose();
+            _runCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _engineLifetimeCts.Token);
+            runCts = _runCts;
+        }
+
+        // Restart the file change processing task if it completed (e.g., after a previous stop)
+        if (_fileChangeProcessingTask == null || _fileChangeProcessingTask.IsCompleted)
+            _fileChangeProcessingTask = ProcessFileChangesAsync(_engineLifetimeCts.Token);
+
         // .NET 10: Enhanced cancellation token linking with timeout
         var indexingCts = new CancellationTokenSource(_options.FileOperationTimeout);
-        var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, _lifecycleCancellationSource.Token, indexingCts.Token);
+        var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(runCts.Token, indexingCts.Token);
 
         _indexingTask = Task.Run(async () =>
         {
@@ -177,6 +193,13 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
+        // Always cancel the current run CTS regardless of IsIndexing/IsMonitoring state
+        lock (_runLock)
+        {
+            try { _runCts?.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
         if (!IsIndexing && !IsMonitoring)
         {
             _logger.LogDebug("No indexing or monitoring operation is currently running");
@@ -184,15 +207,6 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         }
 
         _logger.LogInformation("Stopping indexing and monitoring operations...");
-
-        try
-        {
-            _lifecycleCancellationSource.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already disposed, which is fine
-        }
 
         // .NET 10: Enhanced task completion with timeout and graceful shutdown
         var stopTasks = new List<Task>();
@@ -724,15 +738,18 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         {
             _logger.LogDebug("File system monitoring cancelled");
         }
+        catch (ChannelClosedException)
+        {
+            // Channel is closed during engine disposal — treat as normal shutdown
+            _logger.LogDebug("File change channel closed, monitoring stopping");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Enhanced file system monitoring failed");
         }
-        finally
-        {
-            // Complete the channel when monitoring stops
-            _fileChangeWriter.TryComplete();
-        }
+        // Note: do NOT complete the channel here — the channel outlives individual monitoring
+        // runs and must remain open for subsequent StartIndexingAsync calls. Only Dispose()
+        // completes the channel.
     }
 
     private async Task ProcessFileChangeAsync(FileChangeEventArgs change, CancellationToken cancellationToken)
@@ -812,17 +829,18 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         _disposed = true;
 
-        try
-        {
-            // Complete the file change channel
-            _fileChangeWriter.TryComplete();
+        // Complete channel first so the processing task can drain remaining items
+        _fileChangeWriter.TryComplete();
 
-            // Cancel all operations first
-            _lifecycleCancellationSource.Cancel();
-        }
-        catch (ObjectDisposedException)
+        // Cancel engine lifetime CTS to stop _fileChangeProcessingTask
+        try { _engineLifetimeCts.Cancel(); }
+        catch (ObjectDisposedException) { }
+
+        // Cancel the current run to stop indexing/monitoring tasks
+        lock (_runLock)
         {
-            // Already disposed, continue with cleanup
+            try { _runCts?.Cancel(); }
+            catch (ObjectDisposedException) { }
         }
 
         // .NET 10: Enhanced disposal with better timeout handling
@@ -862,7 +880,12 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         // Dispose resources
         try
         {
-            _lifecycleCancellationSource.Dispose();
+            _engineLifetimeCts.Dispose();
+            lock (_runLock)
+            {
+                _runCts?.Dispose();
+                _runCts = null;
+            }
             _fileSystemProvider.Dispose();
             _searchIndex.Dispose();
             _listPool.Dispose();
