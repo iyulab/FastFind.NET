@@ -58,6 +58,13 @@ public class IndexingOptions
     public int? MaxDepth { get; set; }
 
     /// <summary>
+    /// Maximum number of files to index (null for no limit).
+    /// When the limit is reached, indexing stops and an IndexingPhase.CapReached event is raised.
+    /// Files beyond the cap will not appear in search results.
+    /// </summary>
+    public int? MaxFileCount { get; set; }
+
+    /// <summary>
     /// Whether to follow symbolic links and junctions
     /// </summary>
     public bool FollowSymlinks { get; set; } = false;
@@ -139,6 +146,11 @@ public class IndexingOptions
         if (MaxDepth.HasValue && MaxDepth.Value <= 0)
         {
             return (false, "Maximum depth must be a positive number");
+        }
+
+        if (MaxFileCount.HasValue && MaxFileCount.Value <= 0)
+        {
+            return (false, "MaxFileCount must be a positive number");
         }
 
         return (true, null);

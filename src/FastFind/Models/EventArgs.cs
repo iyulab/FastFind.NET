@@ -253,6 +253,11 @@ public enum IndexingPhase
     Completed,
 
     /// <summary>
+    /// Indexing stopped because the maximum file count (IndexingOptions.MaxFileCount) was reached
+    /// </summary>
+    CapReached,
+
+    /// <summary>
     /// Indexing process failed
     /// </summary>
     Failed
