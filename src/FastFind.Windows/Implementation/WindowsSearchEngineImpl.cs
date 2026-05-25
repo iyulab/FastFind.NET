@@ -601,6 +601,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         var stopwatch = Stopwatch.StartNew();
         var processedFiles = 0L;
         var batchSize = Math.Min(options.BatchSize, _options.MaxConcurrentOperations * 50);
+        var capReached = false;
 
         // .NET 10: Use object pooling for batch processing
         var batch = _listPool.Get();
@@ -621,6 +622,12 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
                 batch.Add(fileItem);
                 processedFiles++;
+
+                if (options.MaxFileCount.HasValue && processedFiles >= options.MaxFileCount.Value)
+                {
+                    capReached = true;
+                    break;
+                }
 
                 // Process in adaptive batches for better performance
                 if (batch.Count >= batchSize)
@@ -656,16 +663,29 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
             stopwatch.Stop();
 
-            _logger.LogInformation("Enhanced indexing completed: {ProcessedFiles} files in {ElapsedMs}ms",
-                processedFiles, stopwatch.ElapsedMilliseconds);
+            if (capReached)
+            {
+                _logger.LogWarning(
+                    "Indexing cap reached: {ProcessedFiles} files indexed (MaxFileCount={MaxFileCount}). Files beyond the cap are not indexed.",
+                    processedFiles, options.MaxFileCount);
 
-            IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
-                string.Join(", ", locations), processedFiles, processedFiles, stopwatch.Elapsed,
-                "Completed", IndexingPhase.Completed));
+                IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
+                    string.Join(", ", locations), processedFiles, processedFiles, stopwatch.Elapsed,
+                    "CapReached", IndexingPhase.CapReached));
+            }
+            else
+            {
+                _logger.LogInformation("Enhanced indexing completed: {ProcessedFiles} files in {ElapsedMs}ms",
+                    processedFiles, stopwatch.ElapsedMilliseconds);
+
+                IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
+                    string.Join(", ", locations), processedFiles, processedFiles, stopwatch.Elapsed,
+                    "Completed", IndexingPhase.Completed));
+            }
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("Indexing cancelled after processing {ProcessedFiles} files", processedFiles);
+            _logger.LogDebug("Indexing stopped: {ProcessedFiles} files processed (cancellation requested)", processedFiles);
         }
         catch (Exception ex)
         {
