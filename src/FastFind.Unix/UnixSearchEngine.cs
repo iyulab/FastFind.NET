@@ -129,6 +129,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
             _index.Clear();
             Interlocked.Exchange(ref _totalIndexedFiles, 0);
             long processedFiles = 0;
+            bool capReached = false;
 
             OnIndexingProgressChanged(new IndexingProgressEventArgs(
                 string.Join(", ", locations),
@@ -146,6 +147,12 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 var count = Interlocked.Increment(ref processedFiles);
                 Interlocked.Exchange(ref _totalIndexedFiles, count);
 
+                if (options.MaxFileCount.HasValue && count >= options.MaxFileCount.Value)
+                {
+                    capReached = true;
+                    break;
+                }
+
                 // Fire progress event periodically
                 if (count % 10_000 == 0)
                 {
@@ -161,26 +168,42 @@ internal class UnixSearchEngineImpl : ISearchEngine
             stopwatch.Stop();
             _lastIndexingTime = stopwatch.Elapsed;
 
-            OnIndexingProgressChanged(new IndexingProgressEventArgs(
-                string.Join(", ", locations),
-                processedFiles, processedFiles,
-                stopwatch.Elapsed,
-                string.Empty,
-                IndexingPhase.Completed));
-
-            _logger.LogInformation(
-                "Indexing completed: {FileCount} items indexed in {Duration}",
-                processedFiles, stopwatch.Elapsed);
-
-            // Start monitoring if requested
-            if (options.EnableMonitoring)
+            if (capReached)
             {
-                await StartMonitoringAsync(locations, linkedToken).ConfigureAwait(false);
+                _logger.LogWarning(
+                    "Indexing cap reached: {FileCount} files indexed (MaxFileCount={MaxFileCount}). Files beyond the cap are not indexed.",
+                    processedFiles, options.MaxFileCount);
+
+                OnIndexingProgressChanged(new IndexingProgressEventArgs(
+                    string.Join(", ", locations),
+                    processedFiles, processedFiles,
+                    stopwatch.Elapsed,
+                    string.Empty,
+                    IndexingPhase.CapReached));
+            }
+            else
+            {
+                OnIndexingProgressChanged(new IndexingProgressEventArgs(
+                    string.Join(", ", locations),
+                    processedFiles, processedFiles,
+                    stopwatch.Elapsed,
+                    string.Empty,
+                    IndexingPhase.Completed));
+
+                _logger.LogInformation(
+                    "Indexing completed: {FileCount} items indexed in {Duration}",
+                    processedFiles, stopwatch.Elapsed);
+
+                // Start monitoring if requested
+                if (options.EnableMonitoring)
+                {
+                    await StartMonitoringAsync(locations, linkedToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("Indexing was cancelled");
+            _logger.LogDebug("Indexing stopped (cancellation requested)");
         }
         catch (Exception ex)
         {
