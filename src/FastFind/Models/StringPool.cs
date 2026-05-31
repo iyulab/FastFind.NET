@@ -145,6 +145,7 @@ public static class StringPool
 
     /// <summary>
     /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 10 Span 최적화
+    /// 소문자화는 dedup 키에만 사용하고, 저장 값은 원본 대소문자를 보존한다.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternPath(string path)
@@ -152,19 +153,20 @@ public static class StringPool
         if (string.IsNullOrEmpty(path))
             return 0;
 
-        // .NET 10: Span을 사용한 고성능 경로 정규화
-        Span<char> buffer = stackalloc char[path.Length];
+        // dedup 키: 소문자 정규화 (중복 제거율 극대화)
+        Span<char> keyBuffer = stackalloc char[path.Length];
         var span = path.AsSpan();
-
-        // 빠른 정규화: '/'를 '\\'로 변환하고 소문자화
         for (int i = 0; i < span.Length; i++)
         {
             var c = span[i];
-            buffer[i] = c == '/' ? '\\' : char.ToLowerInvariant(c);
+            keyBuffer[i] = c == '/' ? '\\' : char.ToLowerInvariant(c);
         }
+        var lowercaseKey = new string(keyBuffer);
 
-        var normalizedPath = new string(buffer);
-        return _pathPool.GetOrAdd(normalizedPath, Intern);
+        // 저장 값: '/' → '\\' 정규화만 수행하고 원본 대소문자 보존
+        var preservedPath = path.Contains('/') ? path.Replace('/', '\\') : path;
+
+        return _pathPool.GetOrAdd(lowercaseKey, _ => Intern(preservedPath));
     }
 
     /// <summary>
