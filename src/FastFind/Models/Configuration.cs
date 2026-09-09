@@ -106,8 +106,12 @@ public record PersistenceConfiguration
     public required string StoragePath { get; init; }
 
     /// <summary>
-    /// Whether to use WAL (Write-Ahead Logging) mode for SQLite
+    /// Whether to use WAL (Write-Ahead Logging) mode for SQLite.
     /// </summary>
+    /// <remarks>
+    /// WAL is a persistent property of the database file. It also fixes the page size: once a
+    /// database is in WAL mode, <see cref="PageSize"/> can no longer be changed.
+    /// </remarks>
     public bool UseWAL { get; init; } = true;
 
     /// <summary>
@@ -116,32 +120,48 @@ public record PersistenceConfiguration
     public bool EnableFullTextSearch { get; init; } = true;
 
     /// <summary>
-    /// Cache size in pages (for SQLite)
+    /// Page-cache size in <b>KiB</b> (for SQLite). The default 10,000 is ~9.8 MiB.
     /// </summary>
+    /// <remarks>
+    /// Emitted as <c>PRAGMA cache_size = -{value}</c>; SQLite reads the negative form as a size in
+    /// KiB rather than a page count, so this is not multiplied by <see cref="PageSize"/>. The cache
+    /// is native memory held per connection, so it does not bound managed allocations.
+    /// </remarks>
     public int CacheSize { get; init; } = 10_000;
 
     /// <summary>
-    /// Whether to automatically sync changes to persistence
+    /// Reserved. Not currently honoured by any provider.
     /// </summary>
+    [Obsolete("AutoSync is not implemented: no provider reads it. Writes reach the store when the calling method completes.")]
     public bool AutoSync { get; init; } = true;
 
     /// <summary>
-    /// Interval for auto-sync operations (if enabled)
+    /// Reserved. Not currently honoured by any provider.
     /// </summary>
+    [Obsolete("SyncInterval is not implemented: no provider reads it.")]
     public TimeSpan SyncInterval { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Page size for the database (4096 is optimal for most SSDs)
+    /// Database page size in bytes (4096 is optimal for most SSDs).
     /// </summary>
+    /// <remarks>
+    /// A persistent property of the database file, applied only when the file is created. It has no
+    /// effect on an existing database — changing it there requires a <c>VACUUM</c>.
+    /// </remarks>
     public int PageSize { get; init; } = 4096;
 
     /// <summary>
-    /// Whether to use mmap for faster reads
+    /// Whether to memory-map the database for faster reads.
     /// </summary>
+    /// <remarks>
+    /// Mapped pages are file-backed and count towards the process working set as they are touched,
+    /// but they are not managed heap. A large working set with mmap enabled is expected.
+    /// </remarks>
     public bool UseMmap { get; init; } = true;
 
     /// <summary>
-    /// Maximum mmap size in bytes (0 for default)
+    /// Maximum mmap window in bytes. 0 means the provider default, which is <b>256 MiB</b> — not
+    /// "no mapping"; set <see cref="UseMmap"/> to <c>false</c> for that.
     /// </summary>
     public long MmapSize { get; init; } = 0;
 

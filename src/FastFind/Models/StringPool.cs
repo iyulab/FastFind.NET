@@ -2,53 +2,80 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Buffers;
-using System.Runtime;
-using System.Threading;
 
 namespace FastFind.Models;
 
 /// <summary>
-/// Ultra-high performance string interning pool for massive memory savings
-/// Thread-safe and lock-free for maximum performance with .NET 10 optimizations
+/// High-performance string interning pool.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The pool holds a single mapping per unique string: one dictionary entry for the
+/// string-to-id direction, and one slot in a growable array for the id-to-string direction.
+/// Ids are dense and assigned in allocation order, which makes reverse lookup an array index
+/// rather than a hash lookup.
+/// </para>
+/// <para>
+/// Deduplication is exact (ordinal). Case is never folded into the key: two paths that differ
+/// only in case are distinct entries, because on case-sensitive file systems they are distinct
+/// files and folding them would make one of them unreachable through <see cref="Get"/>.
+/// </para>
+/// <para>
+/// Interned ids remain valid for the lifetime of the process. Entries are never evicted, since
+/// any live value holding an id would otherwise silently resolve to an empty string.
+/// </para>
+/// </remarks>
 public static class StringPool
 {
-    // 계층화된 풀 - 자주 사용되는 문자열을 빠르게 접근
-    private static readonly ConcurrentDictionary<string, int> _stringToId = new();
-    private static readonly ConcurrentDictionary<int, string> _idToString = new();
-
-    // 경로별 최적화된 풀들 - .NET 10 개선된 초기 용량
-    private static readonly ConcurrentDictionary<string, int> _pathPool = new(Environment.ProcessorCount, 16384);
-    private static readonly ConcurrentDictionary<string, int> _extensionPool = new(Environment.ProcessorCount, 512);
-    private static readonly ConcurrentDictionary<string, int> _namePool = new(Environment.ProcessorCount, 8192);
-
-    // .NET 9+: Cached AlternateLookup for zero-allocation Span-based lookups
-    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>>? _namePoolLookup;
-
-    // 성능 통계 - object lock 사용 (.NET 10에서 Lock이 없는 경우 대비)
-    private static readonly Lock _statsLock = new();
-    private static long _internedCount = 0;
-    private static long _memoryBytes = 0;
-    private static int _nextId = 1;
-
-    // Hit/miss tracking for cache ratio statistics
-    private static long _hitCount = 0;
-    private static long _missCount = 0;
-
-    // .NET 10 최적화: SearchValues for fast extension lookup
-    private static readonly System.Buffers.SearchValues<char> _pathSeparators =
-        SearchValues.Create(['/', '\\']);
+    /// <summary>Id reserved for the empty string.</summary>
+    private const int EmptyId = 0;
 
     /// <summary>
-    /// 문자열을 인터닝하고 고유 ID 반환
+    /// Approximate per-entry overhead beyond the character data: string object header and
+    /// padding, one dictionary node, and one array slot.
+    /// </summary>
+    private const int PerEntryOverheadBytes = 70;
+
+    private const int InitialCapacity = 1024;
+
+    private static readonly ConcurrentDictionary<string, int> _stringToId = new(StringComparer.Ordinal);
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>>? _spanLookup;
+
+    // Reverse mapping: _values[id] is the string interned under that id. Index 0 is unused.
+    private static string?[] _values = new string?[InitialCapacity];
+    private static readonly Lock _valuesLock = new();
+
+    private static readonly Lock _statsLock = new();
+    private static long _internedCount;
+    private static long _memoryBytes;
+    private static int _nextId;
+
+    // Per-kind counters reported by GetStats, incremented once per newly interned string.
+    private static int _pathCount;
+    private static int _extensionCount;
+    private static int _nameCount;
+
+    private static long _hitCount;
+    private static long _missCount;
+
+    private static readonly SearchValues<char> _pathSeparators = SearchValues.Create(['/', '\\']);
+
+    /// <summary>
+    /// Interns a string and returns its id. Repeated calls with an equal string return the same id.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int Intern(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return 0; // 특별한 빈 문자열 ID
+    public static int Intern(string value) => Intern(value, out _);
 
-        // 이미 인터닝된 문자열인지 확인 (O(1) 성능)
+    /// <summary>
+    /// Interns a string, also reporting whether this call was the one that created the entry.
+    /// </summary>
+    private static int Intern(string value, out bool created)
+    {
+        created = false;
+
+        if (string.IsNullOrEmpty(value))
+            return EmptyId;
+
         if (_stringToId.TryGetValue(value, out var existingId))
         {
             Interlocked.Increment(ref _hitCount);
@@ -57,86 +84,90 @@ public static class StringPool
 
         Interlocked.Increment(ref _missCount);
 
-        // 새로운 ID 생성 및 양방향 매핑
         var newId = Interlocked.Increment(ref _nextId);
 
-        // 경합 상황에서 중복 생성 방지
+        // Publish the value before the id becomes reachable, so an id handed out by the
+        // dictionary always resolves. A lost race leaves an unreferenced slot, which is harmless.
+        StoreValue(newId, value);
+
         var actualId = _stringToId.GetOrAdd(value, newId);
         if (actualId == newId)
         {
-            // 새로 추가된 경우에만 역방향 매핑 추가
-            _idToString.TryAdd(newId, value);
-
-            // 통계 업데이트
+            created = true;
             Interlocked.Increment(ref _internedCount);
-            Interlocked.Add(ref _memoryBytes, value.Length * 2); // char = 2 bytes
+            Interlocked.Add(ref _memoryBytes, (value.Length * 2) + PerEntryOverheadBytes);
         }
 
         return actualId;
     }
 
     /// <summary>
-    /// ID로부터 문자열 복원
+    /// Resolves an id back to its string. Returns <see cref="string.Empty"/> for id 0 or an
+    /// unknown id.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Get(int id)
     {
-        if (id == 0) return string.Empty;
+        if (id <= EmptyId) return string.Empty;
 
-        return _idToString.TryGetValue(id, out var value) ? value : string.Empty;
+        var values = Volatile.Read(ref _values);
+        if ((uint)id < (uint)values.Length)
+        {
+            var value = Volatile.Read(ref values[id]);
+            if (value is not null) return value;
+        }
+
+        // Rare: the array grew between the id being assigned and this read. Re-read under the
+        // growth lock, which is the only writer of the array reference.
+        lock (_valuesLock)
+        {
+            values = _values;
+            return (uint)id < (uint)values.Length ? values[id] ?? string.Empty : string.Empty;
+        }
     }
 
     /// <summary>
-    /// ID로부터 문자열 복원 (Get 메서드의 별칭)
+    /// Alias for <see cref="Get"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string GetString(int id) => Get(id);
 
     /// <summary>
-    /// Phase 2.2: Zero-allocation span access to interned string.
-    /// Returns a ReadOnlySpan view of the stored string without allocation.
+    /// Zero-allocation span view over an interned string.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ReadOnlySpan<char> GetSpan(int id)
-    {
-        if (id == 0) return ReadOnlySpan<char>.Empty;
-
-        return _idToString.TryGetValue(id, out var value)
-            ? value.AsSpan()
-            : ReadOnlySpan<char>.Empty;
-    }
+    public static ReadOnlySpan<char> GetSpan(int id) => Get(id).AsSpan();
 
     /// <summary>
-    /// Phase 2.2: Zero-allocation memory access for async scenarios.
-    /// Returns a ReadOnlyMemory view of the stored string.
+    /// Zero-allocation memory view over an interned string, for async scenarios.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ReadOnlyMemory<char> GetMemory(int id)
-    {
-        if (id == 0) return ReadOnlyMemory<char>.Empty;
-
-        return _idToString.TryGetValue(id, out var value)
-            ? value.AsMemory()
-            : ReadOnlyMemory<char>.Empty;
-    }
+    public static ReadOnlyMemory<char> GetMemory(int id) => Get(id).AsMemory();
 
     /// <summary>
-    /// Phase 2.2: Try to get span without exception on missing ID.
-    /// More efficient than GetSpan when ID validity is uncertain.
+    /// Span view over an interned string, reporting whether the id was known.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryGetSpan(int id, out ReadOnlySpan<char> span)
     {
-        if (id == 0)
+        if (id == EmptyId)
         {
             span = ReadOnlySpan<char>.Empty;
-            return true; // ID 0 is valid (empty string)
+            return true; // id 0 is a valid id for the empty string
         }
 
-        if (_idToString.TryGetValue(id, out var value))
+        if (id > EmptyId)
         {
-            span = value.AsSpan();
-            return true;
+            var values = Volatile.Read(ref _values);
+            if ((uint)id < (uint)values.Length)
+            {
+                var value = Volatile.Read(ref values[id]);
+                if (value is not null)
+                {
+                    span = value.AsSpan();
+                    return true;
+                }
+            }
         }
 
         span = ReadOnlySpan<char>.Empty;
@@ -144,134 +175,97 @@ public static class StringPool
     }
 
     /// <summary>
-    /// 경로 특화 인터닝 (중복 제거율 극대화) - .NET 10 Span 최적화
-    /// 소문자화는 dedup 키에만 사용하고, 저장 값은 원본 대소문자를 보존한다.
+    /// Interns a file-system path.
     /// </summary>
+    /// <remarks>
+    /// On Windows, forward slashes are folded to backslashes because both are accepted as
+    /// separators and folding improves deduplication. On other platforms a backslash is an
+    /// ordinary filename character, so the path is interned verbatim. Case is always preserved.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternPath(string path)
     {
         if (string.IsNullOrEmpty(path))
-            return 0;
+            return EmptyId;
 
-        // dedup 키: 소문자 정규화 (중복 제거율 극대화)
-        Span<char> keyBuffer = stackalloc char[path.Length];
-        var span = path.AsSpan();
-        for (int i = 0; i < span.Length; i++)
-        {
-            var c = span[i];
-            keyBuffer[i] = c == '/' ? '\\' : char.ToLowerInvariant(c);
-        }
-        var lowercaseKey = new string(keyBuffer);
+        // Allocates only when the path actually contains a foreign separator.
+        if (OperatingSystem.IsWindows() && path.Contains('/'))
+            path = path.Replace('/', '\\');
 
-        // 저장 값: '/' → '\\' 정규화만 수행하고 원본 대소문자 보존
-        var preservedPath = path.Contains('/') ? path.Replace('/', '\\') : path;
-
-        return _pathPool.GetOrAdd(lowercaseKey, _ => Intern(preservedPath));
+        return InternCounted(path, ref _pathCount);
     }
 
     /// <summary>
-    /// 확장자 특화 인터닝 - .NET 10 최적화
+    /// Interns a file extension, normalized to lower case so that extension comparisons stay
+    /// case-insensitive.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternExtension(string extension)
     {
         if (string.IsNullOrEmpty(extension))
-            return 0;
+            return EmptyId;
 
-        // .NET 10: string.Create for allocation optimization
-        var normalized = string.Create(extension.Length, extension, static (span, ext) =>
+        // Allocates only when the extension is not already lower case.
+        if (!IsLowerInvariant(extension))
         {
-            ext.AsSpan().ToLowerInvariant(span);
-        });
+            extension = string.Create(extension.Length, extension, static (span, ext) =>
+            {
+                ext.AsSpan().ToLowerInvariant(span);
+            });
+        }
 
-        return _extensionPool.GetOrAdd(normalized, Intern);
+        return InternCounted(extension, ref _extensionCount);
     }
 
     /// <summary>
-    /// 파일명 특화 인터닝
+    /// Interns a file name. Case is preserved.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternName(string name)
     {
         if (string.IsNullOrEmpty(name))
-            return 0;
+            return EmptyId;
 
-        return _namePool.GetOrAdd(name, Intern);
-    }
-
-    // Lock for thread-safe AlternateLookup initialization
-    private static readonly Lock _lookupLock = new();
-
-    /// <summary>
-    /// Gets the cached AlternateLookup for zero-allocation span lookups.
-    /// Thread-safe initialization with locking to handle concurrent Reset() calls.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> GetNamePoolLookup()
-    {
-        var lookup = _namePoolLookup;
-        if (lookup.HasValue)
-            return lookup.Value;
-
-        lock (_lookupLock)
-        {
-            lookup = _namePoolLookup;
-            if (lookup.HasValue)
-                return lookup.Value;
-
-            var newLookup = _namePool.GetAlternateLookup<ReadOnlySpan<char>>();
-            _namePoolLookup = newLookup;
-            return newLookup;
-        }
+        return InternCounted(name, ref _nameCount);
     }
 
     /// <summary>
-    /// .NET 9+: Zero-allocation Span-based interning using AlternateLookup.
-    /// Optimized for MFT parsing where filenames are received as char spans.
-    /// Thread-safe: guaranteed to return consistent ID for the same string content.
+    /// Interns a string given as a span, allocating only when it is not already pooled.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternFromSpan(ReadOnlySpan<char> value)
     {
         if (value.IsEmpty)
-            return 0;
+            return EmptyId;
 
-        // Try to find existing entry using cached AlternateLookup (zero-allocation on cache hit)
-        var lookup = GetNamePoolLookup();
+        var lookup = GetSpanLookup();
         if (lookup.TryGetValue(value, out var existingId))
+        {
+            Interlocked.Increment(ref _hitCount);
             return existingId;
+        }
 
-        // Cache miss: create string and intern in main pool first
-        var stringValue = new string(value);
-
-        // Use the main Intern to get a consistent ID (thread-safe)
-        var id = Intern(stringValue);
-
-        // Add to namePool for future span lookups (TryAdd is safe for concurrent calls)
-        _namePool.TryAdd(stringValue, id);
-
-        return id;
+        return Intern(new string(value));
     }
 
     /// <summary>
-    /// .NET 9+: Try to get ID for existing interned string without allocation.
-    /// Returns false if the string has not been interned yet.
+    /// Looks up the id of an already-interned string without allocating. Returns false when the
+    /// string has not been interned.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryGetFromSpan(ReadOnlySpan<char> value, out int id)
     {
         if (value.IsEmpty)
         {
-            id = 0;
-            return true; // Empty is always "found" as ID 0
+            id = EmptyId;
+            return true; // empty is always "found" as id 0
         }
 
-        var lookup = GetNamePoolLookup();
-        return lookup.TryGetValue(value, out id);
+        return GetSpanLookup().TryGetValue(value, out id);
     }
 
     /// <summary>
-    /// .NET 10: 고성능 경로 파싱을 위한 유틸리티
+    /// Splits a full path and interns its directory, name and extension in one pass.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static (int directoryId, int nameId, int extensionId) InternPathComponents(string fullPath)
@@ -296,11 +290,9 @@ public static class StringPool
             nameSpan = span;
         }
 
-        // 확장자 찾기
         var lastDot = nameSpan.LastIndexOf('.');
         ReadOnlySpan<char> extensionSpan = lastDot >= 0 ? nameSpan[lastDot..] : ReadOnlySpan<char>.Empty;
 
-        // 한 번에 모든 컴포넌트 인터닝
         var directoryId = directorySpan.IsEmpty ? 0 : InternPath(new string(directorySpan));
         var nameId = nameSpan.IsEmpty ? 0 : InternName(new string(nameSpan));
         var extensionId = extensionSpan.IsEmpty ? 0 : InternExtension(new string(extensionSpan));
@@ -309,135 +301,172 @@ public static class StringPool
     }
 
     /// <summary>
-    /// 메모리 사용량 통계 - .NET 10 Lock 사용
+    /// Current pool statistics.
     /// </summary>
     public static StringPoolStats GetStats()
     {
         return new StringPoolStats(
             Interlocked.Read(ref _internedCount),
             Interlocked.Read(ref _memoryBytes),
-            _pathPool.Count,
-            _extensionPool.Count,
-            _namePool.Count,
+            Volatile.Read(ref _pathCount),
+            Volatile.Read(ref _extensionCount),
+            Volatile.Read(ref _nameCount),
             _stringToId.Count
         );
     }
 
     /// <summary>
-    /// 🧹 메모리 정리 (주기적 호출 권장) - .NET 10 개선된 알고리즘
+    /// No longer removes entries.
     /// </summary>
+    /// <remarks>
+    /// Evicting pooled strings invalidates ids that live values still hold, after which every
+    /// affected path, name and extension silently resolves to an empty string. There is no way to
+    /// evict safely while ids are held by callers, so this method does nothing. Use
+    /// <see cref="Reset"/> when no interned value is still in use.
+    /// </remarks>
+    [Obsolete("Cleanup no longer evicts entries: eviction invalidates ids held by live values. Use Reset() when no interned value is still in use.")]
     public static void Cleanup()
     {
-        lock (_statsLock)
-        {
-            var totalMemory = GC.GetTotalMemory(false);
-            var shouldAggressiveClean = totalMemory > 1_000_000_000; // 1GB 이상
-
-            // .NET 10: 더 효율적인 정리 전략
-            if (_stringToId.Count > (shouldAggressiveClean ? 50000 : 100000))
-            {
-                var removalCount = shouldAggressiveClean ? 25000 : 10000;
-                var keysToRemove = _stringToId.Take(removalCount).Select(kvp => kvp.Key).ToArray();
-
-                Parallel.ForEach(keysToRemove, key =>
-                {
-                    if (_stringToId.TryRemove(key, out var id))
-                    {
-                        _idToString.TryRemove(id, out _);
-                        // Also remove from specialized pools to maintain consistency
-                        _pathPool.TryRemove(key, out _);
-                        _extensionPool.TryRemove(key, out _);
-                        _namePool.TryRemove(key, out _);
-                        Interlocked.Decrement(ref _internedCount);
-                        Interlocked.Add(ref _memoryBytes, -(key.Length * 2));
-                    }
-                });
-            }
-
-            // Specialized pools cleanup - only clear if main pool was also cleaned
-            // This maintains consistency between pools
-            if (_stringToId.Count > (shouldAggressiveClean ? 50000 : 100000))
-            {
-                if (_pathPool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                    _pathPool.Clear();
-                if (_extensionPool.Count > (shouldAggressiveClean ? 500 : 1000))
-                    _extensionPool.Clear();
-                if (_namePool.Count > (shouldAggressiveClean ? 25000 : 50000))
-                    _namePool.Clear();
-            }
-        }
     }
 
     /// <summary>
-    /// .NET 10: 메모리 압축 최적화
+    /// Forces a compacting garbage collection.
     /// </summary>
     public static void CompactMemory()
     {
-        // 강제 가비지 컬렉션으로 메모리 압축
         GC.Collect(2, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Aggressive, true, true);
-
-        // 추가 압축 시도
-        GC.Collect();
     }
 
     /// <summary>
-    /// 전체 풀 초기화 (테스트용)
+    /// Clears the pool. Every previously issued id becomes invalid, so this is only safe when no
+    /// interned value is still in use.
     /// </summary>
     public static void Reset()
     {
         lock (_statsLock)
         {
-            // Invalidate cached lookup FIRST under its own lock to prevent
-            // GetNamePoolLookup() from returning a stale reference while we clear pools
-            lock (_lookupLock)
+            lock (_valuesLock)
             {
-                _namePoolLookup = null;
+                _spanLookup = null;
+                _stringToId.Clear();
+                _values = new string?[InitialCapacity];
             }
-
-            _stringToId.Clear();
-            _idToString.Clear();
-            _pathPool.Clear();
-            _extensionPool.Clear();
-            _namePool.Clear();
 
             Interlocked.Exchange(ref _internedCount, 0);
             Interlocked.Exchange(ref _memoryBytes, 0);
-            Interlocked.Exchange(ref _nextId, 1);
+            Interlocked.Exchange(ref _nextId, 0);
             Interlocked.Exchange(ref _hitCount, 0);
             Interlocked.Exchange(ref _missCount, 0);
+            Volatile.Write(ref _pathCount, 0);
+            Volatile.Write(ref _extensionCount, 0);
+            Volatile.Write(ref _nameCount, 0);
         }
     }
 
     /// <summary>
-    /// .NET 10: 고급 통계 정보
+    /// Pool statistics together with process-level GC counters.
     /// </summary>
     public static StringPoolAdvancedStats GetAdvancedStats()
     {
         var basicStats = GetStats();
-        var gen0Collections = GC.CollectionCount(0);
-        var gen1Collections = GC.CollectionCount(1);
-        var gen2Collections = GC.CollectionCount(2);
 
         return new StringPoolAdvancedStats(
             basicStats,
-            gen0Collections,
-            gen1Collections,
-            gen2Collections,
+            GC.CollectionCount(0),
+            GC.CollectionCount(1),
+            GC.CollectionCount(2),
             GC.GetTotalMemory(false),
             CalculateFragmentationRatio(),
             CalculateHitRatio()
         );
     }
 
+    /// <summary>
+    /// Interns a value and attributes a newly created entry to one of the per-kind counters.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int InternCounted(string value, ref int kindCounter)
+    {
+        var id = Intern(value, out var created);
+
+        if (created)
+            Interlocked.Increment(ref kindCounter);
+
+        return id;
+    }
+
+    /// <summary>
+    /// Writes a value into the reverse-mapping array, growing it when needed.
+    /// </summary>
+    private static void StoreValue(int id, string value)
+    {
+        var values = Volatile.Read(ref _values);
+
+        if ((uint)id >= (uint)values.Length)
+        {
+            lock (_valuesLock)
+            {
+                values = _values;
+                if ((uint)id >= (uint)values.Length)
+                {
+                    var capacity = values.Length;
+                    while (capacity <= id) capacity *= 2;
+
+                    var grown = new string?[capacity];
+                    Array.Copy(values, grown, values.Length);
+                    Volatile.Write(ref _values, grown);
+                    values = grown;
+                }
+
+                Volatile.Write(ref values[id], value);
+                return;
+            }
+        }
+
+        Volatile.Write(ref values[id], value);
+    }
+
+    /// <summary>
+    /// Cached alternate lookup, so span-keyed reads never allocate.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ConcurrentDictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> GetSpanLookup()
+    {
+        var lookup = _spanLookup;
+        if (lookup.HasValue)
+            return lookup.Value;
+
+        lock (_valuesLock)
+        {
+            lookup = _spanLookup;
+            if (lookup.HasValue)
+                return lookup.Value;
+
+            var created = _stringToId.GetAlternateLookup<ReadOnlySpan<char>>();
+            _spanLookup = created;
+            return created;
+        }
+    }
+
+    private static bool IsLowerInvariant(string value)
+    {
+        foreach (var c in value)
+        {
+            if (char.IsUpper(c)) return false;
+        }
+
+        return true;
+    }
+
     private static double CalculateFragmentationRatio()
     {
-        var stats = GetStats();
-        if (stats.TotalPoolSize == 0) return 0;
+        var issued = Volatile.Read(ref _nextId);
+        if (issued == 0) return 0;
 
-        // 간단한 단편화 추정 (실제 사용 대비 할당된 슬롯)
-        return 1.0 - ((double)stats.InternedCount / stats.TotalPoolSize);
+        // Ids lost to concurrent insertion races leave unreferenced slots in the reverse array.
+        return 1.0 - ((double)Interlocked.Read(ref _internedCount) / issued);
     }
 
     private static double CalculateHitRatio()
@@ -445,35 +474,52 @@ public static class StringPool
         var hits = Interlocked.Read(ref _hitCount);
         var misses = Interlocked.Read(ref _missCount);
         var total = hits + misses;
+
         return total > 0 ? (double)hits / total : 0;
     }
 }
 
 /// <summary>
-/// StringPool 통계 정보
+/// StringPool statistics.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct StringPoolStats(long internedCount, long memoryUsageBytes, int pathPoolSize,
                                       int extensionPoolSize, int namePoolSize, int totalPoolSize)
 {
     public readonly long InternedCount = internedCount;
+
+    /// <summary>
+    /// Estimated retained bytes: character data plus per-entry object, dictionary and array
+    /// overhead. An estimate, not a measurement.
+    /// </summary>
     public readonly long MemoryUsageBytes = memoryUsageBytes;
+
+    /// <summary>Distinct strings interned through <see cref="StringPool.InternPath"/>.</summary>
     public readonly int PathPoolSize = pathPoolSize;
+
+    /// <summary>Distinct strings interned through <see cref="StringPool.InternExtension"/>.</summary>
     public readonly int ExtensionPoolSize = extensionPoolSize;
+
+    /// <summary>Distinct strings interned through <see cref="StringPool.InternName"/>.</summary>
     public readonly int NamePoolSize = namePoolSize;
+
+    /// <summary>Total distinct strings in the pool.</summary>
     public readonly int TotalPoolSize = totalPoolSize;
 
     public double MemoryUsageMB => MemoryUsageBytes / (1024.0 * 1024.0);
+
     public double AverageStringLength => InternedCount > 0 ? (double)MemoryUsageBytes / (InternedCount * 2) : 0;
 
     /// <summary>
-    /// 압축률 계산 (중복 제거로 인한 메모리 절약율)
+    /// Always 0: the pool stores one entry per distinct string, so there is no duplication left
+    /// to report here. Deduplication effectiveness is
+    /// <see cref="StringPoolAdvancedStats.HitRatio"/>.
     /// </summary>
     public double CompressionRatio => TotalPoolSize > 0 ? 1.0 - ((double)InternedCount / TotalPoolSize) : 0;
 }
 
 /// <summary>
-/// .NET 10: 고급 StringPool 통계
+/// StringPool statistics together with process-level GC counters.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct StringPoolAdvancedStats(StringPoolStats basicStats, int gen0Collections, int gen1Collections,

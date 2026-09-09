@@ -41,20 +41,83 @@ public class StringPoolTests
     }
     
     [Fact]
-    public void GetString_Should_Return_Normalized_String()
+    public void GetString_Should_Preserve_Original_Casing()
     {
         // Arrange
-        var originalPath = @"C:\Projects\FastFind\test.cs";
-        var expectedNormalized = @"c:\projects\fastfind\test.cs"; // InternPath normalizes to lowercase
+        var originalPath = @"C:\Projects\FastFind\Test.cs";
         var id = StringPool.InternPath(originalPath);
-        
+
         // Act
         var retrievedPath = StringPool.GetString(id);
-        
+
         // Assert
-        retrievedPath.Should().Be(expectedNormalized, "Retrieved string should match normalized path");
+        retrievedPath.Should().Be(originalPath, "Interning must not alter the casing of a path");
     }
-    
+
+    [Fact]
+    public void InternPath_Should_Not_Merge_Paths_Differing_Only_By_Case()
+    {
+        // Case-insensitive deduplication would make one of two distinct files on a
+        // case-sensitive file system unreachable through its own id.
+        var lower = @"C:\PoolCase\alpha.txt";
+        var upper = @"C:\PoolCase\ALPHA.TXT";
+
+        var lowerId = StringPool.InternPath(lower);
+        var upperId = StringPool.InternPath(upper);
+
+        upperId.Should().NotBe(lowerId, "paths differing only by case are distinct entries");
+        StringPool.GetString(lowerId).Should().Be(lower);
+        StringPool.GetString(upperId).Should().Be(upper);
+    }
+
+    [Fact]
+    public void InternPath_Should_Round_Trip_The_Platform_Separator()
+    {
+        // A backslash is an ordinary filename character outside Windows, so rewriting
+        // separators there would corrupt every path the Unix providers produce.
+        var path = OperatingSystem.IsWindows()
+            ? @"C:\PoolSep\dir\file.txt"
+            : "/pool-sep/dir/file.txt";
+
+        var retrieved = StringPool.GetString(StringPool.InternPath(path));
+
+        retrieved.Should().Be(path, "the interned path must be usable for I/O as-is");
+    }
+
+    [Fact]
+    public void InternPath_Should_Resolve_Every_Id_After_Reverse_Table_Growth()
+    {
+        // The reverse mapping grows by copying; ids handed out during growth must stay valid.
+        const int count = 5000;
+        var paths = new string[count];
+        var ids = new int[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            paths[i] = $@"C:\PoolGrowth\{{i:D5}}\file_{{i:D5}}.dat";
+            ids[i] = StringPool.InternPath(paths[i]);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            StringPool.GetString(ids[i]).Should().Be(paths[i], $"id {{ids[i]}} must still resolve");
+        }
+    }
+
+    [Fact]
+    public void Cleanup_Should_Not_Invalidate_Live_Ids()
+    {
+        // Eviction cannot be safe while callers hold ids, so Cleanup must be inert.
+        var path = @"C:\PoolCleanup\kept.txt";
+        var id = StringPool.InternPath(path);
+
+#pragma warning disable CS0618 // asserting the documented no-op behaviour
+        StringPool.Cleanup();
+#pragma warning restore CS0618
+
+        StringPool.GetString(id).Should().Be(path, "a live id must survive Cleanup");
+    }
+
     [Fact]
     public void InternPathComponents_Should_Process_Full_Path()
     {
@@ -79,7 +142,7 @@ public class StringPoolTests
     public void Memory_Usage_Should_Be_Efficient()
     {
         // Arrange
-        StringPool.Cleanup(); // Start with clean pool
+        StringPool.Reset(); // Start with clean pool
         var initialMemory = GC.GetTotalMemory(true);
         
         var testPaths = GenerateTestPaths(1000);
@@ -172,11 +235,10 @@ public class StringPoolTests
     [Fact]
     public void GetStats_Should_Return_Accurate_Information()
     {
-        // Arrange - Force complete cleanup
-        StringPool.Cleanup();
+        // Arrange - start from an empty pool
+        StringPool.Reset();
         GC.Collect(); // Force garbage collection
         GC.WaitForPendingFinalizers();
-        StringPool.Cleanup(); // Second cleanup after GC
         
         var testStrings = new[] { "test1", "test2", "test3", "test1" }; // One duplicate
         
@@ -221,33 +283,6 @@ public class StringPoolTests
     
     [PerformanceTestFact]
     [Trait("Category", "Performance")]
-    public void Cleanup_Should_Reduce_Memory_Usage()
-    {
-        // Arrange
-        var testPaths = GenerateTestPaths(5000);
-        foreach (var path in testPaths)
-        {
-            StringPool.InternPath(path);
-        }
-        
-        var beforeCleanup = GC.GetTotalMemory(true);
-        var statsBefore = StringPool.GetStats();
-        
-        // Act
-        StringPool.Cleanup();
-        var afterCleanup = GC.GetTotalMemory(true);
-        var statsAfter = StringPool.GetStats();
-        
-        // Assert
-        statsAfter.InternedCount.Should().BeLessThan(statsBefore.InternedCount, 
-            "Cleanup should remove unused strings");
-        
-        Console.WriteLine($"Before cleanup: {statsBefore.InternedCount} strings, {beforeCleanup:N0} bytes");
-        Console.WriteLine($"After cleanup: {statsAfter.InternedCount} strings, {afterCleanup:N0} bytes");
-    }
-    
-    [PerformanceTestFact]
-    [Trait("Category", "Performance")]
     public void CompactMemory_Should_Optimize_Storage()
     {
         // Arrange
@@ -278,17 +313,16 @@ public class StringPoolTests
     /// <summary>
     /// Concurrent access test for StringPool.
     /// Note: Skipped in CI due to xUnit parallel test execution causing race conditions
-    /// between Reset/Cleanup calls across test classes. Core thread-safety is validated by functional tests.
+    /// between Reset calls across test classes. Core thread-safety is validated by functional tests.
     /// </summary>
     [Fact(Skip = "Complex concurrent scenario - run manually; core thread-safety validated by functional tests")]
     [Trait("Category", "Performance")]
     public async Task Concurrent_Access_Should_Be_Thread_Safe()
     {
-        // Arrange - Force complete cleanup
-        StringPool.Cleanup();
+        // Arrange - start from an empty pool
+        StringPool.Reset();
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        StringPool.Cleanup();
         
         var testPaths = GenerateTestPaths(1000);
         var tasks = new Task[Environment.ProcessorCount];

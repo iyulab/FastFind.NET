@@ -6,19 +6,47 @@ namespace FastFind.SQLite.Schema;
 internal static class SqliteSchema
 {
     /// <summary>
-    /// Current schema version
+    /// Current schema version. A database created under a different version is rebuilt on open —
+    /// the store is a cache of the file system, so discarding it is cheaper and safer than
+    /// migrating it.
     /// </summary>
-    public const int CurrentVersion = 1;
+    /// <remarks>
+    /// Version 2 stores paths with their original casing. Version 1 lower-cased every path on
+    /// write, which made a case-sensitive search impossible and lost the true path on
+    /// case-sensitive file systems.
+    /// </remarks>
+    public const int CurrentVersion = 2;
+
+    /// <summary>Metadata key holding the schema version of an existing database.</summary>
+    public const string SchemaVersionKey = "schema_version";
+
+    /// <summary>
+    /// Collation for path columns: paths compare case-insensitively on Windows and exactly
+    /// elsewhere, matching the host file system. Casing is always preserved in storage.
+    /// </summary>
+    private static string PathCollation => OperatingSystem.IsWindows() ? " COLLATE NOCASE" : string.Empty;
+
+    /// <summary>
+    /// Drops every table and trigger owned by this schema, for a rebuild after a version change.
+    /// </summary>
+    public const string DropAll = """
+        DROP TRIGGER IF EXISTS files_ai;
+        DROP TRIGGER IF EXISTS files_ad;
+        DROP TRIGGER IF EXISTS files_au;
+        DROP TABLE IF EXISTS files_fts;
+        DROP TABLE IF EXISTS files;
+        DROP TABLE IF EXISTS statistics;
+        """;
 
     /// <summary>
     /// SQL to create the main files table
     /// </summary>
-    public const string CreateFilesTable = """
+    public static string CreateFilesTable => $"""
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            full_path TEXT NOT NULL UNIQUE,
+            full_path TEXT NOT NULL UNIQUE{PathCollation},
             name TEXT NOT NULL,
-            directory_path TEXT NOT NULL,
+            directory_path TEXT NOT NULL{PathCollation},
             extension TEXT NOT NULL,
             size INTEGER NOT NULL,
             created_time INTEGER NOT NULL,
@@ -99,17 +127,32 @@ internal static class SqliteSchema
         );
         """;
 
+    /// <summary>Default mmap window when mmap is enabled without an explicit size: 256 MiB.</summary>
+    public const long DefaultMmapSize = 268435456;
+
     /// <summary>
-    /// PRAGMA settings for optimal performance
+    /// PRAGMA settings applied to a freshly opened connection.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>page_size</c> is emitted <b>first</b>, and deliberately so. It is a persistent property of
+    /// the database file that can only be set before the first table is created, and SQLite ignores
+    /// it once the journal mode is WAL. Emitting it after <c>journal_mode</c> made the configured
+    /// page size a silent no-op for every database created with WAL enabled — which is the default.
+    /// </para>
+    /// <para>
+    /// <c>cache_size</c> is emitted in its negative form, which SQLite reads as a size in
+    /// <b>KiB</b> rather than a page count.
+    /// </para>
+    /// </remarks>
     public static string GetPragmaSettings(bool useWal = true, int cacheSize = 10000, int pageSize = 4096, bool useMmap = true, long mmapSize = 0)
     {
-        var mmap = useMmap ? (mmapSize > 0 ? mmapSize : 268435456) : 0; // Default 256MB
+        var mmap = useMmap ? (mmapSize > 0 ? mmapSize : DefaultMmapSize) : 0;
         return $"""
+            PRAGMA page_size = {pageSize};
             PRAGMA journal_mode = {(useWal ? "WAL" : "DELETE")};
             PRAGMA synchronous = NORMAL;
             PRAGMA cache_size = -{cacheSize};
-            PRAGMA page_size = {pageSize};
             PRAGMA temp_store = MEMORY;
             PRAGMA mmap_size = {mmap};
             PRAGMA busy_timeout = 5000;
@@ -133,27 +176,6 @@ internal static class SqliteSchema
             attributes = excluded.attributes,
             drive_letter = excluded.drive_letter,
             is_directory = excluded.is_directory
-        """;
-
-    /// <summary>
-    /// SQL for searching by name pattern using FTS5
-    /// </summary>
-    public const string SearchByNameFts = """
-        SELECT f.* FROM files f
-        INNER JOIN files_fts fts ON f.id = fts.rowid
-        WHERE files_fts MATCH @pattern
-        ORDER BY rank
-        LIMIT @limit OFFSET @offset
-        """;
-
-    /// <summary>
-    /// SQL for searching by name pattern using LIKE (fallback)
-    /// </summary>
-    public const string SearchByNameLike = """
-        SELECT * FROM files
-        WHERE name LIKE @pattern
-        ORDER BY name
-        LIMIT @limit OFFSET @offset
         """;
 
     /// <summary>

@@ -59,7 +59,7 @@ public static class WindowsRegistration
     [SupportedOSPlatform("windows")]
     private static void RegisterWindowsFactory()
     {
-        FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, loggerFactory => WindowsSearchEngine.CreateWindowsSearchEngine(loggerFactory));
+        FastFinder.RegisterSearchEngineFactory(PlatformType.Windows, options => WindowsSearchEngine.CreateWindowsSearchEngine(options));
     }
 }
 
@@ -86,11 +86,26 @@ public static class WindowsSearchEngine
         ILoggerFactory? loggerFactory = null,
         ProviderMode providerMode = ProviderMode.Auto)
     {
+        return CreateWindowsSearchEngine(SearchEngineOptions.ForLogger(loggerFactory), providerMode);
+    }
+
+    /// <summary>
+    /// Creates a Windows-optimized search engine from a full set of composition options.
+    /// </summary>
+    /// <param name="options">Composition options, including an optional index or persistence store.</param>
+    /// <param name="providerMode">File system provider mode (default: Auto for MFT when available)</param>
+    public static ISearchEngine CreateWindowsSearchEngine(
+        SearchEngineOptions options,
+        ProviderMode providerMode = ProviderMode.Auto)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("Windows search engine can only be used on Windows platforms");
         }
 
+        var loggerFactory = options.LoggerFactory;
         var services = new ServiceCollection();
 
         // .NET 10: Enhanced logging configuration
@@ -109,11 +124,29 @@ public static class WindowsSearchEngine
         // Use HybridFileSystemProvider with specified mode
         services.AddSingleton<IFileSystemProvider>(provider =>
             new HybridFileSystemProvider(providerMode, loggerFactory));
-        services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
+        RegisterSearchIndex(services, options);
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
         var serviceProvider = services.BuildServiceProvider();
         return serviceProvider.GetRequiredService<ISearchEngine>();
+    }
+
+    /// <summary>
+    /// Registers the index the options ask for: a supplied one, one over a store, or the in-memory
+    /// default — which is given the store to write through to when that is the mode requested.
+    /// </summary>
+    private static void RegisterSearchIndex(ServiceCollection services, SearchEngineOptions options)
+    {
+        var supplied = options.ResolveIndex();
+        if (supplied is not null)
+        {
+            services.AddSingleton(supplied);
+            return;
+        }
+
+        var persistence = options.Persistence;
+        services.AddSingleton<ISearchIndex>(provider => new WindowsSearchIndex(
+            provider.GetRequiredService<ILogger<WindowsSearchIndex>>(), persistence));
     }
 
     /// <summary>
@@ -161,7 +194,7 @@ public static class WindowsSearchEngine
         // Use HybridFileSystemProvider with specified mode
         services.AddSingleton<IFileSystemProvider>(provider =>
             new HybridFileSystemProvider(providerMode, loggerFactory));
-        services.AddSingleton<ISearchIndex, WindowsSearchIndex>();
+        RegisterSearchIndex(services, SearchEngineOptions.ForLogger(loggerFactory));
         services.AddSingleton<ISearchEngine, WindowsSearchEngineImpl>();
 
         var serviceProvider = services.BuildServiceProvider();

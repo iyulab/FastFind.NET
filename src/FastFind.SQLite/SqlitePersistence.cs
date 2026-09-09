@@ -82,9 +82,12 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         await ExecuteNonQueryAsync(pragmas, cancellationToken);
 
+        // Metadata first: it carries the schema version that decides whether the rest can be kept.
+        await ExecuteNonQueryAsync(SqliteSchema.CreateMetadataTable, cancellationToken);
+        await DiscardStoreIfSchemaChangedAsync(cancellationToken);
+
         // Create tables
         await ExecuteNonQueryAsync(SqliteSchema.CreateFilesTable, cancellationToken);
-        await ExecuteNonQueryAsync(SqliteSchema.CreateMetadataTable, cancellationToken);
         await ExecuteNonQueryAsync(SqliteSchema.CreateStatisticsTable, cancellationToken);
 
         // Create FTS if enabled
@@ -102,11 +105,63 @@ public sealed class SqlitePersistence : IIndexPersistence
             $"INSERT OR IGNORE INTO statistics (id, created_at, updated_at) VALUES (1, {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, {DateTimeOffset.UtcNow.ToUnixTimeSeconds()})",
             cancellationToken);
 
+        await using (var writeVersion = _connection.CreateCommand())
+        {
+            writeVersion.CommandText =
+                "INSERT INTO metadata (key, value) VALUES (@key, @value) " +
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+            writeVersion.Parameters.AddWithValue("@key", SqliteSchema.SchemaVersionKey);
+            writeVersion.Parameters.AddWithValue("@value", SqliteSchema.CurrentVersion.ToString());
+            await writeVersion.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         // Load count
         _count = await GetCountFromDbAsync(cancellationToken);
         _isReady = true;
 
         _logger?.LogInformation("SQLite persistence initialized at {Path} with {Count} items", _config.StoragePath, _count);
+    }
+
+    /// <summary>
+    /// Drops the stored index when it was written by a different schema version.
+    /// </summary>
+    /// <remarks>
+    /// The store is a cache of the file system, so a rebuild costs one re-index and avoids
+    /// carrying migration code for every past shape. A database with no recorded version predates
+    /// version tracking and is treated as stale.
+    /// </remarks>
+    private async Task DiscardStoreIfSchemaChangedAsync(CancellationToken cancellationToken)
+    {
+        var tableExists = await ScalarAsync(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'files' LIMIT 1",
+            cancellationToken);
+
+        if (tableExists is null) return; // nothing stored yet
+
+        var recorded = await ScalarAsync(
+            $"SELECT value FROM metadata WHERE key = '{SqliteSchema.SchemaVersionKey}' LIMIT 1",
+            cancellationToken);
+
+        if (recorded is string text
+            && int.TryParse(text, out var version)
+            && version == SqliteSchema.CurrentVersion)
+        {
+            return;
+        }
+
+        _logger?.LogInformation(
+            "Rebuilding the index store at {Path}: schema version {Found} is not {Expected}",
+            _config.StoragePath, recorded ?? "(none)", SqliteSchema.CurrentVersion);
+
+        await ExecuteNonQueryAsync(SqliteSchema.DropAll, cancellationToken);
+    }
+
+    private async Task<object?> ScalarAsync(string sql, CancellationToken cancellationToken)
+    {
+        await using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = sql;
+        var value = await cmd.ExecuteScalarAsync(cancellationToken);
+        return value is DBNull ? null : value;
     }
 
     /// <inheritdoc/>
@@ -636,48 +691,114 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = _connection!.CreateCommand();
+        // SearchQueryEvaluator is the authority on what matches. The SQL below only narrows the
+        // candidate set, and every narrowing clause must be a provable superset of the evaluator's
+        // verdict — a clause that can exclude a matching row would make this provider disagree with
+        // the in-memory index for the same query.
+        var textMatcher = SearchQueryEvaluator.CreateTextMatcher(query);
 
-        // Use FTS5 for text search if enabled and applicable
-        if (_config.EnableFullTextSearch && !string.IsNullOrEmpty(query.SearchText) && !query.UseRegex)
-        {
-            // Convert wildcards to FTS5 syntax
-            var ftsPattern = ConvertToFtsPattern(query.SearchText);
-            cmd.CommandText = SqliteSchema.SearchByNameFts;
-            cmd.Parameters.AddWithValue("@pattern", ftsPattern);
-            cmd.Parameters.AddWithValue("@limit", query.MaxResults ?? 10000);
-            cmd.Parameters.AddWithValue("@offset", 0);
-        }
-        else if (!string.IsNullOrEmpty(query.SearchText))
-        {
-            // Fallback to LIKE search
-            var likePattern = ConvertToLikePattern(query.SearchText);
-            cmd.CommandText = SqliteSchema.SearchByNameLike;
-            cmd.Parameters.AddWithValue("@pattern", likePattern);
-            cmd.Parameters.AddWithValue("@limit", query.MaxResults ?? 10000);
-            cmd.Parameters.AddWithValue("@offset", 0);
-        }
-        else
-        {
-            // Return all files with limit
-            cmd.CommandText = "SELECT * FROM files LIMIT @limit";
-            cmd.Parameters.AddWithValue("@limit", query.MaxResults ?? 10000);
-        }
+        await using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = BuildCandidateQuery(query, textMatcher, cmd);
+
+        var remaining = query.MaxResults ?? int.MaxValue;
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
-        while (await reader.ReadAsync(cancellationToken))
+        while (remaining > 0 && await reader.ReadAsync(cancellationToken))
         {
             var item = ReadFileItem(reader);
 
-            // Apply additional filters that can't be done in SQL
-            if (ApplyFilters(item, query))
-            {
-                yield return item;
-            }
+            if (!SearchQueryEvaluator.Matches(item, query, textMatcher))
+                continue;
+
+            remaining--;
+            yield return item;
         }
     }
 
+    /// <summary>
+    /// Builds the candidate SELECT for a query, adding only clauses that cannot exclude a row the
+    /// evaluator would accept.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="SearchQuery.MaxResults"/> is deliberately <b>not</b> translated to SQL
+    /// <c>LIMIT</c>. Limiting candidates rather than matches returns fewer results than asked for
+    /// whenever any filter rejects a candidate, while more matches remain in the store.
+    /// </para>
+    /// <para>
+    /// Substring text is narrowed with <c>LIKE</c> only when the pattern is ASCII. SQLite's default
+    /// <c>LIKE</c> folds case for ASCII only, so a non-ASCII pattern could miss a row that the
+    /// evaluator's full-Unicode comparison accepts.
+    /// </para>
+    /// </remarks>
+    private static string BuildCandidateQuery(SearchQuery query, System.Text.RegularExpressions.Regex? textMatcher, SqliteCommand cmd)
+    {
+        var clauses = new List<string>();
+
+        if (query.MinSize.HasValue)
+        {
+            clauses.Add("size >= @min_size");
+            cmd.Parameters.AddWithValue("@min_size", query.MinSize.Value);
+        }
+
+        if (query.MaxSize.HasValue)
+        {
+            clauses.Add("size <= @max_size");
+            cmd.Parameters.AddWithValue("@max_size", query.MaxSize.Value);
+        }
+
+        if (query.IncludeFiles != query.IncludeDirectories)
+        {
+            clauses.Add("is_directory = @is_directory");
+            cmd.Parameters.AddWithValue("@is_directory", query.IncludeDirectories ? 1 : 0);
+        }
+
+        // Plain substring search over an ASCII pattern: LIKE agrees with the evaluator exactly for
+        // a case-insensitive match, and is a superset for a case-sensitive one.
+        if (textMatcher is null && !string.IsNullOrEmpty(query.SearchText) && IsAscii(query.SearchText))
+        {
+            var column = query.SearchFileNameOnly ? "name" : "full_path";
+            clauses.Add($"{column} LIKE @text ESCAPE '{LikeEscape}'");
+            cmd.Parameters.AddWithValue("@text", $"%{EscapeLikeLiteral(query.SearchText)}%");
+        }
+
+        var where = clauses.Count > 0 ? " WHERE " + string.Join(" AND ", clauses) : string.Empty;
+        return "SELECT * FROM files" + where;
+    }
+
+    /// <summary>
+    /// Escape character used with SQL <c>LIKE</c>. Not a backslash: a Windows path is full of
+    /// those, and doubling them in every pattern is noise for no benefit.
+    /// </summary>
+    private const char LikeEscape = '!';
+
+    /// <summary>
+    /// Escapes the <c>LIKE</c> metacharacters in a literal, for use with <c>ESCAPE '!'</c>.
+    /// </summary>
+    private static string EscapeLikeLiteral(string value)
+    {
+        if (value.AsSpan().IndexOfAny('%', '_', LikeEscape) < 0) return value;
+
+        var builder = new System.Text.StringBuilder(value.Length + 8);
+        foreach (var c in value)
+        {
+            if (c is '%' or '_' or LikeEscape) builder.Append(LikeEscape);
+            builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsAscii(string value)
+    {
+        foreach (var c in value)
+        {
+            if (c > 127) return false;
+        }
+
+        return true;
+    }
     /// <inheritdoc/>
     public async IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -867,72 +988,6 @@ public sealed class SqlitePersistence : IIndexPersistence
         );
     }
 
-    private static string ConvertToFtsPattern(string pattern)
-    {
-        // Convert wildcard pattern to FTS5 query
-        // * -> *
-        // ? -> handled post-filter
-        var ftsPattern = pattern
-            .Replace("*", "\"*\"")
-            .Replace("?", "*");
-
-        // If no wildcards, add prefix match
-        if (!pattern.Contains('*') && !pattern.Contains('?'))
-        {
-            ftsPattern = $"\"{pattern}\"*";
-        }
-
-        return ftsPattern;
-    }
-
-    private static string ConvertToLikePattern(string pattern)
-    {
-        // Convert glob pattern to SQL LIKE pattern
-        return pattern
-            .Replace("*", "%")
-            .Replace("?", "_");
-    }
-
-    private static bool ApplyFilters(FastFileItem item, SearchQuery query)
-    {
-        // Apply extension filter
-        if (!string.IsNullOrEmpty(query.ExtensionFilter))
-        {
-            var ext = item.Extension.TrimStart('.');
-            var filterExt = query.ExtensionFilter.TrimStart('.');
-            if (!ext.Equals(filterExt, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        // Apply size filter
-        if (query.MinSize.HasValue && item.Size < query.MinSize.Value)
-            return false;
-        if (query.MaxSize.HasValue && item.Size > query.MaxSize.Value)
-            return false;
-
-        // Apply date filter
-        if (query.MinModifiedDate.HasValue && item.ModifiedTime < query.MinModifiedDate.Value)
-            return false;
-        if (query.MaxModifiedDate.HasValue && item.ModifiedTime > query.MaxModifiedDate.Value)
-            return false;
-
-        // Apply directory filter
-        if (!query.IncludeDirectories && item.IsDirectory)
-            return false;
-        if (!query.IncludeFiles && !item.IsDirectory)
-            return false;
-
-        // Apply hidden filter
-        if (!query.IncludeHidden && item.IsHidden)
-            return false;
-
-        // Apply system filter
-        if (!query.IncludeSystem && item.IsSystem)
-            return false;
-
-        return true;
-    }
-
     private async Task<long> GetCountFromDbAsync(CancellationToken cancellationToken)
     {
         await using var cmd = _connection!.CreateCommand();
@@ -940,7 +995,6 @@ public sealed class SqlitePersistence : IIndexPersistence
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result is long l ? l : 0;
     }
-
 
     /// <summary>
     /// Refreshes the in-memory count from the database.
@@ -983,11 +1037,23 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// Normalizes a file path for consistent storage and lookup.
     /// Converts to lowercase and normalizes directory separators for Windows filesystem compatibility.
     /// </summary>
+    /// <summary>
+    /// Normalises a path for storage.
+    /// </summary>
+    /// <remarks>
+    /// Casing is preserved. Lower-casing here made a case-sensitive search impossible and, on a
+    /// case-sensitive file system, replaced the real path with one that does not exist. Separators
+    /// are folded only on Windows, where both are accepted; elsewhere a backslash is an ordinary
+    /// filename character. Case-insensitive path identity on Windows comes from the column
+    /// collation instead — see <see cref="SqliteSchema.CreateFilesTable"/>.
+    /// </remarks>
     private static string NormalizePath(string path)
     {
-        if (string.IsNullOrEmpty(path))
-            return path;
-        return path.ToLowerInvariant().Replace('/', '\\');
+        if (string.IsNullOrEmpty(path)) return path;
+
+        return OperatingSystem.IsWindows() && path.Contains('/')
+            ? path.Replace('/', '\\')
+            : path;
     }
 
     /// <inheritdoc/>

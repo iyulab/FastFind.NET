@@ -17,10 +17,18 @@ public interface ISearchEngine : IDisposable
     Task StopIndexingAsync(CancellationToken ct = default);
     Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken ct = default);
 
+    // Index persistence — throws InvalidOperationException with no store configured,
+    // NotSupportedException where the engine cannot persist an index at all.
+    Task<int> SaveIndexAsync(CancellationToken ct = default);
+    Task<int> LoadIndexAsync(CancellationToken ct = default);
+
     // State
     bool IsIndexing { get; }
     bool IsMonitoring { get; }
     long TotalIndexedFiles { get; }
+
+    // The index this engine searches; null for an engine that keeps its index internally.
+    ISearchIndex? Index { get; }
 
     // Events
     event EventHandler<IndexingProgressEventArgs>? IndexingProgressChanged;
@@ -157,6 +165,39 @@ public class MacOSFileSystemProvider : IFileSystemProvider
 }
 ```
 
+### Composing an engine
+
+```csharp
+// The index lives in the store; the engine holds no copy.
+using var engine = FastFinder.CreateSearchEngine(store);
+
+// Or spell out every input.
+using var engine = FastFinder.CreateSearchEngine(new SearchEngineOptions
+{
+    LoggerFactory = loggerFactory,
+    Persistence = store,
+    PersistenceMode = PersistenceMode.QueryFromStore, // or MirrorInMemory
+    Index = null,                                     // supply your own ISearchIndex instead
+    DisposeSuppliedComponents = false                 // the caller keeps ownership by default
+});
+```
+
+`PersistenceMode.QueryFromStore` answers queries from the store, so the engine's memory does not grow
+with the corpus. `MirrorInMemory` keeps the in-memory index and writes through to the store, costing
+the memory of both.
+
+The Unix engine cannot be composed with a store or a custom index and throws `NotSupportedException`
+rather than ignoring one.
+
+### Query semantics
+
+Every index and persistence provider evaluates matches through `SearchQueryEvaluator`, so a query
+returns the same set whichever backend answers it. A backend may narrow candidates first — by SQL
+predicate, by an extension index, by a path trie — but only in ways that cannot exclude a match the
+evaluator accepts.
+
+`SearchQuery.RequiredAttributes` and `ExcludedAttributes` are currently not honoured by any backend.
+
 ### SQLite Persistence
 
 ```csharp
@@ -172,7 +213,7 @@ public class SqlitePersistence : IIndexPersistence
     public Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken ct = default);
     public Task<int> AddFromStreamAsync(IAsyncEnumerable<FastFileItem> items, int bufferSize = 5000, IProgress<int>? progress = null, CancellationToken ct = default);
 
-    // Query (FTS5)
+    // Query
     public IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken ct = default);
     public IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken ct = default);
     public IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, CancellationToken ct = default);

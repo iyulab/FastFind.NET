@@ -10,7 +10,7 @@ namespace FastFind;
 /// </summary>
 public static class FastFinder
 {
-    private static readonly Dictionary<PlatformType, Func<ILoggerFactory?, ISearchEngine>> _factories = new();
+    private static readonly Dictionary<PlatformType, Func<SearchEngineOptions, ISearchEngine>> _factories = new();
     private static readonly Lock _factoryLock = new();
     private static volatile bool _platformAssemblyLoadAttempted = false;
     private static readonly Lock _platformLoadLock = new();
@@ -89,11 +89,7 @@ public static class FastFinder
     /// <returns>Platform-optimized search engine</returns>
     public static ISearchEngine CreateSearchEngine(ILoggerFactory? loggerFactory = null)
     {
-        // Ensure platform assembly is loaded before trying to create engine
-        EnsurePlatformAssemblyLoaded();
-
-        var platformType = GetCurrentPlatform();
-        return CreateSearchEngine(platformType, loggerFactory);
+        return CreateSearchEngine(SearchEngineOptions.ForLogger(loggerFactory));
     }
 
     /// <summary>
@@ -104,6 +100,58 @@ public static class FastFinder
     /// <returns>Platform-specific search engine</returns>
     public static ISearchEngine CreateSearchEngine(PlatformType platformType, ILoggerFactory? loggerFactory = null)
     {
+        return CreateSearchEngine(platformType, SearchEngineOptions.ForLogger(loggerFactory));
+    }
+
+    /// <summary>
+    /// Creates a search engine for the current platform whose index lives in the given store.
+    /// </summary>
+    /// <param name="persistence">An initialised persistence provider to hold the index.</param>
+    /// <param name="loggerFactory">Optional logger factory.</param>
+    /// <param name="mode">
+    /// Whether queries are answered from the store (the default, which bounds memory) or from an
+    /// in-memory index that mirrors writes into it.
+    /// </param>
+    /// <remarks>
+    /// The engine does not dispose <paramref name="persistence"/>; the caller keeps ownership. Use
+    /// <see cref="CreateSearchEngine(SearchEngineOptions)"/> with
+    /// <see cref="SearchEngineOptions.DisposeSuppliedComponents"/> to hand it over.
+    /// </remarks>
+    public static ISearchEngine CreateSearchEngine(
+        IIndexPersistence persistence,
+        ILoggerFactory? loggerFactory = null,
+        PersistenceMode mode = PersistenceMode.QueryFromStore)
+    {
+        ArgumentNullException.ThrowIfNull(persistence);
+
+        return CreateSearchEngine(new SearchEngineOptions
+        {
+            LoggerFactory = loggerFactory,
+            Persistence = persistence,
+            PersistenceMode = mode
+        });
+    }
+
+    /// <summary>
+    /// Creates a search engine for the current platform from a full set of composition options.
+    /// </summary>
+    public static ISearchEngine CreateSearchEngine(SearchEngineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        // Ensure platform assembly is loaded before trying to create engine
+        EnsurePlatformAssemblyLoaded();
+
+        return CreateSearchEngine(GetCurrentPlatform(), options);
+    }
+
+    /// <summary>
+    /// Creates a search engine for a specific platform from a full set of composition options.
+    /// </summary>
+    public static ISearchEngine CreateSearchEngine(PlatformType platformType, SearchEngineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
         // Ensure platform assembly is loaded before trying to create engine
         EnsurePlatformAssemblyLoaded();
 
@@ -111,13 +159,13 @@ public static class FastFinder
         {
             if (_factories.TryGetValue(platformType, out var factory))
             {
-                return factory(loggerFactory);
+                return factory(options);
             }
 
             // Fallback to cross-platform implementation
             if (_factories.TryGetValue(PlatformType.CrossPlatform, out var fallbackFactory))
             {
-                return fallbackFactory(loggerFactory);
+                return fallbackFactory(options);
             }
 
             throw new PlatformNotSupportedException($"No search engine implementation available for platform: {platformType}");
@@ -125,17 +173,32 @@ public static class FastFinder
     }
 
     /// <summary>
-    /// Registers a search engine factory for a specific platform
+    /// Registers a search engine factory for a specific platform.
     /// </summary>
     /// <param name="platformType">Platform type</param>
-    /// <param name="factory">Factory function</param>
-    public static void RegisterSearchEngineFactory(PlatformType platformType, Func<ILoggerFactory?, ISearchEngine> factory)
+    /// <param name="factory">
+    /// Builds an engine from the composition options a caller passed to
+    /// <see cref="CreateSearchEngine(SearchEngineOptions)"/>. A factory that ignores
+    /// <see cref="SearchEngineOptions.Persistence"/> and <see cref="SearchEngineOptions.Index"/>
+    /// silently discards what the caller asked for, so honour them or document that you do not.
+    /// </param>
+    /// <remarks>
+    /// This replaced a <c>Func&lt;ILoggerFactory?, ISearchEngine&gt;</c> signature, which had no room
+    /// for a caller to supply an index or a store. A registration of the old shape migrates to
+    /// <c>options =&gt; Build(options.LoggerFactory)</c>. A second overload for the old shape was
+    /// considered and rejected: two overloads differing only in delegate type make every lambda
+    /// registration ambiguous.
+    /// </remarks>
+    public static void RegisterSearchEngineFactory(PlatformType platformType, Func<SearchEngineOptions, ISearchEngine> factory)
     {
+        ArgumentNullException.ThrowIfNull(factory);
+
         lock (_factoryLock)
         {
             _factories[platformType] = factory;
         }
     }
+
 
     /// <summary>
     /// Gets available platforms with registered factories

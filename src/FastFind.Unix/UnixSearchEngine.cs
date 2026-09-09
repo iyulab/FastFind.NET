@@ -23,14 +23,29 @@ public static class UnixSearchEngine
     /// <returns>Linux search engine instance</returns>
     public static ISearchEngine CreateLinuxSearchEngine(ILoggerFactory? loggerFactory = null)
     {
+        return CreateLinuxSearchEngine(SearchEngineOptions.ForLogger(loggerFactory));
+    }
+
+    /// <summary>
+    /// Creates a Linux-optimized search engine from a full set of composition options.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// A store or a custom index was supplied. The Unix engine keeps its index internally and has no
+    /// persistence path yet — see the remarks on <see cref="RejectUnsupportedComposition"/>.
+    /// </exception>
+    public static ISearchEngine CreateLinuxSearchEngine(SearchEngineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        RejectUnsupportedComposition(options);
+
         if (!OperatingSystem.IsLinux())
         {
             throw new PlatformNotSupportedException(
                 "Linux search engine can only be used on Linux platforms");
         }
 
-        var provider = new LinuxFileSystemProvider(loggerFactory);
-        return new UnixSearchEngineImpl(provider, loggerFactory);
+        var provider = new LinuxFileSystemProvider(options.LoggerFactory);
+        return new UnixSearchEngineImpl(provider, options.LoggerFactory);
     }
 
     /// <summary>
@@ -40,14 +55,47 @@ public static class UnixSearchEngine
     /// <returns>macOS search engine instance</returns>
     public static ISearchEngine CreateMacOSSearchEngine(ILoggerFactory? loggerFactory = null)
     {
+        return CreateMacOSSearchEngine(SearchEngineOptions.ForLogger(loggerFactory));
+    }
+
+    /// <summary>
+    /// Creates a macOS-optimized search engine from a full set of composition options.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// A store or a custom index was supplied — see <see cref="RejectUnsupportedComposition"/>.
+    /// </exception>
+    public static ISearchEngine CreateMacOSSearchEngine(SearchEngineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        RejectUnsupportedComposition(options);
+
         if (!OperatingSystem.IsMacOS())
         {
             throw new PlatformNotSupportedException(
                 "macOS search engine can only be used on macOS platforms");
         }
 
-        var provider = new MacOSFileSystemProvider(loggerFactory);
-        return new UnixSearchEngineImpl(provider, loggerFactory);
+        var provider = new MacOSFileSystemProvider(options.LoggerFactory);
+        return new UnixSearchEngineImpl(provider, options.LoggerFactory);
+    }
+
+    /// <summary>
+    /// Rejects composition options this engine cannot honour.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="UnixSearchEngineImpl"/> holds its index internally rather than taking an
+    /// <see cref="ISearchIndex"/>, so it cannot be given a store or a custom index. Failing loudly is
+    /// deliberate: accepting the option and ignoring it would leave a caller believing their index
+    /// was persisted when it was not.
+    /// </remarks>
+    private static void RejectUnsupportedComposition(SearchEngineOptions options)
+    {
+        if (options.Persistence is null && options.Index is null) return;
+
+        throw new NotSupportedException(
+            "The Unix search engine keeps its index internally and cannot be given an " +
+            "IIndexPersistence or a custom ISearchIndex. Use the in-memory engine, or a " +
+            "persistence provider directly.");
     }
 }
 
@@ -91,6 +139,13 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
     /// <inheritdoc/>
     public long TotalIndexedFiles => Interlocked.Read(ref _totalIndexedFiles);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Always <c>null</c>: this engine keeps its index in an internal dictionary rather than behind
+    /// an <see cref="ISearchIndex"/>, which is also why it rejects a supplied index or store.
+    /// </remarks>
+    public ISearchIndex? Index => null;
 
     public UnixSearchEngineImpl(IFileSystemProvider provider, ILoggerFactory? loggerFactory = null)
     {
@@ -379,28 +434,25 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Unix implementation uses in-memory indexing only. Persistence is not supported.
-    /// Use FastFind.SQLite for persistent index storage.
+    /// This engine keeps its index in memory and exposes no <see cref="ISearchIndex"/>, so it cannot
+    /// persist one whatever it is composed with — which is also why it rejects a supplied store at
+    /// construction. Use a persistence provider directly for a durable index on this platform.
     /// </remarks>
-    public Task SaveIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
+    public Task<int> SaveIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         throw new NotSupportedException(
-            "Unix search engine uses in-memory indexing only. " +
-            "Use FastFind.SQLite for persistent index storage.");
+            "The Unix search engine uses in-memory indexing only and cannot save an index. " +
+            "Use a FastFind.SQLite persistence provider directly for durable storage.");
     }
 
-    /// <inheritdoc/>
-    /// <remarks>
-    /// Unix implementation uses in-memory indexing only. Persistence is not supported.
-    /// Use FastFind.SQLite for persistent index storage.
-    /// </remarks>
-    public Task LoadIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
+    /// <inheritdoc cref="SaveIndexAsync"/>
+    public Task<int> LoadIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         throw new NotSupportedException(
-            "Unix search engine uses in-memory indexing only. " +
-            "Use FastFind.SQLite for persistent index storage.");
+            "The Unix search engine uses in-memory indexing only and cannot load an index. " +
+            "Use a FastFind.SQLite persistence provider directly for durable storage.");
     }
 
     /// <inheritdoc/>

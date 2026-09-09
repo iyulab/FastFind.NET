@@ -66,6 +66,15 @@ public interface ISearchIndex : IAsyncDisposable, IDisposable
     /// <param name="query">Search query</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Async enumerable of matching files</returns>
+    /// <remarks>
+    /// Every implementation evaluates matches through <see cref="SearchQueryEvaluator"/>, so the
+    /// same query returns the same set whichever backend answers it. An implementation may narrow
+    /// candidates first, but only in ways that cannot exclude a match the evaluator would accept.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// The query is not valid — see <see cref="SearchQuery.Validate"/>. Thrown when enumeration
+    /// begins rather than at the call, as with any async iterator.
+    /// </exception>
     IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>

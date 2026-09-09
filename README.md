@@ -21,7 +21,7 @@ Ultra-high performance cross-platform file search library for .NET 10
 - **MFT Direct Access** (Windows): 31K+ files/sec NTFS enumeration, 30x faster than standard APIs
 - **Parallel BFS Enumeration** (Linux/macOS): Channel-based depth-aware parallel traversal
 - **Real-Time Monitoring**: USN Journal (Windows) / inotify (Linux) / FSEvents (macOS)
-- **SQLite FTS5**: Persistent full-text search index
+- **Disk-Backed Index**: Keep the index in SQLite instead of memory — footprint stays flat as the corpus grows
 - **Memory Optimized**: 60-80% reduction via StringPool interning
 - **Auto Platform Detection**: ModuleInitializer auto-registration
 
@@ -68,6 +68,34 @@ await foreach (var file in results.Files)
     Console.WriteLine($"{file.Name} ({file.SizeFormatted}) - {file.DirectoryPath}");
 }
 ```
+
+### Keeping the index on disk
+
+By default the index lives in memory. Give the engine a persistence store and it answers queries
+from disk instead, so its footprint does not grow with the number of indexed files:
+
+```csharp
+using FastFind;
+using FastFind.SQLite;
+
+await using var store = SqlitePersistence.Create(@"D:\cache\index.db");
+await store.InitializeAsync();
+
+using var engine = FastFinder.CreateSearchEngine(store);
+
+// Index once; the store survives the process.
+await engine.StartIndexingAsync(new IndexingOptions { SpecificDirectories = [@"D:\Projects"] });
+while (engine.IsIndexing) await Task.Delay(500);
+
+Console.WriteLine($"{engine.Index!.Count} files indexed, {engine.Index.MemoryUsage} bytes held in memory");
+```
+
+Pass `PersistenceMode.MirrorInMemory` instead to keep the in-memory index for speed and use the store
+purely for durability — that costs the memory of both, and is the right choice only when the corpus
+comfortably fits.
+
+The engine does not dispose a store you created; you keep ownership.
+
 
 ## Performance
 

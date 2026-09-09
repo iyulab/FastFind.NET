@@ -274,8 +274,9 @@ internal class WindowsSearchIndex : ISearchIndex
         var validation = query.Validate();
         if (!validation.IsValid)
         {
-            _logger.LogWarning("Invalid search query: {Error}", validation.ErrorMessage);
-            yield break;
+            // Was a warning and an empty result, which let a malformed query look like a query that
+            // simply matched nothing.
+            throw new ArgumentException(validation.ErrorMessage ?? "Invalid search query.", nameof(query));
         }
 
         // Use hybrid search approach for optimal performance and completeness
@@ -293,13 +294,8 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Only use regex if explicitly requested OR if wildcards are present
-        var regex = query.GetCompiledRegex() ??
-                   (query.SearchText?.Contains('*') == true || query.SearchText?.Contains('?') == true
-                       ? query.GetWildcardRegex()
-                       : null);
-        // Keep original searchText for SIMD matching (handles case-insensitivity internally)
-        var searchText = query.SearchText ?? string.Empty;
+        // Compiled once per search and passed down; the evaluator decides regex vs. substring.
+        var regex = SearchQueryEvaluator.CreateTextMatcher(query);
         var matchCount = 0;
         var returnedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -317,7 +313,7 @@ internal class WindowsSearchIndex : ISearchIndex
             if (query.MaxResults.HasValue && matchCount >= query.MaxResults.Value)
                 break;
 
-            if (MatchesQuery(candidate, query, regex, searchText))
+            if (MatchesQuery(candidate, query, regex))
             {
                 returnedPaths.Add(candidate.FullPath);
                 matchCount++;
@@ -336,7 +332,7 @@ internal class WindowsSearchIndex : ISearchIndex
         {
             _logger.LogDebug("Hybrid search: Performing filesystem fallback, current matches: {Count}", matchCount);
 
-            await foreach (var fsResult in SearchFilesystemAsync(query, returnedPaths, regex, searchText, cancellationToken))
+            await foreach (var fsResult in SearchFilesystemAsync(query, returnedPaths, regex, cancellationToken))
             {
                 if (cancellationToken.IsCancellationRequested)
                     yield break;
@@ -433,7 +429,6 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var searchPaths = GetFilesystemSearchPaths(query);
@@ -441,7 +436,7 @@ internal class WindowsSearchIndex : ISearchIndex
         if (query.IncludeSubdirectories)
         {
             // Use parallel scanning for subdirectory search (maximum performance)
-            await foreach (var fileItem in ScanDirectoriesParallelAsync(searchPaths, query, excludePaths, regex, searchText, cancellationToken))
+            await foreach (var fileItem in ScanDirectoriesParallelAsync(searchPaths, query, excludePaths, regex, cancellationToken))
             {
                 yield return fileItem;
             }
@@ -465,7 +460,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 if (!Directory.Exists(searchPath))
                     continue;
 
-                await foreach (var fileItem in ScanDirectoryAsync(searchPath, query, searchOptions, excludePaths, regex, searchText, cancellationToken))
+                await foreach (var fileItem in ScanDirectoryAsync(searchPath, query, searchOptions, excludePaths, regex, cancellationToken))
                 {
                     yield return fileItem;
                 }
@@ -481,7 +476,6 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Concurrent collections for thread-safe operations
@@ -500,7 +494,7 @@ internal class WindowsSearchIndex : ISearchIndex
         {
             try
             {
-                await ScanPathsInParallel(searchPaths, query, excludePaths, regex, searchText,
+                await ScanPathsInParallel(searchPaths, query, excludePaths, regex,
                     processedPaths, writer, semaphore, cancellationToken);
             }
             finally
@@ -528,7 +522,6 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         ConcurrentHashSet<string> processedPaths,
         ChannelWriter<FileItem> writer,
         SemaphoreSlim semaphore,
@@ -549,7 +542,7 @@ internal class WindowsSearchIndex : ISearchIndex
         var workers = new Task[CalculateOptimalConcurrency()];
         for (int i = 0; i < workers.Length; i++)
         {
-            workers[i] = ProcessDirectoriesWorker(directoryQueue, query, excludePaths, regex, searchText,
+            workers[i] = ProcessDirectoriesWorker(directoryQueue, query, excludePaths, regex,
                 processedPaths, writer, semaphore, cancellationToken);
         }
 
@@ -564,7 +557,6 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         ConcurrentHashSet<string> processedPaths,
         ChannelWriter<FileItem> writer,
         SemaphoreSlim semaphore,
@@ -602,7 +594,7 @@ internal class WindowsSearchIndex : ISearchIndex
             try
             {
                 await ProcessSingleDirectoryParallel(currentDirectory, directoryQueue, query, excludePaths,
-                    regex, searchText, writer, cancellationToken);
+                    regex, writer, cancellationToken);
 
                 processedCount++;
 
@@ -626,7 +618,6 @@ internal class WindowsSearchIndex : ISearchIndex
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         ChannelWriter<FileItem> writer,
         CancellationToken cancellationToken)
     {
@@ -673,7 +664,7 @@ internal class WindowsSearchIndex : ISearchIndex
                     }
 
                     // Check if it matches our search criteria
-                    if (MatchesQuery(fileItem, query, regex, searchText))
+                    if (MatchesQuery(fileItem, query, regex))
                     {
                         lock (excludePaths)
                         {
@@ -755,7 +746,6 @@ internal class WindowsSearchIndex : ISearchIndex
         EnumerationOptions options,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
-        string searchText,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var processedCount = 0;
@@ -788,7 +778,7 @@ internal class WindowsSearchIndex : ISearchIndex
 
             FileItem? fileItem = GetFileItemSafely(fullPath);
 
-            if (fileItem != null && MatchesQuery(fileItem, query, regex, searchText))
+            if (fileItem != null && MatchesQuery(fileItem, query, regex))
             {
                 excludePaths.Add(fullPath); // Prevent future duplicates
                 yield return fileItem;
@@ -1177,60 +1167,17 @@ internal class WindowsSearchIndex : ISearchIndex
         return Task.CompletedTask;
     }
 
-    private static bool MatchesQuery(FileItem file, SearchQuery query, System.Text.RegularExpressions.Regex? regex, string searchText)
+    /// <summary>
+    /// Whether an indexed item satisfies a query.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to <see cref="SearchQueryEvaluator"/> so that this index and every persistence
+    /// provider answer the same question the same way. This method used to carry its own copy of
+    /// the predicate, and the copy in the SQLite provider had silently drifted from it.
+    /// </remarks>
+    private static bool MatchesQuery(FileItem file, SearchQuery query, System.Text.RegularExpressions.Regex? regex)
     {
-        // Type filters
-        if (!query.IncludeFiles && !file.IsDirectory)
-        {
-            return false;
-        }
-        if (!query.IncludeDirectories && file.IsDirectory) return false;
-        if (!query.IncludeHidden && file.IsHidden) return false;
-        if (!query.IncludeSystem && file.IsSystem) return false;
-
-        // Size filters
-        if (query.MinSize.HasValue && file.Size < query.MinSize.Value) return false;
-        if (query.MaxSize.HasValue && file.Size > query.MaxSize.Value) return false;
-
-        // Date filters
-        if (query.MinCreatedDate.HasValue && file.CreatedTime < query.MinCreatedDate.Value) return false;
-        if (query.MaxCreatedDate.HasValue && file.CreatedTime > query.MaxCreatedDate.Value) return false;
-        if (query.MinModifiedDate.HasValue && file.ModifiedTime < query.MinModifiedDate.Value) return false;
-        if (query.MaxModifiedDate.HasValue && file.ModifiedTime > query.MaxModifiedDate.Value) return false;
-
-        // Extension filter (normalize: "cs" → ".cs")
-        if (!string.IsNullOrEmpty(query.ExtensionFilter))
-        {
-            var extFilter = query.ExtensionFilter.StartsWith('.') ? query.ExtensionFilter : $".{query.ExtensionFilter}";
-            if (!file.Extension.Equals(extFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        // Text search - Phase 2.1: Use SIMD-accelerated matching
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            var targetText = query.SearchFileNameOnly
-                ? file.Name
-                : file.FullPath;
-
-            if (regex != null)
-            {
-                return regex.IsMatch(targetText);
-            }
-            else if (query.CaseSensitive)
-            {
-                // Case-sensitive: use standard Contains
-                return targetText.Contains(searchText, StringComparison.Ordinal);
-            }
-            else
-            {
-                // Case-insensitive: use SIMD-accelerated matching for better performance
-                // SIMDStringMatcher.ContainsVectorized provides 10-100x speedup for longer strings
-                return SIMDStringMatcher.ContainsVectorized(targetText.AsSpan(), searchText.AsSpan());
-            }
-        }
-
-        return true;
+        return SearchQueryEvaluator.Matches(file.ToFastFileItem(), query, regex);
     }
 
     private void UpdateIndices(FileItem fileItem, IndexOperation operation)

@@ -38,6 +38,18 @@ public interface ISearchEngine : IDisposable
     long TotalIndexedFiles { get; }
 
     /// <summary>
+    /// The index this engine searches, or <c>null</c> when the engine holds its index internally
+    /// and does not expose one.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so that a caller who composed the engine with an index — or with an
+    /// <see cref="IIndexPersistence"/> that one was built over — can reach it, and so that
+    /// <see cref="ISearchIndex.Persistence"/> is discoverable at all. Prefer the engine's own
+    /// search and indexing methods for ordinary use.
+    /// </remarks>
+    ISearchIndex? Index { get; }
+
+    /// <summary>
     /// Starts indexing with the specified options
     /// </summary>
     /// <param name="options">Indexing configuration options</param>
@@ -98,20 +110,41 @@ public interface ISearchEngine : IDisposable
     Task ClearCacheAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Saves the index to persistent storage
+    /// Writes the current index to the store this engine was composed with.
     /// </summary>
-    /// <param name="filePath">Path to save the index (null for default location)</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the save operation</returns>
-    Task SaveIndexAsync(string? filePath = null, CancellationToken cancellationToken = default);
+    /// <returns>The number of items written.</returns>
+    /// <remarks>
+    /// Where the index is stored is decided when the engine is created — see
+    /// <c>FastFinder.CreateSearchEngine(IIndexPersistence, …)</c>. This method took a
+    /// <c>filePath</c> until composition existed; the parameter was never read by any
+    /// implementation, and a per-call destination would now contradict the one the engine was built
+    /// with.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The engine has no persistence store. Compose it with one.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// This engine cannot persist an index at all, whatever it is composed with.
+    /// </exception>
+    Task<int> SaveIndexAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads the index from persistent storage
+    /// Loads the index from the store this engine was composed with.
     /// </summary>
-    /// <param name="filePath">Path to load the index from (null for default location)</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Task representing the load operation</returns>
-    Task LoadIndexAsync(string? filePath = null, CancellationToken cancellationToken = default);
+    /// <returns>The number of items available after loading.</returns>
+    /// <remarks>
+    /// For an index that answers from the store there is nothing to transfer, and the stored count
+    /// is returned unchanged.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The engine has no persistence store. Compose it with one.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// This engine cannot persist an index at all, whatever it is composed with.
+    /// </exception>
+    Task<int> LoadIndexAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Optimizes the index for better performance

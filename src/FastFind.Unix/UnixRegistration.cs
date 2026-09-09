@@ -46,7 +46,7 @@ public static class UnixRegistration
             {
                 FastFinder.RegisterSearchEngineFactory(
                     PlatformType.Linux,
-                    loggerFactory => UnixSearchEngine.CreateLinuxSearchEngine(loggerFactory));
+                    options => UnixSearchEngine.CreateLinuxSearchEngine(options));
                 _isRegistered = true;
             }
 
@@ -54,7 +54,7 @@ public static class UnixRegistration
             {
                 FastFinder.RegisterSearchEngineFactory(
                     PlatformType.MacOS,
-                    loggerFactory => UnixSearchEngine.CreateMacOSSearchEngine(loggerFactory));
+                    options => UnixSearchEngine.CreateMacOSSearchEngine(options));
                 _isRegistered = true;
             }
         }

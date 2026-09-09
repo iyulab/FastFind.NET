@@ -102,6 +102,9 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     public long TotalIndexedFiles => Interlocked.Read(ref _totalIndexedFiles);
 
     /// <inheritdoc/>
+    public ISearchIndex? Index => _searchIndex;
+
+    /// <inheritdoc/>
     public async Task StartIndexingAsync(IndexingOptions options, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -506,42 +509,48 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <inheritdoc/>
-    public async Task SaveIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
+    public async Task<int> SaveIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
-        // Save to persistence layer if available
-        if (_searchIndex.Persistence != null)
-        {
-            var savedCount = await _searchIndex.SaveToPersistenceAsync(cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Index saved to persistence layer: {SavedCount} items", savedCount);
-        }
-        else
-        {
-            _logger.LogWarning("No persistence layer configured, index not saved");
-        }
+        var persistence = RequirePersistence();
+
+        var savedCount = await _searchIndex.SaveToPersistenceAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Index saved to {Store}: {SavedCount} items", persistence.StoragePath, savedCount);
+
+        return savedCount;
     }
 
     /// <inheritdoc/>
-    public async Task LoadIndexAsync(string? filePath = null, CancellationToken cancellationToken = default)
+    public async Task<int> LoadIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
-        // Load from persistence layer if available
-        if (_searchIndex.Persistence != null)
-        {
-            var loadedCount = await _searchIndex.LoadFromPersistenceAsync(cancellationToken).ConfigureAwait(false);
+        var persistence = RequirePersistence();
 
-            // Update indexed files count
-            var stats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
-            Interlocked.Exchange(ref _totalIndexedFiles, stats.TotalFiles);
+        var loadedCount = await _searchIndex.LoadFromPersistenceAsync(cancellationToken).ConfigureAwait(false);
 
-            _logger.LogInformation("Index loaded from persistence layer: {LoadedCount} items", loadedCount);
-        }
-        else
-        {
-            _logger.LogWarning("No persistence layer configured, index not loaded");
-        }
+        // Update indexed files count
+        var stats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Exchange(ref _totalIndexedFiles, stats.TotalFiles);
+
+        _logger.LogInformation("Index loaded from {Store}: {LoadedCount} items", persistence.StoragePath, loadedCount);
+
+        return loadedCount;
+    }
+
+    /// <summary>
+    /// Returns the store this engine's index writes to, or throws saying how to give it one.
+    /// </summary>
+    /// <remarks>
+    /// This used to log a warning and return successfully, which meant a caller who never composed
+    /// the engine with a store believed their index had been saved.
+    /// </remarks>
+    private IIndexPersistence RequirePersistence()
+    {
+        return _searchIndex.Persistence ?? throw new InvalidOperationException(
+            "This engine has no persistence store, so there is nothing to save to or load from. " +
+            "Create it with FastFinder.CreateSearchEngine(persistence) to give it one.");
     }
 
     /// <inheritdoc/>
@@ -551,10 +560,12 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         await _searchIndex.OptimizeAsync(cancellationToken).ConfigureAwait(false);
 
-        // .NET 10: Memory optimization after index optimization
+        // Memory optimization after index optimization. The string pool is deliberately not
+        // touched here: the index holds pool ids for every entry, so evicting pooled strings
+        // would make those entries report empty paths and names. LazyFormatCache holds only
+        // recomputable values keyed by content, so trimming it is safe.
         if (_options.UseAggressiveMemoryOptimization)
         {
-            StringPool.Cleanup();
             LazyFormatCache.Cleanup();
             GC.Collect();
         }
