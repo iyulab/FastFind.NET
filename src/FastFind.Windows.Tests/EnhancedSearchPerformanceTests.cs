@@ -153,7 +153,7 @@ public class EnhancedSearchPerformanceTests
         validationsPerSecond.Should().BeGreaterThan(15000, "SearchQuery validation should be very fast");
     }
 
-    [Theory(Skip = "Performance test - run manually")]
+    [PerformanceTestTheory]
     [InlineData(1000)]
     [InlineData(10000)]
     [InlineData(50000)]

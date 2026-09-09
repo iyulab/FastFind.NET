@@ -61,6 +61,20 @@ public sealed class PerformanceTestFactAttribute : FactAttribute
 }
 
 /// <summary>
+/// 성능 테스트 특성(Theory) - CI에서는 자동 스킵
+/// </summary>
+public sealed class PerformanceTestTheoryAttribute : TheoryAttribute
+{
+    public PerformanceTestTheoryAttribute()
+    {
+        if (!CIEnvironment.CanRunPerformanceTests)
+        {
+            Skip = CIEnvironment.GetSkipReason("Performance");
+        }
+    }
+}
+
+/// <summary>
 /// 스트레스 테스트 특성 - CI에서는 자동 스킵
 /// </summary>
 public sealed class StressTestFactAttribute : FactAttribute
