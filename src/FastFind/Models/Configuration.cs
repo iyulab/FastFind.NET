@@ -115,8 +115,16 @@ public record PersistenceConfiguration
     public bool UseWAL { get; init; } = true;
 
     /// <summary>
-    /// Whether to enable full-text search (FTS5 for SQLite)
+    /// Reserved. The SQLite store no longer maintains a full-text index.
     /// </summary>
+    /// <remarks>
+    /// Queries are answered through <c>SearchQueryEvaluator</c>, which no full-text index can
+    /// satisfy on its own: it has to support wildcards, regular expressions and case-sensitive
+    /// matching, and an FTS5 <c>unicode61</c> index cannot match inside a token at all. The index
+    /// was therefore never read, only written — so enabling this could slow ingest and could not
+    /// speed up a search.
+    /// </remarks>
+    [Obsolete("EnableFullTextSearch is not implemented: the store maintains no full-text index, and no query reads one.")]
     public bool EnableFullTextSearch { get; init; } = true;
 
     /// <summary>
@@ -172,8 +180,7 @@ public record PersistenceConfiguration
     {
         Type = PersistenceType.SQLite,
         StoragePath = databasePath,
-        UseWAL = true,
-        EnableFullTextSearch = true
+        UseWAL = true
     };
 
     /// <summary>
@@ -184,7 +191,6 @@ public record PersistenceConfiguration
         Type = PersistenceType.SQLite,
         StoragePath = databasePath,
         UseWAL = true,
-        EnableFullTextSearch = true,
         CacheSize = 50_000,
         UseMmap = true,
         MmapSize = 1024 * 1024 * 512 // 512MB

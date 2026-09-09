@@ -5,7 +5,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>FastFind.SQLite</PackageId>
     <Title>FastFind.NET SQLite Persistence</Title>
-    <Description>SQLite persistence provider for FastFind.NET with FTS5 full-text search support</Description>
+    <Description>SQLite persistence provider for FastFind.NET — a disk-backed index whose memory footprint does not grow with the number of indexed files</Description>
   </PropertyGroup>
 
   <ItemGroup>

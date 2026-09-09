@@ -9,7 +9,7 @@ namespace FastFind.SQLite;
 
 /// <summary>
 /// SQLite-based persistence provider for FastFind.NET
-/// Features: FTS5 full-text search, WAL mode, optimized queries
+/// Features: WAL mode, batched bulk ingest, queries evaluated through SearchQueryEvaluator
 /// </summary>
 public sealed class SqlitePersistence : IIndexPersistence
 {
@@ -89,13 +89,6 @@ public sealed class SqlitePersistence : IIndexPersistence
         // Create tables
         await ExecuteNonQueryAsync(SqliteSchema.CreateFilesTable, cancellationToken);
         await ExecuteNonQueryAsync(SqliteSchema.CreateStatisticsTable, cancellationToken);
-
-        // Create FTS if enabled
-        if (_config.EnableFullTextSearch)
-        {
-            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTable, cancellationToken);
-            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
-        }
 
         // Create indexes
         await ExecuteNonQueryAsync(SqliteSchema.CreateIndexes, cancellationToken);
@@ -259,10 +252,6 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <summary>
     /// High-performance bulk insert for MFT-level throughput (100K+ items)
     /// Uses multi-value INSERT statements and optimized PRAGMA settings.
-    ///
-    /// FTS5 Safety: This method separates data insertion from FTS rebuild to prevent
-    /// "database disk image is malformed" errors. The FTS rebuild uses SQLite's
-    /// official 'rebuild' command which is atomic and safe.
     /// </summary>
     public async Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default)
     {
@@ -275,20 +264,14 @@ public sealed class SqlitePersistence : IIndexPersistence
         var totalInserted = 0;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        // Acquire exclusive lock for bulk operations to prevent concurrent FTS manipulation
+        // Acquire exclusive lock so concurrent bulk operations cannot interleave their PRAGMA changes
         await _bulkOperationLock.WaitAsync(cancellationToken);
         try
         {
             // Apply bulk loading optimizations
             await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
 
-            // PHASE 1: Disable FTS triggers before bulk insert (outside transaction)
-            if (_config.EnableFullTextSearch)
-            {
-                await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
-            }
-
-            // PHASE 2: Insert data in transaction
+            // Insert data in transaction
             await ExecuteNonQueryAsync("BEGIN IMMEDIATE", cancellationToken);
             try
             {
@@ -306,34 +289,7 @@ public sealed class SqlitePersistence : IIndexPersistence
             catch
             {
                 try { await ExecuteNonQueryAsync("ROLLBACK", cancellationToken); } catch { /* ignore */ }
-
-                // Re-enable FTS triggers on failure
-                if (_config.EnableFullTextSearch)
-                {
-                    try { await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken); } catch { /* ignore */ }
-                }
                 throw;
-            }
-
-            // PHASE 3: Rebuild FTS index AFTER data commit (separate operation)
-            // This prevents FTS corruption by using SQLite's official 'rebuild' command
-            if (_config.EnableFullTextSearch)
-            {
-                try
-                {
-                    // Use the safe FTS5 'rebuild' command
-                    await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "FTS rebuild failed, attempting integrity check and recovery");
-                    await TryRecoverFtsAsync(cancellationToken);
-                }
-                finally
-                {
-                    // Always re-enable triggers
-                    try { await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken); } catch { /* ignore */ }
-                }
             }
 
             // Refresh count from DB to accurately reflect UPSERT behavior
@@ -359,28 +315,6 @@ public sealed class SqlitePersistence : IIndexPersistence
                 // Ignore PRAGMA restore errors
             }
             _bulkOperationLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Attempts to recover a corrupted FTS5 index by rebuilding it.
-    /// This handles the "database disk image is malformed" error for FTS5.
-    /// </summary>
-    private async Task TryRecoverFtsAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            // Drop and recreate the FTS table, then rebuild from content table
-            _logger?.LogWarning("Attempting FTS recovery: DROP → CREATE → REBUILD");
-            await ExecuteNonQueryAsync("DROP TABLE IF EXISTS files_fts;", cancellationToken);
-            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTable, cancellationToken);
-            await ExecuteNonQueryAsync("INSERT INTO files_fts(files_fts) VALUES('rebuild');", cancellationToken);
-            await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken);
-            _logger?.LogInformation("FTS index recovered successfully via DROP/CREATE/REBUILD");
-        }
-        catch (Exception rebuildEx)
-        {
-            _logger?.LogError(rebuildEx, "FTS recovery failed. FTS search may not work correctly until database is recreated.");
         }
     }
 
@@ -474,9 +408,6 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <summary>
     /// Streams data from an async enumerable directly into SQLite with buffered bulk inserts.
     /// Optimized for MFT enumeration integration (500K+ records/sec source).
-    ///
-    /// FTS5 Safety: Uses separate phases for data insertion and FTS rebuild to prevent
-    /// "database disk image is malformed" errors.
     /// </summary>
     public async Task<int> AddFromStreamAsync(
         IAsyncEnumerable<FastFileItem> items,
@@ -496,13 +427,7 @@ public sealed class SqlitePersistence : IIndexPersistence
             // Apply bulk loading optimizations
             await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
 
-            // PHASE 1: Disable FTS triggers before bulk insert
-            if (_config.EnableFullTextSearch)
-            {
-                await ExecuteNonQueryAsync(SqliteSchema.DisableFtsTriggers, cancellationToken);
-            }
-
-            // PHASE 2: Stream and insert data
+            // Stream and insert data
             await foreach (var item in items.WithCancellation(cancellationToken))
             {
                 buffer.Add(item);
@@ -522,26 +447,6 @@ public sealed class SqlitePersistence : IIndexPersistence
                 var inserted = await FlushBufferAsync(buffer, cancellationToken);
                 totalInserted += inserted;
                 progress?.Report(totalInserted);
-            }
-
-            // PHASE 3: Rebuild FTS index AFTER all data is committed
-            if (_config.EnableFullTextSearch)
-            {
-                _logger?.LogInformation("Rebuilding FTS index using safe rebuild command...");
-                try
-                {
-                    await ExecuteNonQueryAsync(SqliteSchema.BulkRebuildFts, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "FTS rebuild failed, attempting recovery");
-                    await TryRecoverFtsAsync(cancellationToken);
-                }
-                finally
-                {
-                    // Always re-enable triggers
-                    try { await ExecuteNonQueryAsync(SqliteSchema.CreateFtsTriggers, cancellationToken); } catch { /* ignore */ }
-                }
             }
 
             Interlocked.Add(ref _count, totalInserted);
@@ -855,11 +760,6 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         await ExecuteNonQueryAsync($"DELETE FROM files; UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1;", cancellationToken);
 
-        if (_config.EnableFullTextSearch)
-        {
-            await ExecuteNonQueryAsync("DELETE FROM files_fts;", cancellationToken);
-        }
-
         _count = 0;
         _logger?.LogInformation("Cleared all items from persistence");
     }
@@ -874,12 +774,6 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         // Analyze tables for query optimization
         await ExecuteNonQueryAsync("ANALYZE;", cancellationToken);
-
-        // Optimize FTS index if enabled
-        if (_config.EnableFullTextSearch)
-        {
-            await ExecuteNonQueryAsync(SqliteSchema.OptimizeFts, cancellationToken);
-        }
 
         await ExecuteNonQueryAsync(
             $"UPDATE statistics SET last_optimized = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",

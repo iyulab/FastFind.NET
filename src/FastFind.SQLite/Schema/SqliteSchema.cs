@@ -11,11 +11,14 @@ internal static class SqliteSchema
     /// migrating it.
     /// </summary>
     /// <remarks>
+    /// Version 3 drops the full-text index. No query ever read it, so maintaining it on every
+    /// write bought nothing; a version 2 database still carries the table and its triggers and is
+    /// rebuilt without them.
     /// Version 2 stores paths with their original casing. Version 1 lower-cased every path on
     /// write, which made a case-sensitive search impossible and lost the true path on
     /// case-sensitive file systems.
     /// </remarks>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>Metadata key holding the schema version of an existing database.</summary>
     public const string SchemaVersionKey = "schema_version";
@@ -28,6 +31,8 @@ internal static class SqliteSchema
 
     /// <summary>
     /// Drops every table and trigger owned by this schema, for a rebuild after a version change.
+    /// The full-text table and its triggers are no longer created, but a version 2 database still
+    /// has them, so they are dropped here to clean one up.
     /// </summary>
     public const string DropAll = """
         DROP TRIGGER IF EXISTS files_ai;
@@ -56,37 +61,6 @@ internal static class SqliteSchema
             drive_letter TEXT NOT NULL,
             is_directory INTEGER NOT NULL
         );
-        """;
-
-    /// <summary>
-    /// SQL to create the FTS5 virtual table for full-text search
-    /// </summary>
-    public const string CreateFtsTable = """
-        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
-            name,
-            full_path,
-            content='files',
-            content_rowid='id',
-            tokenize='unicode61 remove_diacritics 2'
-        );
-        """;
-
-    /// <summary>
-    /// SQL triggers to keep FTS table in sync with main table
-    /// </summary>
-    public const string CreateFtsTriggers = """
-        CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-            INSERT INTO files_fts(rowid, name, full_path) VALUES (new.id, new.name, new.full_path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, full_path) VALUES('delete', old.id, old.name, old.full_path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, full_path) VALUES('delete', old.id, old.name, old.full_path);
-            INSERT INTO files_fts(rowid, name, full_path) VALUES (new.id, new.name, new.full_path);
-        END;
         """;
 
     /// <summary>
@@ -226,7 +200,6 @@ internal static class SqliteSchema
     /// </summary>
     public const string ClearAll = """
         DELETE FROM files;
-        DELETE FROM files_fts;
         UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = @updated_at WHERE id = 1;
         """;
 
@@ -239,20 +212,6 @@ internal static class SqliteSchema
             (SELECT COUNT(*) FROM files WHERE is_directory = 0) as total_files,
             (SELECT COUNT(*) FROM files WHERE is_directory = 1) as total_directories,
             (SELECT COUNT(DISTINCT extension) FROM files) as unique_extensions
-        """;
-
-    /// <summary>
-    /// SQL for optimizing FTS index
-    /// </summary>
-    public const string OptimizeFts = """
-        INSERT INTO files_fts(files_fts) VALUES('optimize');
-        """;
-
-    /// <summary>
-    /// SQL for rebuilding FTS index
-    /// </summary>
-    public const string RebuildFts = """
-        INSERT INTO files_fts(files_fts) VALUES('rebuild');
         """;
 
     /// <summary>
@@ -283,7 +242,6 @@ internal static class SqliteSchema
 
     /// <summary>
     /// PRAGMA settings for high-performance bulk loading
-    /// Disables FTS triggers temporarily for maximum insert speed
     /// </summary>
     public const string BulkLoadPragmas = """
         PRAGMA synchronous = NORMAL;
@@ -299,22 +257,4 @@ internal static class SqliteSchema
         PRAGMA synchronous = NORMAL;
         """;
 
-    /// <summary>
-    /// Disable FTS triggers for bulk loading
-    /// </summary>
-    public const string DisableFtsTriggers = """
-        DROP TRIGGER IF EXISTS files_ai;
-        DROP TRIGGER IF EXISTS files_ad;
-        DROP TRIGGER IF EXISTS files_au;
-        """;
-
-    /// <summary>
-    /// SQL for bulk FTS rebuild after bulk loading.
-    /// Uses SQLite's official FTS5 'rebuild' command which is safer and more efficient
-    /// than DELETE+INSERT pattern that can cause "database disk image is malformed" errors.
-    /// See: https://sqlite.org/fts5.html#the_rebuild_command
-    /// </summary>
-    public const string BulkRebuildFts = """
-        INSERT INTO files_fts(files_fts) VALUES('rebuild');
-        """;
 }
