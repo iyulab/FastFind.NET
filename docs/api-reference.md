@@ -201,7 +201,10 @@ returns the same set whichever backend answers it. A backend may narrow candidat
 predicate, by an extension index, by a path trie — but only in ways that cannot exclude a match the
 evaluator accepts.
 
-`SearchQuery.RequiredAttributes` and `ExcludedAttributes` are currently not honoured by any backend.
+`SearchQuery.RequiredAttributes` requires every named flag to be present. `ExcludedAttributes`
+rejects an item carrying **any** of the named flags — so `ReadOnly | Hidden` excludes a file that is
+merely read-only. Both are evaluated in `SearchQueryEvaluator`, which is why every backend honours
+them identically.
 
 ### SQLite Persistence
 
@@ -227,5 +230,52 @@ public class SqlitePersistence : IIndexPersistence
     public Task OptimizeAsync(CancellationToken ct = default);
     public Task VacuumAsync(CancellationToken ct = default);
     public Task<PersistenceStatistics> GetStatisticsAsync(CancellationToken ct = default);
+
+    // Transactions
+    public Task<IIndexTransaction> BeginTransactionAsync(CancellationToken ct = default);
 }
 ```
+
+#### Concurrent use
+
+**A single `SqlitePersistence` instance is safe to use from several threads or tasks at once.** Each
+operation opens its own pooled connection, so searching while indexing needs no coordination from the
+caller. SQLite still has one writer at a time and the store runs in WAL mode, so concurrent readers
+proceed while a write is in flight, and concurrent writers queue.
+
+<sub>Before 2.1.0 this was not true: every operation shared one `SqliteConnection`, which is not
+thread-safe, and concurrent use could throw `ArgumentOutOfRangeException` from inside
+`Microsoft.Data.Sqlite`. Code written against that version may serialise access to the store or hold
+one instance per thread; neither is needed any more, and one instance is cheaper than several because
+they share a connection pool.</sub>
+
+Bulk ingest — `AddBulkOptimizedAsync` and `AddFromStreamAsync` — holds one connection for its whole
+window, and the two are serialised against each other so they queue rather than compete for the
+writer.
+
+#### Transactions
+
+`BeginTransactionAsync` returns an `IIndexTransaction` exposing `CommitAsync`, `RollbackAsync` and
+disposal. Disposing one that was never committed rolls it back.
+
+The transaction is **ambient to the asynchronous flow that opened it**: operations issued on that
+flow before it completes run inside it, without being passed the transaction.
+
+```csharp
+await using (var transaction = await store.BeginTransactionAsync())
+{
+    await store.AddAsync(first);      // both writes are inside the transaction
+    await store.AddAsync(second);
+    await transaction.CommitAsync();  // dispose without this rolls both back
+}
+```
+
+Two consequences worth knowing:
+
+- **Other flows are unaffected.** A second task searching or writing while this transaction is open
+  gets its own connection and neither blocks on it nor joins it.
+- **Do not fan work out concurrently inside an open transaction.** Tasks started from within the
+  scope inherit the flow, and therefore the transaction's connection — which brings back the
+  unsynchronised sharing that connection-per-operation exists to avoid. Await the operations in
+  sequence, or do the concurrent work outside the transaction. This is the same constraint a
+  `SqliteConnection` itself carries.

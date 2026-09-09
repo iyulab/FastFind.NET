@@ -39,7 +39,12 @@
 |--------|--------|
 | **Operations/sec** | 1,877,459 (87% above 1M target) |
 | **Memory per Op** | 439 bytes |
-| **StringPool Interning** | 6,437 paths/sec, 60-80% memory reduction |
+| **StringPool Interning** | 6,437 paths/sec |
+
+> The interning figure here is a throughput, not a saving. Interning was measured at two corpus
+> sizes and reduces the managed heap by **2–5%**, not the 60–80% this page claimed for years: the
+> full path is unique per file, so it cannot be deduplicated, and it is the largest of the four
+> strings an item holds. See `CHANGELOG.md`.
 
 ---
 

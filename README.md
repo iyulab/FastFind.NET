@@ -96,6 +96,11 @@ comfortably fits.
 
 The engine does not dispose a store you created; you keep ownership.
 
+A store is safe to use from several threads or tasks at once — searching while indexing needs no
+coordination from the caller, because each operation takes its own pooled connection. See
+[the concurrency notes](docs/api-reference.md#concurrent-use) for what a transaction covers and the
+one shape that is not supported.
+
 
 ## Performance
 
