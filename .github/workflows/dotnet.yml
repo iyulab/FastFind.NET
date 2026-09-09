@@ -8,11 +8,11 @@ on:
         required: false
         default: false
         type: boolean
-  # Automatic trigger - Only when version changes or workflow updates
+  # Automatic trigger - source changes are validated; a version change also deploys
   push:
     branches: [ "main" ]
     paths:
-      - 'src/Directory.Build.props'    # Version changes trigger deployment
+      - 'src/**'                      # Source changes must be built and tested
       - '.github/workflows/**'        # Workflow updates
   # Pull request validation - Build validation only (tests run locally)
   pull_request:
@@ -26,10 +26,67 @@ env:
   SOLUTION_PATH: 'src/FastFind.sln'
   
 jobs:
-  # 🔍 PR 빌드 검증
+  # 🧭 배포 여부 결정 — 이 워크플로에서 단 한 번만 판정한다.
+  # pack-and-publish 는 매트릭스 잡이라 job output 이 어느 leg 의 값인지 보장되지 않는다.
+  # 판정을 독립 잡으로 분리해야 create-release 가 신뢰할 수 있는 output 을 참조할 수 있다.
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.SHOULD_DEPLOY }}
+      version: ${{ steps.check.outputs.CURRENT_VERSION }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Decide whether this run deploys
+      id: check
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_BEFORE: ${{ github.event.before }}
+        EVENT_SHA: ${{ github.sha }}
+        GIT_REF: ${{ github.ref }}
+        MANUAL_PUSH: ${{ github.event.inputs.push_to_nuget }}
+      run: |
+        set -euo pipefail
+
+        CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' src/Directory.Build.props)
+        SHOULD_DEPLOY="false"
+        REASON="no_trigger"
+
+        echo "📦 Current version: ${CURRENT_VERSION}"
+
+        # A push to main that changes the declared version is the release trigger.
+        if [ "${EVENT_NAME}" = "push" ] \
+           && [ "${GIT_REF}" = "refs/heads/main" ] \
+           && [ "${EVENT_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+          if git diff --name-only "${EVENT_BEFORE}..${EVENT_SHA}" | grep -q '^src/Directory.Build.props$'; then
+            PREVIOUS_VERSION=$(git show "${EVENT_BEFORE}:src/Directory.Build.props" | grep -oP '<Version>\K[^<]+' || echo "0.0.0")
+            echo "📊 ${PREVIOUS_VERSION} → ${CURRENT_VERSION}"
+            if [ "${PREVIOUS_VERSION}" != "${CURRENT_VERSION}" ]; then
+              SHOULD_DEPLOY="true"
+              REASON="version_change_on_main"
+            else
+              REASON="props_change_no_version"
+            fi
+          fi
+        fi
+
+        # Manual override.
+        if [ "${MANUAL_PUSH:-false}" = "true" ]; then
+          SHOULD_DEPLOY="true"
+          REASON="manual_trigger"
+        fi
+
+        echo "SHOULD_DEPLOY=${SHOULD_DEPLOY}" >> "$GITHUB_OUTPUT"
+        echo "CURRENT_VERSION=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
+
+        echo "📋 Should deploy: ${SHOULD_DEPLOY} (${REASON})"
+
+  # 🔍 빌드 검증 — PR 과 main push 양쪽
   validate:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
     - uses: actions/checkout@v4
 
@@ -86,6 +143,7 @@ jobs:
       with:
         name: linux-test-results
         path: ./test-results/
+        retention-days: 1
 
   # 🍎 macOS 테스트 (수동 트리거 전용 — 비용 최소화)
   test-macos:
@@ -119,6 +177,7 @@ jobs:
       with:
         name: macos-test-results
         path: ./test-results/
+        retention-days: 1
 
   # 🐳 Linux 호환성 테스트 (수동 트리거 전용)
   test-linux-compat:
@@ -140,10 +199,8 @@ jobs:
   # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
   pack-and-publish:
     runs-on: ubuntu-latest
-    if: >
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch')
+    needs: [decide]
+    if: needs.decide.outputs.should_deploy == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         project: 
@@ -193,81 +250,10 @@ jobs:
           dotnet nuget verify "$package" || echo "Package verification failed for $package"
         done
     
-    - name: Extract Version from Directory.Build.props
-      id: version
-      run: |
-        # Extract current version from Directory.Build.props
-        CURRENT_VERSION=$(grep -oP '<Version>\K[^<]+' src/Directory.Build.props || echo "1.0.0")
-        echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-        echo "📦 Current version: ${CURRENT_VERSION}"
-
-        # Create version tag format
-        echo "VERSION_TAG=v${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-
-    - name: Check Version Change and Deploy Conditions
-      id: deploy_check
-      run: |
-        CURRENT_VERSION="${{ steps.version.outputs.CURRENT_VERSION }}"
-        VERSION_CHANGED="false"
-        SHOULD_DEPLOY="false"
-        REASON="no_trigger"
-
-        echo "🔍 Checking deployment conditions..."
-
-        # Check if Directory.Build.props was changed in this push
-        if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-          if git diff --name-only ${{ github.event.before }}..${{ github.sha }} | grep -q "src/Directory.Build.props"; then
-            echo "✅ Directory.Build.props was changed in this push"
-            VERSION_CHANGED="true"
-
-            # Get previous version for comparison
-            PREVIOUS_VERSION=$(git show ${{ github.event.before }}:src/Directory.Build.props | grep -oP '<Version>\K[^<]+' || echo "0.0.0")
-            echo "📊 Previous version: ${PREVIOUS_VERSION}"
-            echo "📊 Current version: ${CURRENT_VERSION}"
-
-            if [ "${PREVIOUS_VERSION}" != "${CURRENT_VERSION}" ]; then
-              echo "🚀 Version changed from ${PREVIOUS_VERSION} to ${CURRENT_VERSION}"
-              if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-                SHOULD_DEPLOY="true"
-                REASON="version_change_on_main"
-              else
-                echo "⚠️ Version changed but not on main branch"
-                REASON="version_change_not_main"
-              fi
-            else
-              echo "ℹ️ Directory.Build.props changed but version remained the same"
-              REASON="props_change_no_version"
-            fi
-          else
-            echo "ℹ️ Directory.Build.props was not changed"
-          fi
-        fi
-
-        # Manual trigger override
-        if [ "${{ github.event.inputs.push_to_nuget }}" == "true" ]; then
-          echo "🔧 Manual deployment trigger activated"
-          SHOULD_DEPLOY="true"
-          REASON="manual_trigger"
-        fi
-
-        # Check if version already exists on NuGet (optional - can be enabled later)
-        # We'll skip this for now to allow re-publishing same version if needed
-
-        echo "SHOULD_DEPLOY=${SHOULD_DEPLOY}" >> $GITHUB_OUTPUT
-        echo "REASON=${REASON}" >> $GITHUB_OUTPUT
-        echo "VERSION_CHANGED=${VERSION_CHANGED}" >> $GITHUB_OUTPUT
-        echo "CURRENT_VERSION=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-
-        echo "📋 Deployment Decision:"
-        echo "   Should Deploy: ${SHOULD_DEPLOY}"
-        echo "   Reason: ${REASON}"
-        echo "   Version: ${CURRENT_VERSION}"
-    
     - name: Push ${{ matrix.project.name }} to NuGet
-      if: steps.deploy_check.outputs.SHOULD_DEPLOY == 'true'
+      if: needs.decide.outputs.should_deploy == 'true'
       run: |
-        echo "🚀 Deploying ${{ matrix.project.name }} v${{ steps.deploy_check.outputs.CURRENT_VERSION }} to NuGet"
-        echo "📋 Reason: ${{ steps.deploy_check.outputs.REASON }}"
+        echo "🚀 Deploying ${{ matrix.project.name }} v${{ needs.decide.outputs.version }} to NuGet"
         echo "📦 Packages in nupkg/:"
         ls -la nupkg/
 
@@ -278,20 +264,24 @@ jobs:
           --skip-duplicate \
           --no-symbols
 
-        echo "✅ NuGet deployment completed for ${{ matrix.project.name }} v${{ steps.deploy_check.outputs.CURRENT_VERSION }}"
-    
+        echo "✅ NuGet deployment completed for ${{ matrix.project.name }} v${{ needs.decide.outputs.version }}"
+
+    # Release 에 attach 하기 위한 중간 산출물 — create-release 가 끝나면 즉시 삭제된다.
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
         name: nuget-packages-${{ matrix.project.name }}
         path: nupkg/*.nupkg
-        retention-days: 30
+        retention-days: 1
 
   create-release:
-    needs: [pack-and-publish]
+    needs: [decide, pack-and-publish]
     runs-on: ubuntu-latest
-    if: needs.pack-and-publish.outputs.SHOULD_DEPLOY == 'true' && github.ref == 'refs/heads/main'
-    
+    if: needs.decide.outputs.should_deploy == 'true' && github.ref == 'refs/heads/main'
+    # 태그와 릴리스를 만들려면 쓰기 권한이 필요하다.
+    permissions:
+      contents: write
+
     steps:
     - uses: actions/checkout@v4
       with:
@@ -301,20 +291,13 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: artifacts/
-    
+
     - name: Get version info
       id: version
       run: |
-        if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]; then
-          VERSION="${{ github.ref_name }}"
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-        else
-          # Extract version from Directory.Build.props
-          VERSION=$(grep -oP '<Version>\K[^<]+' src/Directory.Build.props || echo "1.0.0")
-          echo "VERSION=v${VERSION}" >> $GITHUB_OUTPUT
-        fi
-        echo "Using version: ${VERSION}"
-    
+        echo "VERSION=v${{ needs.decide.outputs.version }}" >> "$GITHUB_OUTPUT"
+        echo "Using version: v${{ needs.decide.outputs.version }}"
+
     - name: Generate changelog
       id: changelog
       run: |
@@ -330,7 +313,7 @@ jobs:
         fi
     
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.version.outputs.VERSION }}
         name: FastFind.NET ${{ steps.version.outputs.VERSION }}
@@ -340,17 +323,17 @@ jobs:
           ### 📦 Published Packages
           - **FastFind.Core**: Core interfaces, models, cross-platform SIMD string matching
           - **FastFind.Windows**: Windows-optimized implementation (MFT, USN Journal)
-          - **FastFind.Unix**: Linux implementation (Channel BFS, inotify)
-          - **FastFind.SQLite**: SQLite persistence with FTS5 full-text search
+          - **FastFind.Unix**: Linux and macOS implementation (Channel BFS, inotify/FSEvents)
+          - **FastFind.SQLite**: SQLite persistence provider
 
           ### 🚀 Key Features
           - Cross-platform SIMD string matching (Vector256/Vector128 auto-dispatch)
-          - Memory-optimized string pooling (60-80% reduction)
+          - String interning to avoid retaining a copy of every repeated path segment
           - Real-time file system monitoring (USN Journal / inotify)
-          - Windows: NTFS MFT direct access (31K+ files/sec)
+          - Windows: NTFS MFT direct enumeration
           - Linux: Channel-based BFS parallel enumeration
-          - SQLite persistence with FTS5 full-text search
-          
+          - Optional disk-backed index, so memory need not grow with the corpus
+
           ${{ steps.changelog.outputs.CHANGELOG }}
           
           ### 📥 Installation
@@ -369,3 +352,11 @@ jobs:
         files: artifacts/**/*.nupkg
         generate_release_notes: true
         make_latest: ${{ !contains(steps.version.outputs.VERSION, '-') }}
+
+    # 패키지는 Release 에 attach 됐으므로 artifact 보관은 저장용량만 차지한다.
+    - name: Delete packaging artifacts
+      uses: geekyeggo/delete-artifact@v5
+      if: always()
+      with:
+        name: nuget-packages-*
+        failOnError: false
