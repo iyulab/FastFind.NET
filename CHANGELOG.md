@@ -4,7 +4,7 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.0.0] - 2026-09-09
 
 This release changes behaviour that consumers may be relying on. Read **Breaking changes** before
 upgrading. The headline is that a search engine can now keep its index in a persistence store instead
@@ -83,9 +83,12 @@ fail loudly.
   kept it current with three triggers, so every write paid for it, while no query ever read it — the
   candidate query narrows with `LIKE`, never `MATCH`. The bulk paths also carried a three-phase
   drop-triggers / insert / rebuild sequence and a recovery routine, all of which existed solely to
-  keep that index from corrupting. Measured on the same corpus and the same call, 50,000 items of
-  99-character paths through `AddBulkOptimizedAsync`: **897 → 1,176 items/s**, and **887 → 796 bytes
-  per stored entry**.
+  keep that index from corrupting. Measured against 1.4.0 on the same machine, corpus and call
+  (`AddBulkOptimizedAsync`, 99-character paths): **bytes per stored entry fall by about 10%** —
+  887 → 796 at 50,000 items and 899 → 811 at 200,000. **Ingest throughput is not claimed to change**:
+  a 50,000-item run improved (897 → 1,176 items/s) but a 200,000-item run did not reproduce it
+  (472 → 442 items/s), and these are single runs, so the honest reading is that the write path does
+  less work and stores less, while end-to-end throughput is dominated by something else.
 - All package dependencies brought to current, including two test-tooling majors.
 
 ### Breaking changes
