@@ -738,7 +738,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 await foreach (var change in _provider.MonitorChangesAsync(
                                    locations, options, _monitoringCts.Token).ConfigureAwait(false))
                 {
-                    HandleFileChange(change);
+                    await HandleFileChangeAsync(change).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -756,7 +756,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
         }, _monitoringCts.Token);
     }
 
-    private void HandleFileChange(FileChangeEventArgs change)
+    private async Task HandleFileChangeAsync(FileChangeEventArgs change)
     {
         try
         {
@@ -764,17 +764,17 @@ internal class UnixSearchEngineImpl : ISearchEngine
             {
                 case FileChangeType.Created:
                 case FileChangeType.Modified:
-                    UpdateIndexEntry(change.NewPath);
+                    await UpdateIndexEntryAsync(change.NewPath).ConfigureAwait(false);
                     break;
 
                 case FileChangeType.Deleted:
-                    RemoveIndexEntry(change.NewPath);
+                    await RemoveIndexEntryAsync(change.NewPath).ConfigureAwait(false);
                     break;
 
                 case FileChangeType.Renamed:
                     if (change.OldPath != null)
-                        RemoveIndexEntry(change.OldPath);
-                    UpdateIndexEntry(change.NewPath);
+                        await RemoveIndexEntryAsync(change.OldPath).ConfigureAwait(false);
+                    await UpdateIndexEntryAsync(change.NewPath).ConfigureAwait(false);
                     break;
             }
 
@@ -789,11 +789,11 @@ internal class UnixSearchEngineImpl : ISearchEngine
     /// <summary>
     /// Drops a path from whichever index this engine is using.
     /// </summary>
-    private void RemoveIndexEntry(string path)
+    private async Task RemoveIndexEntryAsync(string path)
     {
         if (UsesSuppliedIndex)
         {
-            _searchIndex!.RemoveAsync(path).GetAwaiter().GetResult();
+            await _searchIndex!.RemoveAsync(path).ConfigureAwait(false);
             Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
         }
         else
@@ -803,7 +803,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
         }
     }
 
-    private void UpdateIndexEntry(string path)
+    private async Task UpdateIndexEntryAsync(string path)
     {
         try
         {
@@ -850,9 +850,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
             {
                 if (UsesSuppliedIndex)
                 {
-                    // The monitor callback is synchronous; the index write is not. Blocking here
-                    // keeps the change and the count consistent, and a single-item write is cheap.
-                    _searchIndex!.AddAsync(item.ToFastFileItem()).GetAwaiter().GetResult();
+                    await _searchIndex!.AddAsync(item.ToFastFileItem()).ConfigureAwait(false);
                     Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
                 }
                 else

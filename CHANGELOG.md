@@ -36,6 +36,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **File-system change notifications blocked a thread pool thread on Linux and macOS.** When the
+  engine is backed by a store, each monitored create, modify, delete or rename wrote to it, and the
+  write was awaited synchronously from a callback. The whole notification pipeline is already async,
+  so the writes are now awaited properly and changes no longer serialise behind store I/O.
 - **The Unix engine answered some queries differently from every other backend.** It filtered its
   in-memory index with its own copy of the query predicate rather than through
   `SearchQueryEvaluator`, and the copy had drifted: it compared `BasePath` with an ordinal comparison
