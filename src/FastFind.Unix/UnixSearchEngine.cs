@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 
 namespace FastFind.Unix;
 
@@ -524,124 +523,32 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
     // ────────────────────────────── Private Helpers ──────────────────────────────
 
+    /// <summary>
+    /// Filters the in-memory index for a query.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to <see cref="SearchQueryEvaluator"/>, the single definition of what satisfies a
+    /// <see cref="SearchQuery"/>. This method previously re-implemented the whole predicate — around
+    /// a hundred lines of <c>Where</c> clauses — which is exactly the duplication that let the
+    /// backends disagree with one another before Phase B. Any filtering rule belongs in the
+    /// evaluator, not here.
+    /// </remarks>
     private List<FileItem> SearchIndex(SearchQuery query, CancellationToken cancellationToken)
     {
-        IEnumerable<FileItem> source = _index.Values;
+        var textMatcher = SearchQueryEvaluator.CreateTextMatcher(query);
+        var results = new List<FileItem>();
 
-        // Text matching
-        if (!string.IsNullOrEmpty(query.SearchText))
+        foreach (var item in _index.Values)
         {
-            Regex? regex = null;
-            if (query.UseRegex)
-            {
-                regex = query.GetCompiledRegex();
-            }
-            else if (query.SearchText.Contains('*') || query.SearchText.Contains('?'))
-            {
-                regex = query.GetWildcardRegex();
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
-            if (regex != null)
+            if (SearchQueryEvaluator.Matches(item.ToFastFileItem(), query, textMatcher))
             {
-                source = source.Where(item =>
-                {
-                    var target = query.SearchFileNameOnly ? item.Name : item.FullPath;
-                    return regex.IsMatch(target);
-                });
-            }
-            else
-            {
-                var comparison = query.CaseSensitive
-                    ? StringComparison.Ordinal
-                    : StringComparison.OrdinalIgnoreCase;
-
-                source = source.Where(item =>
-                {
-                    var target = query.SearchFileNameOnly ? item.Name : item.FullPath;
-                    return target.Contains(query.SearchText, comparison);
-                });
+                results.Add(item);
             }
         }
 
-        // BasePath filter
-        if (!string.IsNullOrEmpty(query.BasePath))
-        {
-            var basePath = query.BasePath.TrimEnd('/');
-            if (query.IncludeSubdirectories)
-            {
-                source = source.Where(item =>
-                    item.FullPath.StartsWith(basePath, StringComparison.Ordinal));
-            }
-            else
-            {
-                source = source.Where(item =>
-                    item.DirectoryPath.Equals(basePath, StringComparison.Ordinal) ||
-                    item.DirectoryPath.Equals(basePath + "/", StringComparison.Ordinal));
-            }
-        }
-
-        // Extension filter
-        if (!string.IsNullOrEmpty(query.ExtensionFilter))
-        {
-            var ext = query.ExtensionFilter.StartsWith('.')
-                ? query.ExtensionFilter
-                : "." + query.ExtensionFilter;
-
-            source = source.Where(item =>
-                item.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase));
-        }
-
-        // Include/exclude files and directories
-        if (!query.IncludeFiles)
-            source = source.Where(item => item.IsDirectory);
-        if (!query.IncludeDirectories)
-            source = source.Where(item => !item.IsDirectory);
-
-        // Hidden/system filters
-        if (!query.IncludeHidden)
-            source = source.Where(item => !item.IsHidden);
-        if (!query.IncludeSystem)
-            source = source.Where(item => !item.IsSystem);
-
-        // Size filters
-        if (query.MinSize.HasValue)
-            source = source.Where(item => item.Size >= query.MinSize.Value);
-        if (query.MaxSize.HasValue)
-            source = source.Where(item => item.Size <= query.MaxSize.Value);
-
-        // Date filters
-        if (query.MinCreatedDate.HasValue)
-            source = source.Where(item => item.CreatedTime >= query.MinCreatedDate.Value);
-        if (query.MaxCreatedDate.HasValue)
-            source = source.Where(item => item.CreatedTime <= query.MaxCreatedDate.Value);
-        if (query.MinModifiedDate.HasValue)
-            source = source.Where(item => item.ModifiedTime >= query.MinModifiedDate.Value);
-        if (query.MaxModifiedDate.HasValue)
-            source = source.Where(item => item.ModifiedTime <= query.MaxModifiedDate.Value);
-
-        // Required/excluded attributes
-        if (query.RequiredAttributes.HasValue)
-            source = source.Where(item => item.Attributes.HasFlag(query.RequiredAttributes.Value));
-        if (query.ExcludedAttributes.HasValue)
-            source = source.Where(item => !item.Attributes.HasFlag(query.ExcludedAttributes.Value));
-
-        // Search locations filter
-        if (query.SearchLocations.Count > 0)
-        {
-            source = source.Where(item =>
-                query.SearchLocations.Any(loc =>
-                    item.FullPath.StartsWith(loc, StringComparison.Ordinal)));
-        }
-
-        // Excluded paths
-        if (query.ExcludedPaths.Count > 0)
-        {
-            source = source.Where(item =>
-                !query.ExcludedPaths.Any(ex =>
-                    item.FullPath.StartsWith(ex, StringComparison.Ordinal)));
-        }
-
-        return source.ToList();
+        return results;
     }
 
     private static async IAsyncEnumerable<FastFileItem> ConvertToFastFileItemAsync(
