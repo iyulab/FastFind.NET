@@ -27,6 +27,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Known limitations
 
+- **`SqlitePersistence` is not thread-safe.** It holds a single `SqliteConnection` and every
+  operation creates commands on it, so concurrent calls can corrupt the connection's internal state
+  and throw `ArgumentOutOfRangeException` from inside `Microsoft.Data.Sqlite`. This predates 2.0.0.
+  Serialise access to a single instance, or use one instance per thread, until it is fixed.
 - `PersistenceMode.MirrorInMemory` is still not supported on Linux or macOS. It needs a shared
   in-memory `ISearchIndex` to mirror into, and those engines keep their default in-memory index in a
   plain dictionary. Composing with it throws rather than silently not mirroring; `QueryFromStore`,
