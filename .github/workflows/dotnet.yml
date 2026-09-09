@@ -145,6 +145,43 @@ jobs:
         path: ./test-results/
         retention-days: 1
 
+  # 🪟 Windows 테스트 (PR + main push) — 이 라이브러리의 주 플랫폼이고,
+  # 배포는 이 잡을 통과해야만 진행된다.
+  test-windows:
+    runs-on: windows-latest
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v6
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Build Windows Tests
+      run: dotnet build src/FastFind.Windows.Tests/FastFind.Windows.Tests.csproj --configuration Release
+
+    - name: Run Windows Tests
+      run: dotnet test src/FastFind.Windows.Tests/FastFind.Windows.Tests.csproj --configuration Release --no-build --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: windows-test-results
+        path: ./test-results/
+        retention-days: 1
+
   # 🍎 macOS 테스트 (수동 트리거 전용 — 비용 최소화)
   test-macos:
     runs-on: macos-latest
@@ -199,8 +236,14 @@ jobs:
   # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
   pack-and-publish:
     runs-on: ubuntu-latest
-    needs: [decide]
-    if: needs.decide.outputs.should_deploy == 'true' || github.event_name == 'workflow_dispatch'
+    # 배포는 되돌릴 수 없다 — NuGet 패키지는 unlist 만 되고 삭제되지 않는다.
+    # 따라서 pack 은 빌드·테스트 잡을 통과한 뒤에만 실행한다.
+    # workflow_dispatch 에서는 그 잡들이 skipped 이고, skipped 는 failure 가 아니므로
+    # !failure() 가 참이 되어 기존 수동 검증 경로는 그대로 동작한다.
+    needs: [decide, validate, test-linux, test-windows]
+    if: >
+      !failure() && !cancelled() &&
+      (needs.decide.outputs.should_deploy == 'true' || github.event_name == 'workflow_dispatch')
     strategy:
       matrix:
         project: 
@@ -278,9 +321,10 @@ jobs:
     needs: [decide, pack-and-publish]
     runs-on: ubuntu-latest
     if: needs.decide.outputs.should_deploy == 'true' && github.ref == 'refs/heads/main'
-    # 태그와 릴리스를 만들려면 쓰기 권한이 필요하다.
+    # contents: 태그와 릴리스 생성. actions: 아래 delete-artifact 가 artifact 를 지운다.
     permissions:
       contents: write
+      actions: write
 
     steps:
     - uses: actions/checkout@v7
