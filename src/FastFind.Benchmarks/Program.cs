@@ -13,6 +13,11 @@ public class Program
 {
     public static void Main(string[] args)
     {
+        // Retention is measured, not benchmarked: it reads the heap after forced collections rather
+        // than sampling a running loop, and each configuration needs its own process because
+        // StringPool is static. Handled before BenchmarkDotNet sees the arguments.
+        if (Infrastructure.MemoryRetentionMeasurement.TryHandle(args)) return;
+
         // Ensure Windows factory is registered
         if (OperatingSystem.IsWindows())
         {
