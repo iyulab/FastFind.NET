@@ -2,6 +2,7 @@ using FastFind.Models;
 using FluentAssertions;
 using System.Diagnostics;
 using Xunit;
+using FastFind.Windows.Tests.Helpers;
 
 namespace FastFind.Windows.Tests;
 
@@ -12,7 +13,7 @@ namespace FastFind.Windows.Tests;
 [Trait("Suite", "EnhancedSearch")]
 public class EnhancedSearchPerformanceTests
 {
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public void SearchQuery_Creation_ShouldBeFast()
     {
         // Arrange
@@ -50,7 +51,7 @@ public class EnhancedSearchPerformanceTests
         queriesPerSecond.Should().BeGreaterThan(10000, "SearchQuery creation should be very fast");
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public void SearchQuery_Clone_ShouldBeFast()
     {
         // Arrange
@@ -102,7 +103,7 @@ public class EnhancedSearchPerformanceTests
         clonesPerSecond.Should().BeGreaterThan(5000, "SearchQuery cloning should be fast");
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public void SearchQuery_Validation_ShouldBeFast()
     {
         // Arrange
@@ -211,7 +212,7 @@ public class EnhancedSearchPerformanceTests
         accessesPerSecond.Should().BeGreaterThan(1000000, "Property access should be extremely fast");
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public void SearchQuery_MemoryFootprint_ShouldBeReasonable()
     {
         // Arrange
@@ -263,7 +264,7 @@ public class EnhancedSearchPerformanceTests
         mbTotal.Should().BeLessThan(50, "Total memory for 10K queries should be under 50MB");
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public async Task SearchQuery_ConcurrentAccess_ShouldBeThreadSafe()
     {
         // Arrange

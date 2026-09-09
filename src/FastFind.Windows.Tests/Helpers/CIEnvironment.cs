@@ -40,10 +40,15 @@ public static class CIEnvironment
         {
             try
             {
-                var gc = GC.GetTotalMemory(false);
-                var available = GC.GetTotalMemory(true);
-                // CI 환경에서는 100MB 이하일 수 있음
-                return available > 50_000_000; // 50MB 최소
+                // TotalAvailableMemoryBytes is the memory the GC may use: the container limit where
+                // one is set, physical memory otherwise.
+                //
+                // This used to read GC.GetTotalMemory, which reports the heap already **in use**.
+                // A fresh test process holds a few megabytes, so `> 50 MB` was false everywhere and
+                // CanRunPerformanceTests was false everywhere with it — every [PerformanceTestFact]
+                // skipped on developer machines as well as CI, which is the opposite of what the
+                // attribute exists for.
+                return GC.GetGCMemoryInfo().TotalAvailableMemoryBytes > 2L * 1024 * 1024 * 1024;
             }
             catch
             {

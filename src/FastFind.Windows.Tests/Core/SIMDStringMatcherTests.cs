@@ -1,3 +1,4 @@
+using FastFind.Windows.Tests.Helpers;
 using System.Diagnostics;
 using FastFind.Models;
 
@@ -97,7 +98,7 @@ public class SIMDStringMatcherTests
         index.Should().Be(-1, "Should return -1 when pattern not found");
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
     [Trait("Category", "Performance")]
     [Trait("Category", "Suite:SIMD")]
     public void SIMD_Performance_Should_Be_Faster_Than_Native()
@@ -116,11 +117,14 @@ public class SIMDStringMatcherTests
         }
         sw1.Stop();
         
-        // Act - Measure native performance
+        // Act - Measure native performance.
+        // OrdinalIgnoreCase, not Ordinal: ContainsVectorized folds case (char.ToLowerInvariant per
+        // character in its verification loop), so comparing it against a case-sensitive search
+        // measured two different jobs and flattered the SIMD side by the cost of the folding.
         var sw2 = Stopwatch.StartNew();
         for (int i = 0; i < PerformanceTestIterations; i++)
         {
-            longText.Contains(pattern, StringComparison.Ordinal);
+            longText.Contains(pattern, StringComparison.OrdinalIgnoreCase);
         }
         sw2.Stop();
         
@@ -198,7 +202,9 @@ public class SIMDStringMatcherTests
         Console.WriteLine($"Text length: {textLength}, Time per char: {timePerChar:F6} ticks");
     }
     
-    [Fact(Skip = "Performance test - not critical for core functionality")]
+    [PerformanceTestFact]
+    [Trait("Category", "Performance")]
+    [Trait("Category", "Suite:SIMD")]
     public void Memory_Usage_Should_Be_Minimal()
     {
         // Arrange

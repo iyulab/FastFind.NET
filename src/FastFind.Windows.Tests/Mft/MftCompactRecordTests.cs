@@ -4,6 +4,7 @@ using FastFind.Models;
 using FastFind.Windows.Mft;
 using FluentAssertions;
 using Xunit;
+using FastFind.Windows.Tests.Helpers;
 using Xunit.Abstractions;
 
 namespace FastFind.Windows.Tests.Mft;
@@ -372,7 +373,7 @@ public class MftCompactRecordTests
 
     #region Bulk Operation Tests
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     [Trait("Category", "Performance")]
     public void MftCompactRecord_BulkCreation_Performance()
     {

@@ -4,6 +4,7 @@ using FastFind.Windows.Mft;
 using FluentAssertions;
 using System.Diagnostics;
 using Xunit;
+using FastFind.Windows.Tests.Helpers;
 using Xunit.Abstractions;
 
 namespace FastFind.Windows.Tests.Mft;
@@ -35,7 +36,7 @@ public class MftSqliteBenchmarkTests : IDisposable
         catch { }
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public async Task Benchmark_SqliteBulkInsert_Performance()
     {
         _output.WriteLine("=== SQLite Bulk Insert Benchmark ===\n");
@@ -75,7 +76,7 @@ public class MftSqliteBenchmarkTests : IDisposable
         }
     }
 
-    [Fact(Skip = "Performance test - run manually")]
+    [PerformanceTestFact]
     public async Task Benchmark_SqliteSearch_Performance()
     {
         _output.WriteLine("=== SQLite Search Benchmark ===\n");
