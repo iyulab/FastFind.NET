@@ -35,7 +35,7 @@ jobs:
       should_deploy: ${{ steps.check.outputs.SHOULD_DEPLOY }}
       version: ${{ steps.check.outputs.CURRENT_VERSION }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -88,15 +88,15 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
@@ -116,15 +116,15 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
@@ -138,7 +138,7 @@ jobs:
       run: dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
 
     - name: Upload test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: linux-test-results
@@ -150,15 +150,15 @@ jobs:
     runs-on: macos-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
@@ -172,7 +172,7 @@ jobs:
       run: dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build --filter "Category!=Performance" --logger "trx;LogFileName=test-results.trx" --results-directory ./test-results
 
     - name: Upload test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: macos-test-results
@@ -189,7 +189,7 @@ jobs:
     container:
       image: ${{ matrix.container }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Build & Test
       run: |
@@ -214,17 +214,17 @@ jobs:
             name: 'FastFind.Unix'
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0  # Full history for version comparison
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
     
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
@@ -268,7 +268,7 @@ jobs:
 
     # Release 에 attach 하기 위한 중간 산출물 — create-release 가 끝나면 즉시 삭제된다.
     - name: Upload packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: nuget-packages-${{ matrix.project.name }}
         path: nupkg/*.nupkg
@@ -283,12 +283,12 @@ jobs:
       contents: write
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0  # Full history for changelog generation
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         path: artifacts/
 
@@ -313,7 +313,7 @@ jobs:
         fi
     
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ steps.version.outputs.VERSION }}
         name: FastFind.NET ${{ steps.version.outputs.VERSION }}
@@ -355,7 +355,7 @@ jobs:
 
     # 패키지는 Release 에 attach 됐으므로 artifact 보관은 저장용량만 차지한다.
     - name: Delete packaging artifacts
-      uses: geekyeggo/delete-artifact@v5
+      uses: geekyeggo/delete-artifact@v6
       if: always()
       with:
         name: nuget-packages-*
