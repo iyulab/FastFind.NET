@@ -79,6 +79,13 @@ fail loudly.
 - `PersistenceConfiguration` documentation corrected against measured behaviour: `CacheSize` is in
   **KiB, not pages** (the default is ~9.8 MiB, not ~39 MiB); `MmapSize = 0` with `UseMmap` enabled
   means a **256 MiB** window, not none; `PageSize` applies only when the database file is created.
+- **The SQLite store no longer maintains a full-text index.** It created an FTS5 virtual table and
+  kept it current with three triggers, so every write paid for it, while no query ever read it — the
+  candidate query narrows with `LIKE`, never `MATCH`. The bulk paths also carried a three-phase
+  drop-triggers / insert / rebuild sequence and a recovery routine, all of which existed solely to
+  keep that index from corrupting. Measured on the same corpus and the same call, 50,000 items of
+  99-character paths through `AddBulkOptimizedAsync`: **897 → 1,176 items/s**, and **887 → 796 bytes
+  per stored entry**.
 - All package dependencies brought to current, including two test-tooling majors.
 
 ### Breaking changes
@@ -103,6 +110,12 @@ fail loudly.
   callers hold interned ids. Use `Reset()` when no interned value is still in use.
 - Searching by path is now case-sensitive on Linux and macOS, matching those file systems. It was
   effectively case-insensitive because casing was being destroyed at interning time.
+- `PersistenceConfiguration.EnableFullTextSearch` is marked `[Obsolete]`. The store maintains no
+  full-text index, so setting it changes nothing; previously its only possible effect was to slow
+  writes. An index that could serve these queries would need the `trigram` tokenizer — `unicode61`
+  cannot match inside a token — which would be a new capability, not a restoration of this one.
+- The SQLite schema version is now 3. A version 2 database still carries the full-text table and its
+  triggers and is rebuilt without them on open, at the cost of one re-index.
 
 ### Known limitations
 

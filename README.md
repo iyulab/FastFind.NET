@@ -13,7 +13,7 @@ Ultra-high performance cross-platform file search library for .NET 10
 | **FastFind.Core** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Core interfaces, SIMD string matching, StringPool |
 | **FastFind.Windows** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | NTFS MFT direct access, USN Journal sync |
 | **FastFind.Unix** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Unix.svg)](https://www.nuget.org/packages/FastFind.Unix) | Linux/macOS parallel enumeration, file monitoring |
-| **FastFind.SQLite** | [![NuGet](https://img.shields.io/nuget/v/FastFind.SQLite.svg)](https://www.nuget.org/packages/FastFind.SQLite) | FTS5 persistent index |
+| **FastFind.SQLite** | [![NuGet](https://img.shields.io/nuget/v/FastFind.SQLite.svg)](https://www.nuget.org/packages/FastFind.SQLite) | Disk-backed persistent index |
 
 ## Key Features
 
@@ -22,7 +22,7 @@ Ultra-high performance cross-platform file search library for .NET 10
 - **Parallel BFS Enumeration** (Linux/macOS): Channel-based depth-aware parallel traversal
 - **Real-Time Monitoring**: USN Journal (Windows) / inotify (Linux) / FSEvents (macOS)
 - **Disk-Backed Index**: Keep the index in SQLite instead of memory — footprint stays flat as the corpus grows
-- **Memory Optimized**: 60-80% reduction via StringPool interning
+- **Memory Optimized**: paths and names are interned, so a repeated directory prefix is stored once
 - **Auto Platform Detection**: ModuleInitializer auto-registration
 
 ## Installation
