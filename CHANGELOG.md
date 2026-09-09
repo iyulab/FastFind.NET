@@ -4,6 +4,21 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Unix engine answered some queries differently from every other backend.** It filtered its
+  in-memory index with its own copy of the query predicate rather than through
+  `SearchQueryEvaluator`, and the copy had drifted: it compared `BasePath` with an ordinal comparison
+  on every platform, and applied its own rules for the extension and location filters. It now
+  evaluates through the same predicate as the Windows index and the SQLite store, so a query returns
+  the same set on Linux and macOS as it does anywhere else.
+- **`SearchQuery.RequiredAttributes` and `ExcludedAttributes` are now honoured.** No backend applied
+  them. `RequiredAttributes` demands every requested flag; `ExcludedAttributes` rejects an item
+  carrying **any** of them, which is what "attributes that must not be present" means — a filter
+  excluding `ReadOnly | Hidden` now excludes an item that is merely read-only.
+
 ## [2.0.0] - 2026-09-09
 
 This release changes behaviour that consumers may be relying on. Read **Breaking changes** before

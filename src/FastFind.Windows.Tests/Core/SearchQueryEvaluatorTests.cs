@@ -222,4 +222,46 @@ public class SearchQueryEvaluatorTests
     {
         Matches(Item(@"C:\anywhere\at\all.txt"), new SearchQuery()).Should().BeTrue();
     }
+
+    [Fact]
+    public void RequiredAttributes_Should_Demand_Every_Requested_Flag()
+    {
+        var readOnlyOnly = Item(@"C:\docs\a.txt", attributes: FileAttributes.ReadOnly);
+        var readOnlyArchive = Item(@"C:\docs\b.txt", attributes: FileAttributes.ReadOnly | FileAttributes.Archive);
+
+        var query = new SearchQuery
+        {
+            RequiredAttributes = FileAttributes.ReadOnly | FileAttributes.Archive,
+        };
+
+        Matches(readOnlyOnly, query).Should().BeFalse("only one of the two required flags is present");
+        Matches(readOnlyArchive, query).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ExcludedAttributes_Should_Reject_An_Item_Carrying_Any_One_Of_Them()
+    {
+        // "must not be present" reads as any, not all. Testing an item with exactly one of the two
+        // excluded flags is what separates the two readings: HasFlag would accept it.
+        var readOnly = Item(@"C:\docs\a.txt", attributes: FileAttributes.ReadOnly);
+        var archive = Item(@"C:\docs\b.txt", attributes: FileAttributes.Archive);
+        var neither = Item(@"C:\docs\c.txt", attributes: FileAttributes.Normal);
+
+        var query = new SearchQuery
+        {
+            ExcludedAttributes = FileAttributes.ReadOnly | FileAttributes.Archive,
+        };
+
+        Matches(readOnly, query).Should().BeFalse();
+        Matches(archive, query).Should().BeFalse();
+        Matches(neither, query).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Attribute_Filters_Should_Be_Inert_When_Unset()
+    {
+        var item = Item(@"C:\docs\a.txt", attributes: FileAttributes.ReadOnly | FileAttributes.Archive);
+
+        Matches(item, new SearchQuery()).Should().BeTrue();
+    }
 }

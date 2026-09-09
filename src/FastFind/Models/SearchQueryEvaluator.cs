@@ -74,6 +74,15 @@ public static class SearchQueryEvaluator
         if (query.MinModifiedDate.HasValue && item.ModifiedTime < query.MinModifiedDate.Value) return false;
         if (query.MaxModifiedDate.HasValue && item.ModifiedTime > query.MaxModifiedDate.Value) return false;
 
+        // Attribute filters. RequiredAttributes must all be present; ExcludedAttributes rejects an
+        // item carrying any of them — "exclude read-only or hidden" is one query, not two.
+        if (query.RequiredAttributes.HasValue &&
+            (item.Attributes & query.RequiredAttributes.Value) != query.RequiredAttributes.Value)
+            return false;
+        if (query.ExcludedAttributes.HasValue &&
+            (item.Attributes & query.ExcludedAttributes.Value) != 0)
+            return false;
+
         // Extension filter, normalized so that "cs" and ".cs" mean the same thing
         if (!string.IsNullOrEmpty(query.ExtensionFilter) && !MatchesExtension(item.Extension, query.ExtensionFilter))
             return false;

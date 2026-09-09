@@ -157,4 +157,26 @@ public class UnixSearchPredicateTests
         withDot.Should().BeEquivalentTo(withoutDot);
         withDot.Should().HaveCount(2);
     }
+
+    [Fact]
+    public void Attribute_Filters_Should_Be_Honoured()
+    {
+        // The engine's old hand-rolled predicate honoured these; the evaluator did not, so unifying
+        // the two briefly lost them on this platform. This pins them for every backend at once.
+        var required = Evaluate(new SearchQuery
+        {
+            RequiredAttributes = FileAttributes.Directory,
+            IncludeDirectories = true,
+        });
+
+        var excluded = Evaluate(new SearchQuery
+        {
+            ExcludedAttributes = FileAttributes.Directory,
+            IncludeDirectories = true,
+        });
+
+        required.Should().ContainSingle().Which.Should().Be("/home/user/docs");
+        excluded.Should().NotContain("/home/user/docs");
+        excluded.Should().Contain("/home/user/docs/report.txt");
+    }
 }
