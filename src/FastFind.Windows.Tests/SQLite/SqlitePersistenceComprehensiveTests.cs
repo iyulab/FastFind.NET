@@ -654,6 +654,206 @@ public class SqlitePersistenceComprehensiveTests : IAsyncLifetime
         _output.WriteLine($"✅ Explicit rollback reverted changes in database (Count={persistence.Count})");
     }
 
+    [Fact]
+    public async Task ConcurrentAddsOfTheSamePath_ShouldCountOneRow()
+    {
+        // AddAsync decides whether to increment the count by checking whether the row is already
+        // there. Unless that check and the upsert are one atomic step, concurrent adds of the same
+        // path all read "absent" and all increment, leaving Count above the number of rows.
+        await using var persistence = SqlitePersistence.Create(_testDbPath);
+        await persistence.InitializeAsync();
+
+        const string path = @"C:\contended\same-file.txt";
+        var errors = new ConcurrentBag<Exception>();
+
+        var adders = Enumerable.Range(0, 16).Select(_ => Task.Run(async () =>
+        {
+            try
+            {
+                await persistence.AddAsync(CreateTestItem(path));
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        })).ToArray();
+
+        await Task.WhenAll(adders).WaitAsync(TimeSpan.FromSeconds(30));
+
+        errors.Should().BeEmpty($"concurrent adds must not fault: {string.Join(", ", errors.Select(e => e.Message))}");
+        (await persistence.SearchAsync(new SearchQuery()).ToListAsync()).Should().HaveCount(1);
+        persistence.Count.Should().Be(1, "one path is one row however many writers raced for it");
+
+        _output.WriteLine($"✅ 16 concurrent adds of one path left Count={persistence.Count}");
+    }
+
+    [Fact]
+    public async Task Transaction_OpenOnOneFlow_ShouldNotBlockReadersOnOthers()
+    {
+        // A transaction is ambient to the flow that opened it. Readers on unrelated flows must get
+        // their own connections: they must neither block on the transaction's write lock nor share
+        // its connection. Before the connection-per-operation change every operation shared one
+        // connection, which is what made concurrent use corrupt it.
+        await using var persistence = SqlitePersistence.Create(_testDbPath);
+        await persistence.InitializeAsync();
+        await persistence.AddBatchAsync(GenerateTestItems(50));
+
+        var errors = new ConcurrentBag<Exception>();
+        var transactionOpen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readersDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The transaction lives entirely inside this flow, so nothing below inherits its scope.
+        var writerTask = Task.Run(async () =>
+        {
+            try
+            {
+                await using var transaction = await persistence.BeginTransactionAsync();
+                await persistence.AddAsync(CreateTestItem(@"C:\tx-scope\pending.txt"));
+                transactionOpen.SetResult();
+
+                // Hold the transaction open while the readers work.
+                await readersDone.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+                transactionOpen.TrySetResult();
+            }
+        });
+
+        await transactionOpen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var readerTasks = Enumerable.Range(0, 5).Select(_ => Task.Run(async () =>
+        {
+            try
+            {
+                for (var i = 0; i < 10; i++)
+                {
+                    var results = await persistence
+                        .SearchAsync(new SearchQuery { SearchText = "file" })
+                        .ToListAsync();
+                    results.Should().NotBeEmpty("committed rows stay visible while another flow holds a transaction");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        })).ToArray();
+
+        await Task.WhenAll(readerTasks).WaitAsync(TimeSpan.FromSeconds(15));
+        readersDone.SetResult();
+        await writerTask.WaitAsync(TimeSpan.FromSeconds(20));
+
+        errors.Should().BeEmpty(
+            $"readers on other flows must not deadlock or fault: {string.Join(", ", errors.Select(e => e.Message))}");
+        (await persistence.ExistsAsync(NormalizePath(@"C:\tx-scope\pending.txt"))).Should().BeTrue();
+
+        _output.WriteLine("✅ Transaction on one flow left readers on other flows unblocked");
+    }
+
+    #endregion
+
+    #region Bulk Write Paths
+
+    // The bulk paths run their batches inside one transaction on one connection. Their only other
+    // coverage is the MFT integration suite, which is skipped wherever raw drive access is
+    // unavailable - CI included - so these exercise them directly.
+
+    [Fact]
+    public async Task AddBulkOptimizedAsync_AcrossSeveralBatches_ShouldInsertEveryItem()
+    {
+        await using var persistence = SqlitePersistence.Create(_testDbPath);
+        await persistence.InitializeAsync();
+
+        // More than the 500-item batch size, so the window spans several statements.
+        var items = GenerateTestItems(1200);
+
+        var inserted = await persistence.AddBulkOptimizedAsync(items);
+
+        inserted.Should().Be(1200);
+        persistence.Count.Should().Be(1200);
+        (await persistence.SearchAsync(new SearchQuery()).ToListAsync()).Should().HaveCount(1200);
+
+        _output.WriteLine($"✅ Bulk insert stored {persistence.Count} items across batches");
+    }
+
+    [Fact]
+    public async Task AddBulkOptimizedAsync_InsideTransaction_ShouldRollBackWithIt()
+    {
+        await using var persistence = SqlitePersistence.Create(_testDbPath);
+        await persistence.InitializeAsync();
+
+        // A bulk insert inside a caller's transaction joins it rather than opening a nested one.
+        await using (var transaction = await persistence.BeginTransactionAsync())
+        {
+            await persistence.AddBulkOptimizedAsync(GenerateTestItems(600));
+            await transaction.RollbackAsync();
+        }
+
+        persistence.Count.Should().Be(0);
+        (await persistence.SearchAsync(new SearchQuery()).ToListAsync()).Should().BeEmpty();
+
+        _output.WriteLine("✅ Bulk insert inside a transaction was reverted with it");
+    }
+
+    [Fact]
+    public async Task AddFromStreamAsync_ShouldFlushEveryBufferedItem()
+    {
+        await using var persistence = SqlitePersistence.Create(_testDbPath);
+        await persistence.InitializeAsync();
+
+        var items = GenerateTestItems(750);
+        var reported = new List<int>();
+
+        // A buffer smaller than the corpus forces several flushes plus a final partial one.
+        var inserted = await persistence.AddFromStreamAsync(
+            ToAsyncEnumerable(items),
+            bufferSize: 200,
+            progress: new Progress<int>(reported.Add));
+
+        inserted.Should().Be(750);
+        persistence.Count.Should().Be(750);
+        (await persistence.SearchAsync(new SearchQuery()).ToListAsync()).Should().HaveCount(750);
+
+        _output.WriteLine($"✅ Stream insert stored {persistence.Count} items");
+    }
+
+    [Fact]
+    public async Task Dispose_ShouldReleaseTheDatabaseFile()
+    {
+        // Connections are pooled, so they stay open after the operation that used them returns and
+        // keep a handle on the database file. Disposing the provider has to empty that pool, or a
+        // caller cannot delete or replace the store afterwards - on Windows an open handle blocks
+        // the delete outright.
+        var dbPath = CreateTempDbPath();
+
+        await using (var persistence = SqlitePersistence.Create(dbPath))
+        {
+            await persistence.InitializeAsync();
+            await persistence.AddAsync(CreateTestItem(@"C:\dispose\file.txt"));
+            (await persistence.SearchAsync(new SearchQuery()).ToListAsync()).Should().HaveCount(1);
+        }
+
+        var delete = () => File.Delete(dbPath);
+
+        delete.Should().NotThrow("disposing the provider must release the database file");
+        File.Exists(dbPath).Should().BeFalse();
+
+        _output.WriteLine("✅ Database file released on dispose");
+    }
+
+    private static async IAsyncEnumerable<FastFileItem> ToAsyncEnumerable(IEnumerable<FastFileItem> items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+        }
+
+        await Task.CompletedTask;
+    }
+
     #endregion
 
     #region Error Recovery and Edge Cases

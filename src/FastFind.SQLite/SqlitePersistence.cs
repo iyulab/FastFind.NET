@@ -15,13 +15,24 @@ public sealed class SqlitePersistence : IIndexPersistence
 {
     private readonly ILogger<SqlitePersistence>? _logger;
     private readonly PersistenceConfiguration _config;
-    private SqliteConnection? _connection;
+    private string? _connectionString;
     private bool _disposed;
     private long _count;
     private bool _isReady;
-    private readonly object _countSyncLock = new();
-    private SqliteIndexTransaction? _activeTransaction;
+
+    /// <summary>
+    /// Serialises bulk write windows so two of them queue in process rather than contending for
+    /// SQLite's single writer and failing on <c>busy_timeout</c>.
+    /// </summary>
     private readonly SemaphoreSlim _bulkOperationLock = new(1, 1);
+
+    /// <summary>
+    /// The transaction ambient to the current asynchronous flow, if any. Set by
+    /// <see cref="BeginTransactionAsync"/> so that operations issued inside the transaction's scope
+    /// run on its connection and are covered by it, exactly as they were when every operation shared
+    /// one connection.
+    /// </summary>
+    private readonly AsyncLocal<AmbientTransaction?> _ambient = new();
 
     /// <inheritdoc/>
     public long Count => _count;
@@ -62,43 +73,39 @@ public sealed class SqlitePersistence : IIndexPersistence
     {
         ThrowIfDisposed();
 
-        var connectionString = new SqliteConnectionStringBuilder
+        _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = _config.StoragePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Mode = SqliteOpenMode.ReadWriteCreate
         }.ToString();
 
-        _connection = new SqliteConnection(connectionString);
-        await _connection.OpenAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
 
-        // Apply PRAGMA settings
-        var pragmas = SqliteSchema.GetPragmaSettings(
-            _config.UseWAL,
-            _config.CacheSize,
-            _config.PageSize,
-            _config.UseMmap,
-            _config.MmapSize);
-
-        await ExecuteNonQueryAsync(pragmas, cancellationToken);
+        // Properties of the database file itself, applied once. Everything that is per-connection
+        // is applied by OpenConnectionAsync to every connection this provider opens.
+        await ExecuteNonQueryAsync(
+            connection,
+            SqliteSchema.GetDatabasePragmas(_config.UseWAL, _config.PageSize),
+            cancellationToken);
 
         // Metadata first: it carries the schema version that decides whether the rest can be kept.
-        await ExecuteNonQueryAsync(SqliteSchema.CreateMetadataTable, cancellationToken);
-        await DiscardStoreIfSchemaChangedAsync(cancellationToken);
+        await ExecuteNonQueryAsync(connection, SqliteSchema.CreateMetadataTable, cancellationToken);
+        await DiscardStoreIfSchemaChangedAsync(connection, cancellationToken);
 
         // Create tables
-        await ExecuteNonQueryAsync(SqliteSchema.CreateFilesTable, cancellationToken);
-        await ExecuteNonQueryAsync(SqliteSchema.CreateStatisticsTable, cancellationToken);
+        await ExecuteNonQueryAsync(connection, SqliteSchema.CreateFilesTable, cancellationToken);
+        await ExecuteNonQueryAsync(connection, SqliteSchema.CreateStatisticsTable, cancellationToken);
 
         // Create indexes
-        await ExecuteNonQueryAsync(SqliteSchema.CreateIndexes, cancellationToken);
+        await ExecuteNonQueryAsync(connection, SqliteSchema.CreateIndexes, cancellationToken);
 
         // Initialize statistics if not exists
         await ExecuteNonQueryAsync(
+            connection,
             $"INSERT OR IGNORE INTO statistics (id, created_at, updated_at) VALUES (1, {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, {DateTimeOffset.UtcNow.ToUnixTimeSeconds()})",
             cancellationToken);
 
-        await using (var writeVersion = _connection.CreateCommand())
+        await using (var writeVersion = connection.CreateCommand())
         {
             writeVersion.CommandText =
                 "INSERT INTO metadata (key, value) VALUES (@key, @value) " +
@@ -109,10 +116,105 @@ public sealed class SqlitePersistence : IIndexPersistence
         }
 
         // Load count
-        _count = await GetCountFromDbAsync(cancellationToken);
+        _count = await GetCountFromDbAsync(connection, cancellationToken);
         _isReady = true;
 
         _logger?.LogInformation("SQLite persistence initialized at {Path} with {Count} items", _config.StoragePath, _count);
+    }
+
+    /// <summary>
+    /// Opens a connection to the store and applies the per-connection settings.
+    /// </summary>
+    /// <remarks>
+    /// <c>Microsoft.Data.Sqlite</c>'s own guidance is to open a connection whenever the database is
+    /// needed rather than to share one: <see cref="SqliteConnection"/> and the commands created from
+    /// it are not thread-safe, and concurrent use corrupts the connection's internal command list.
+    /// Connections are pooled, so opening one is cheap. The pragmas applied here - cache size, temp
+    /// store, mmap window and the busy timeout - are properties of a <i>connection</i>, not of the
+    /// database, so they have to be set on each one; the database-level pragmas are applied once in
+    /// <see cref="InitializeAsync"/>. Setting them unconditionally also means a connection handed
+    /// back by the pool cannot carry another operation's settings into this one.
+    /// </remarks>
+    private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    {
+        var connection = new SqliteConnection(
+            _connectionString ?? throw new InvalidOperationException(
+                "Persistence layer not initialized. Call InitializeAsync first."));
+
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = SqliteSchema.GetConnectionPragmas(
+                _config.CacheSize, _config.UseMmap, _config.MmapSize);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Gets a connection to work on: the ambient transaction's connection when one is open on this
+    /// flow, otherwise a fresh one that the lease owns and disposes.
+    /// </summary>
+    private async Task<ConnectionLease> LeaseAsync(CancellationToken cancellationToken)
+    {
+        var ambient = _ambient.Value;
+        if (ambient is { Completed: false, Connection: { } shared })
+        {
+            return new ConnectionLease(shared, owned: false);
+        }
+
+        return new ConnectionLease(await OpenConnectionAsync(cancellationToken), owned: true);
+    }
+
+    /// <summary>
+    /// A connection borrowed for one operation. Disposing it closes the connection only when the
+    /// lease opened it - a connection borrowed from an open transaction outlives the operation.
+    /// </summary>
+    private readonly struct ConnectionLease(SqliteConnection connection, bool owned) : IAsyncDisposable
+    {
+        public SqliteConnection Connection { get; } = connection;
+
+        /// <summary>True when this operation is running inside a caller's transaction.</summary>
+        public bool IsAmbient => !owned;
+
+        public ValueTask DisposeAsync() => owned ? Connection.DisposeAsync() : ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// The transaction ambient to one asynchronous flow.
+    /// </summary>
+    /// <remarks>
+    /// The holder is written into the <see cref="AsyncLocal{T}"/> synchronously, from the caller's
+    /// frame, because a value assigned inside an <c>async</c> method does not flow back out to its
+    /// caller. Completion is signalled by mutating this object rather than by clearing the
+    /// <see cref="AsyncLocal{T}"/>, for the same reason in reverse.
+    /// </remarks>
+    private sealed class AmbientTransaction : IAmbientScope
+    {
+        public SqliteConnection? Connection { get; set; }
+        public bool Completed { get; private set; }
+
+        public void Complete()
+        {
+            Completed = true;
+            Connection = null;
+        }
+    }
+
+    /// <summary>
+    /// The half of the ambient scope a transaction needs: the ability to close it.
+    /// </summary>
+    internal interface IAmbientScope
+    {
+        void Complete();
     }
 
     /// <summary>
@@ -123,15 +225,17 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// carrying migration code for every past shape. A database with no recorded version predates
     /// version tracking and is treated as stale.
     /// </remarks>
-    private async Task DiscardStoreIfSchemaChangedAsync(CancellationToken cancellationToken)
+    private async Task DiscardStoreIfSchemaChangedAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         var tableExists = await ScalarAsync(
+            connection,
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'files' LIMIT 1",
             cancellationToken);
 
         if (tableExists is null) return; // nothing stored yet
 
         var recorded = await ScalarAsync(
+            connection,
             $"SELECT value FROM metadata WHERE key = '{SqliteSchema.SchemaVersionKey}' LIMIT 1",
             cancellationToken);
 
@@ -146,12 +250,12 @@ public sealed class SqlitePersistence : IIndexPersistence
             "Rebuilding the index store at {Path}: schema version {Found} is not {Expected}",
             _config.StoragePath, recorded ?? "(none)", SqliteSchema.CurrentVersion);
 
-        await ExecuteNonQueryAsync(SqliteSchema.DropAll, cancellationToken);
+        await ExecuteNonQueryAsync(connection, SqliteSchema.DropAll, cancellationToken);
     }
 
-    private async Task<object?> ScalarAsync(string sql, CancellationToken cancellationToken)
+    private static async Task<object?> ScalarAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
     {
-        await using var cmd = _connection!.CreateCommand();
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         var value = await cmd.ExecuteScalarAsync(cancellationToken);
         return value is DBNull ? null : value;
@@ -163,16 +267,45 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        // Check if item exists before insert to correctly track count for UPSERT
-        var existsBefore = await ExistsAsync(item.FullPath, cancellationToken);
+        await using var lease = await LeaseAsync(cancellationToken);
 
-        await using var cmd = CreateInsertCommand(item);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        // The existence check and the upsert decide together whether the count moves, so they have
+        // to be one atomic step: two concurrent adds of the same path would otherwise both read
+        // "absent" and both increment, leaving the count above the number of rows. The transaction
+        // is IMMEDIATE, so it takes the write lock before the check rather than after. Inside a
+        // caller's transaction that atomicity is already theirs.
+        var transaction = lease.IsAmbient
+            ? null
+            : (SqliteTransaction)await lease.Connection.BeginTransactionAsync(cancellationToken);
 
-        // Only increment count for actual INSERT, not UPDATE (UPSERT)
-        if (!existsBefore)
+        try
         {
-            Interlocked.Increment(ref _count);
+            var existsBefore = await ExistsAsync(lease.Connection, item.FullPath, cancellationToken);
+
+            await using (var cmd = CreateInsertCommand(lease.Connection, item))
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+
+            // Only increment count for actual INSERT, not UPDATE (UPSERT)
+            if (!existsBefore)
+            {
+                Interlocked.Increment(ref _count);
+            }
+        }
+        catch
+        {
+            if (transaction is not null)
+            {
+                try { await transaction.RollbackAsync(cancellationToken); } catch { /* ignore */ }
+            }
+            throw;
+        }
+        finally
+        {
+            if (transaction is not null) await transaction.DisposeAsync();
         }
     }
 
@@ -193,12 +326,13 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         // Standard batch insert for smaller batches
         var count = 0;
-        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
 
         try
         {
             // Reuse command with parameters for efficiency
-            await using var cmd = _connection.CreateCommand();
+            await using var cmd = lease.Connection.CreateCommand();
             cmd.CommandText = SqliteSchema.InsertFile;
             cmd.Transaction = (SqliteTransaction)transaction;
 
@@ -237,7 +371,7 @@ public sealed class SqlitePersistence : IIndexPersistence
             await transaction.CommitAsync(cancellationToken);
 
             // Refresh count from DB to accurately reflect UPSERT behavior
-            await RefreshCountAsync(cancellationToken);
+            Interlocked.Exchange(ref _count, await GetCountFromDbAsync(lease.Connection, cancellationToken));
 
             _logger?.LogDebug("Batch inserted {Count} items", count);
             return count;
@@ -264,15 +398,25 @@ public sealed class SqlitePersistence : IIndexPersistence
         var totalInserted = 0;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        // Acquire exclusive lock so concurrent bulk operations cannot interleave their PRAGMA changes
+        // One connection for the whole bulk window. The transaction, the batch inserts and the
+        // bulk PRAGMAs all have to run on the same connection: a PRAGMA applies to the connection
+        // that issued it, and a statement outside the connection holding the transaction is not
+        // covered by it.
         await _bulkOperationLock.WaitAsync(cancellationToken);
         try
         {
-            // Apply bulk loading optimizations
-            await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
+            await using var lease = await LeaseAsync(cancellationToken);
+            var connection = lease.Connection;
 
-            // Insert data in transaction
-            await ExecuteNonQueryAsync("BEGIN IMMEDIATE", cancellationToken);
+            // Apply bulk loading optimizations
+            await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
+
+            // Insert data in transaction. Inside a caller's transaction the batches join it rather
+            // than opening a nested one, which SQLite does not support.
+            var transaction = lease.IsAmbient
+                ? null
+                : (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
             try
             {
                 for (var i = 0; i < items.Count; i += batchSize)
@@ -280,20 +424,27 @@ public sealed class SqlitePersistence : IIndexPersistence
                     if (cancellationToken.IsCancellationRequested) break;
 
                     var batch = items.Skip(i).Take(batchSize).ToList();
-                    var inserted = await InsertBatchMultiValueInternalAsync(batch, cancellationToken);
+                    var inserted = await InsertBatchMultiValueAsync(connection, batch, transaction, cancellationToken);
                     totalInserted += inserted;
                 }
 
-                await ExecuteNonQueryAsync("COMMIT", cancellationToken);
+                if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             }
             catch
             {
-                try { await ExecuteNonQueryAsync("ROLLBACK", cancellationToken); } catch { /* ignore */ }
+                if (transaction is not null)
+                {
+                    try { await transaction.RollbackAsync(cancellationToken); } catch { /* ignore */ }
+                }
                 throw;
+            }
+            finally
+            {
+                if (transaction is not null) await transaction.DisposeAsync();
             }
 
             // Refresh count from DB to accurately reflect UPSERT behavior
-            await RefreshCountAsync(cancellationToken);
+            Interlocked.Exchange(ref _count, await GetCountFromDbAsync(connection, cancellationToken));
 
             stopwatch.Stop();
             var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
@@ -305,68 +456,24 @@ public sealed class SqlitePersistence : IIndexPersistence
         }
         finally
         {
-            // Restore normal PRAGMA settings
-            try
-            {
-                await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
-            }
-            catch
-            {
-                // Ignore PRAGMA restore errors
-            }
             _bulkOperationLock.Release();
         }
     }
 
-    private async Task<int> InsertBatchMultiValueAsync(
-        List<FastFileItem> batch,
-        System.Data.Common.DbTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        if (batch.Count == 0) return 0;
-
-        // Build multi-value INSERT statement
-        var sb = new System.Text.StringBuilder(SqliteSchema.BulkInsertPrefix);
-
-        await using var cmd = _connection!.CreateCommand();
-        cmd.Transaction = (SqliteTransaction)transaction;
-
-        for (var i = 0; i < batch.Count; i++)
-        {
-            if (i > 0) sb.Append(',');
-
-            var item = batch[i];
-            var prefix = $"@p{i}_";
-
-            sb.Append($"({prefix}fp, {prefix}n, {prefix}dp, {prefix}e, {prefix}s, {prefix}ct, {prefix}mt, {prefix}at, {prefix}a, {prefix}dl, {prefix}id)");
-
-            cmd.Parameters.AddWithValue($"{prefix}fp", NormalizePath(item.FullPath));
-            cmd.Parameters.AddWithValue($"{prefix}n", item.Name);
-            cmd.Parameters.AddWithValue($"{prefix}dp", NormalizePath(item.DirectoryPath));
-            cmd.Parameters.AddWithValue($"{prefix}e", item.Extension);
-            cmd.Parameters.AddWithValue($"{prefix}s", item.Size);
-            cmd.Parameters.AddWithValue($"{prefix}ct", new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds());
-            cmd.Parameters.AddWithValue($"{prefix}mt", new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds());
-            cmd.Parameters.AddWithValue($"{prefix}at", new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds());
-            cmd.Parameters.AddWithValue($"{prefix}a", (int)item.Attributes);
-            cmd.Parameters.AddWithValue($"{prefix}dl", item.DriveLetter.ToString());
-            cmd.Parameters.AddWithValue($"{prefix}id", item.IsDirectory ? 1 : 0);
-        }
-
-        sb.AppendLine();
-        sb.Append(SqliteSchema.BulkInsertSuffix);
-
-        cmd.CommandText = sb.ToString();
-        return await cmd.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-
     /// <summary>
-    /// Internal version of InsertBatchMultiValueAsync without explicit transaction parameter.
-    /// Used when transaction is controlled externally via BEGIN/COMMIT.
+    /// Inserts one batch as a single multi-value INSERT.
     /// </summary>
-    private async Task<int> InsertBatchMultiValueInternalAsync(
+    /// <param name="connection">The connection to issue the statement on.</param>
+    /// <param name="batch">The items to insert.</param>
+    /// <param name="transaction">
+    /// The transaction to enlist in, or <see langword="null"/> to use whichever transaction is
+    /// already pending on <paramref name="connection"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private static async Task<int> InsertBatchMultiValueAsync(
+        SqliteConnection connection,
         List<FastFileItem> batch,
+        SqliteTransaction? transaction,
         CancellationToken cancellationToken)
     {
         if (batch.Count == 0) return 0;
@@ -374,7 +481,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         // Build multi-value INSERT statement
         var sb = new System.Text.StringBuilder(SqliteSchema.BulkInsertPrefix);
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var cmd = connection.CreateCommand();
+        if (transaction is not null) cmd.Transaction = transaction;
 
         for (var i = 0; i < batch.Count; i++)
         {
@@ -404,6 +512,7 @@ public sealed class SqlitePersistence : IIndexPersistence
         cmd.CommandText = sb.ToString();
         return await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
+
 
     /// <summary>
     /// Streams data from an async enumerable directly into SQLite with buffered bulk inserts.
@@ -422,10 +531,16 @@ public sealed class SqlitePersistence : IIndexPersistence
         var totalInserted = 0;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+        // Like AddBulkOptimizedAsync, this is a bulk write window: one connection for its whole
+        // duration, and serialised against other bulk writers so they queue rather than contend.
+        await _bulkOperationLock.WaitAsync(cancellationToken);
         try
         {
+            await using var lease = await LeaseAsync(cancellationToken);
+            var connection = lease.Connection;
+
             // Apply bulk loading optimizations
-            await ExecuteNonQueryAsync(SqliteSchema.BulkLoadPragmas, cancellationToken);
+            await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
 
             // Stream and insert data
             await foreach (var item in items.WithCancellation(cancellationToken))
@@ -434,7 +549,7 @@ public sealed class SqlitePersistence : IIndexPersistence
 
                 if (buffer.Count >= bufferSize)
                 {
-                    var inserted = await FlushBufferAsync(buffer, cancellationToken);
+                    var inserted = await FlushBufferAsync(connection, lease.IsAmbient, buffer, cancellationToken);
                     totalInserted += inserted;
                     progress?.Report(totalInserted);
                     buffer.Clear();
@@ -444,7 +559,7 @@ public sealed class SqlitePersistence : IIndexPersistence
             // Flush remaining items
             if (buffer.Count > 0)
             {
-                var inserted = await FlushBufferAsync(buffer, cancellationToken);
+                var inserted = await FlushBufferAsync(connection, lease.IsAmbient, buffer, cancellationToken);
                 totalInserted += inserted;
                 progress?.Report(totalInserted);
             }
@@ -461,34 +576,45 @@ public sealed class SqlitePersistence : IIndexPersistence
         }
         finally
         {
-            await ExecuteNonQueryAsync(SqliteSchema.RestoreNormalPragmas, cancellationToken);
+            _bulkOperationLock.Release();
         }
     }
 
-    private async Task<int> FlushBufferAsync(List<FastFileItem> buffer, CancellationToken cancellationToken)
+    private static async Task<int> FlushBufferAsync(
+        SqliteConnection connection,
+        bool ambient,
+        List<FastFileItem> buffer,
+        CancellationToken cancellationToken)
     {
         if (buffer.Count == 0) return 0;
 
         const int batchSize = 500;
         var totalInserted = 0;
 
-        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        // Inside a caller's transaction the batches join it; SQLite has no nested transactions.
+        var transaction = ambient
+            ? null
+            : (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
         try
         {
             for (var i = 0; i < buffer.Count; i += batchSize)
             {
                 var batch = buffer.Skip(i).Take(batchSize).ToList();
-                totalInserted += await InsertBatchMultiValueAsync(batch, transaction, cancellationToken);
+                totalInserted += await InsertBatchMultiValueAsync(connection, batch, transaction, cancellationToken);
             }
 
-            await transaction.CommitAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return totalInserted;
         }
         catch
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
             throw;
+        }
+        finally
+        {
+            if (transaction is not null) await transaction.DisposeAsync();
         }
     }
 
@@ -498,7 +624,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
         cmd.CommandText = SqliteSchema.DeleteFile;
         cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
@@ -518,11 +645,12 @@ public sealed class SqlitePersistence : IIndexPersistence
         EnsureReady();
 
         var count = 0;
-        await using var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
 
         try
         {
-            await using var cmd = _connection.CreateCommand();
+            await using var cmd = lease.Connection.CreateCommand();
             cmd.CommandText = SqliteSchema.DeleteFile;
             cmd.Transaction = (SqliteTransaction)transaction;
             var param = cmd.Parameters.Add("@full_path", SqliteType.Text);
@@ -553,7 +681,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = CreateInsertCommand(item);
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = CreateInsertCommand(lease.Connection, item);
         var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return affected > 0;
     }
@@ -564,7 +693,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
         cmd.CommandText = SqliteSchema.GetByPath;
         cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
@@ -582,7 +712,13 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        return await ExistsAsync(lease.Connection, fullPath, cancellationToken);
+    }
+
+    private static async Task<bool> ExistsAsync(SqliteConnection connection, string fullPath, CancellationToken cancellationToken)
+    {
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM files WHERE full_path = @full_path LIMIT 1";
         cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
 
@@ -602,7 +738,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         // the in-memory index for the same query.
         var textMatcher = SearchQueryEvaluator.CreateTextMatcher(query);
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
         cmd.CommandText = BuildCandidateQuery(query, textMatcher, cmd);
 
         var remaining = query.MaxResults ?? int.MaxValue;
@@ -711,7 +848,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         EnsureReady();
 
         var normalizedPath = NormalizePath(directoryPath);
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
 
         if (recursive)
         {
@@ -740,7 +878,8 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         var normalizedExt = extension.StartsWith('.') ? extension : "." + extension;
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
         cmd.CommandText = SqliteSchema.GetByExtension;
         cmd.Parameters.AddWithValue("@extension", normalizedExt);
 
@@ -758,7 +897,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await ExecuteNonQueryAsync($"DELETE FROM files; UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1;", cancellationToken);
+        await using var lease = await LeaseAsync(cancellationToken);
+        await ExecuteNonQueryAsync(lease.Connection, $"DELETE FROM files; UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1;", cancellationToken);
 
         _count = 0;
         _logger?.LogInformation("Cleared all items from persistence");
@@ -772,10 +912,13 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         _logger?.LogInformation("Starting optimization...");
 
+        await using var lease = await LeaseAsync(cancellationToken);
+
         // Analyze tables for query optimization
-        await ExecuteNonQueryAsync("ANALYZE;", cancellationToken);
+        await ExecuteNonQueryAsync(lease.Connection, "ANALYZE;", cancellationToken);
 
         await ExecuteNonQueryAsync(
+            lease.Connection,
             $"UPDATE statistics SET last_optimized = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
             cancellationToken);
 
@@ -788,7 +931,8 @@ public sealed class SqlitePersistence : IIndexPersistence
         ThrowIfDisposed();
         EnsureReady();
 
-        await using var cmd = _connection!.CreateCommand();
+        await using var lease = await LeaseAsync(cancellationToken);
+        await using var cmd = lease.Connection.CreateCommand();
         cmd.CommandText = SqliteSchema.GetStatistics;
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -816,15 +960,47 @@ public sealed class SqlitePersistence : IIndexPersistence
     }
 
     /// <inheritdoc/>
-    public async Task<IIndexTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// The transaction is <b>ambient to the asynchronous flow that opened it</b>: operations issued
+    /// on that flow before it commits or rolls back run on its connection and are covered by it,
+    /// while unrelated flows keep getting their own connections. Work fanned out from inside the
+    /// scope inherits the flow, and so inherits the connection - do not run concurrent operations
+    /// inside an open transaction, for the same reason a <see cref="SqliteConnection"/> cannot be
+    /// shared between threads.
+    /// <para>
+    /// This method is deliberately not <c>async</c>. The ambient scope is published from the
+    /// caller's frame, because a value assigned to an <see cref="AsyncLocal{T}"/> inside an
+    /// <c>async</c> method does not flow back out to its caller.
+    /// </para>
+    /// </remarks>
+    public Task<IIndexTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         EnsureReady();
 
-        var transaction = await _connection!.BeginTransactionAsync(cancellationToken);
-        var indexTransaction = new SqliteIndexTransaction((SqliteTransaction)transaction, this);
-        _activeTransaction = indexTransaction;
-        return indexTransaction;
+        var scope = new AmbientTransaction();
+        _ambient.Value = scope;
+        return BeginTransactionCoreAsync(scope, cancellationToken);
+    }
+
+    private async Task<IIndexTransaction> BeginTransactionCoreAsync(
+        AmbientTransaction scope,
+        CancellationToken cancellationToken)
+    {
+        var connection = await OpenConnectionAsync(cancellationToken);
+
+        try
+        {
+            var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            scope.Connection = connection;
+            return new SqliteIndexTransaction(connection, transaction, scope, this);
+        }
+        catch
+        {
+            scope.Complete();
+            await connection.DisposeAsync();
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -835,18 +1011,21 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         _logger?.LogInformation("Starting VACUUM...");
 
-        await ExecuteNonQueryAsync("VACUUM;", cancellationToken);
+        await using var lease = await LeaseAsync(cancellationToken);
+
+        await ExecuteNonQueryAsync(lease.Connection, "VACUUM;", cancellationToken);
 
         await ExecuteNonQueryAsync(
+            lease.Connection,
             $"UPDATE statistics SET last_vacuumed = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
             cancellationToken);
 
         _logger?.LogInformation("VACUUM complete");
     }
 
-    private SqliteCommand CreateInsertCommand(FastFileItem item)
+    private static SqliteCommand CreateInsertCommand(SqliteConnection connection, FastFileItem item)
     {
-        var cmd = _connection!.CreateCommand();
+        var cmd = connection.CreateCommand();
         cmd.CommandText = SqliteSchema.InsertFile;
         cmd.Parameters.AddWithValue("@full_path", NormalizePath(item.FullPath));
         cmd.Parameters.AddWithValue("@name", item.Name);
@@ -882,9 +1061,9 @@ public sealed class SqlitePersistence : IIndexPersistence
         );
     }
 
-    private async Task<long> GetCountFromDbAsync(CancellationToken cancellationToken)
+    private static async Task<long> GetCountFromDbAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var cmd = _connection!.CreateCommand();
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM files";
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result is long l ? l : 0;
@@ -896,21 +1075,13 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// </summary>
     internal async Task RefreshCountAsync(CancellationToken cancellationToken = default)
     {
-        var dbCount = await GetCountFromDbAsync(cancellationToken);
-        Interlocked.Exchange(ref _count, dbCount);
+        await using var lease = await LeaseAsync(cancellationToken);
+        Interlocked.Exchange(ref _count, await GetCountFromDbAsync(lease.Connection, cancellationToken));
     }
 
-    /// <summary>
-    /// Clears the active transaction reference.
-    /// </summary>
-    internal void ClearActiveTransaction()
+    private static async Task ExecuteNonQueryAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
     {
-        _activeTransaction = null;
-    }
-
-    private async Task ExecuteNonQueryAsync(string sql, CancellationToken cancellationToken)
-    {
-        await using var cmd = _connection!.CreateCommand();
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -951,38 +1122,10 @@ public sealed class SqlitePersistence : IIndexPersistence
     }
 
     /// <inheritdoc/>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-
-        if (_connection != null)
-        {
-            try
-            {
-                await _connection.CloseAsync();
-                await _connection.DisposeAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Connection already disposed, ignore
-            }
-            catch (NullReferenceException)
-            {
-                // Connection internal state issue during concurrent dispose, ignore
-            }
-        }
-
-        try
-        {
-            _bulkOperationLock.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Semaphore already disposed
-        }
-
-        _disposed = true;
-        _isReady = false;
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
@@ -990,19 +1133,10 @@ public sealed class SqlitePersistence : IIndexPersistence
     {
         if (_disposed) return;
 
-        try
-        {
-            _connection?.Close();
-            _connection?.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Connection already disposed, ignore
-        }
-        catch (NullReferenceException)
-        {
-            // Connection internal state issue during concurrent dispose, ignore
-        }
+        _disposed = true;
+        _isReady = false;
+
+        ReleaseConnectionPool();
 
         try
         {
@@ -1012,9 +1146,29 @@ public sealed class SqlitePersistence : IIndexPersistence
         {
             // Semaphore already disposed
         }
+    }
 
-        _disposed = true;
-        _isReady = false;
+    /// <summary>
+    /// Closes the pooled connections for this store.
+    /// </summary>
+    /// <remarks>
+    /// Pooled connections stay open after the operation that used them returns, which keeps the
+    /// database file open. Without this, deleting the file after disposing the provider fails on
+    /// Windows, where an open handle blocks the delete.
+    /// </remarks>
+    private void ReleaseConnectionPool()
+    {
+        if (_connectionString is null) return;
+
+        try
+        {
+            using var handle = new SqliteConnection(_connectionString);
+            SqliteConnection.ClearPool(handle);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "Releasing the SQLite connection pool failed");
+        }
     }
 }
 
@@ -1023,13 +1177,21 @@ public sealed class SqlitePersistence : IIndexPersistence
 /// </summary>
 internal sealed class SqliteIndexTransaction : IIndexTransaction
 {
+    private readonly SqliteConnection _connection;
     private readonly SqliteTransaction _transaction;
+    private readonly SqlitePersistence.IAmbientScope _scope;
     private readonly SqlitePersistence _persistence;
     private bool _completed;
 
-    public SqliteIndexTransaction(SqliteTransaction transaction, SqlitePersistence persistence)
+    internal SqliteIndexTransaction(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        SqlitePersistence.IAmbientScope scope,
+        SqlitePersistence persistence)
     {
+        _connection = connection;
         _transaction = transaction;
+        _scope = scope;
         _persistence = persistence;
     }
 
@@ -1037,8 +1199,7 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
     {
         if (_completed) return;
         await _transaction.CommitAsync(cancellationToken);
-        _completed = true;
-        _persistence.ClearActiveTransaction();
+        Complete();
         // Refresh count from DB to ensure accuracy after commit
         await _persistence.RefreshCountAsync(cancellationToken);
     }
@@ -1047,8 +1208,7 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
     {
         if (_completed) return;
         await _transaction.RollbackAsync(cancellationToken);
-        _completed = true;
-        _persistence.ClearActiveTransaction();
+        Complete();
         // Refresh count from DB to revert any in-memory count changes
         await _persistence.RefreshCountAsync(cancellationToken);
     }
@@ -1058,10 +1218,22 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
         if (!_completed)
         {
             await _transaction.RollbackAsync();
-            _persistence.ClearActiveTransaction();
+            Complete();
             // Refresh count from DB to revert any in-memory count changes
             await _persistence.RefreshCountAsync();
         }
+
         await _transaction.DisposeAsync();
+        await _connection.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Closes the ambient scope before the count refresh, so that refresh opens its own connection
+    /// rather than reusing this transaction's.
+    /// </summary>
+    private void Complete()
+    {
+        _completed = true;
+        _scope.Complete();
     }
 }

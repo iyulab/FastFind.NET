@@ -119,12 +119,27 @@ internal static class SqliteSchema
     /// <b>KiB</b> rather than a page count.
     /// </para>
     /// </remarks>
-    public static string GetPragmaSettings(bool useWal = true, int cacheSize = 10000, int pageSize = 4096, bool useMmap = true, long mmapSize = 0)
+    public static string GetDatabasePragmas(bool useWal = true, int pageSize = 4096)
     {
-        var mmap = useMmap ? (mmapSize > 0 ? mmapSize : DefaultMmapSize) : 0;
         return $"""
             PRAGMA page_size = {pageSize};
             PRAGMA journal_mode = {(useWal ? "WAL" : "DELETE")};
+            """;
+    }
+
+    /// <summary>
+    /// PRAGMA settings that belong to a <i>connection</i> and are therefore applied to every
+    /// connection the provider opens, not once when the store is created.
+    /// </summary>
+    /// <remarks>
+    /// A connection handed back by the pool can carry settings a previous operation left on it -
+    /// a bulk write window raises <c>cache_size</c>, for instance - so these are set
+    /// unconditionally on open rather than restored afterwards.
+    /// </remarks>
+    public static string GetConnectionPragmas(int cacheSize = 10000, bool useMmap = true, long mmapSize = 0)
+    {
+        var mmap = useMmap ? (mmapSize > 0 ? mmapSize : DefaultMmapSize) : 0;
+        return $"""
             PRAGMA synchronous = NORMAL;
             PRAGMA cache_size = -{cacheSize};
             PRAGMA temp_store = MEMORY;
@@ -244,17 +259,7 @@ internal static class SqliteSchema
     /// PRAGMA settings for high-performance bulk loading
     /// </summary>
     public const string BulkLoadPragmas = """
-        PRAGMA synchronous = NORMAL;
-        PRAGMA temp_store = MEMORY;
         PRAGMA cache_size = -32000;
-        """;
-
-    /// <summary>
-    /// Restore normal PRAGMA settings after bulk loading
-    /// Note: journal_mode is not changed here since WAL is already set at initialization
-    /// </summary>
-    public const string RestoreNormalPragmas = """
-        PRAGMA synchronous = NORMAL;
         """;
 
 }

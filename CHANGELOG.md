@@ -27,10 +27,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Known limitations
 
-- **`SqlitePersistence` is not thread-safe.** It holds a single `SqliteConnection` and every
-  operation creates commands on it, so concurrent calls can corrupt the connection's internal state
-  and throw `ArgumentOutOfRangeException` from inside `Microsoft.Data.Sqlite`. This predates 2.0.0.
-  Serialise access to a single instance, or use one instance per thread, until it is fixed.
 - `PersistenceMode.MirrorInMemory` is still not supported on Linux or macOS. It needs a shared
   in-memory `ISearchIndex` to mirror into, and those engines keep their default in-memory index in a
   plain dictionary. Composing with it throws rather than silently not mirroring; `QueryFromStore`,
@@ -40,6 +36,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`SqlitePersistence` could corrupt its own connection under concurrent use.** It held a single
+  `SqliteConnection` and created every command on it. `SqliteConnection` is not thread-safe, so
+  concurrent calls raced on its internal command list and threw `ArgumentOutOfRangeException` from
+  inside `Microsoft.Data.Sqlite` — intermittently, at roughly one run in six of a concurrent
+  read/write workload. Present since at least 1.4.0 and shipped in 2.0.0. Each operation now opens
+  its own pooled connection, the shape `Microsoft.Data.Sqlite` documents for concurrent use, so
+  searching while indexing no longer needs the serialisation that release advised.
+
+  Connection-scoped settings — cache size, temp store, mmap window, busy timeout — are applied to
+  every connection rather than once at initialisation, and shared-cache mode was dropped: it changes
+  transaction and table locking, and nothing here used the in-memory databases it exists for.
+
+  A transaction opened with `BeginTransactionAsync` is **ambient to the asynchronous flow that
+  opened it** — operations issued on that flow before it completes still run inside it, as before.
+  Work fanned out concurrently from within an open transaction inherits its connection and is
+  therefore not supported, for the same reason a `SqliteConnection` cannot be shared across threads.
+
+  Bulk ingest (`AddBulkOptimizedAsync`, `AddFromStreamAsync`) holds one connection for its whole
+  window, and the two are serialised against each other so they queue rather than contend for
+  SQLite's single writer. Inside a caller's transaction, bulk batches join it instead of opening a
+  nested transaction, which SQLite does not support — previously that combination failed.
+- **`SqlitePersistence.Count` could exceed the number of stored rows.** `AddAsync` decides whether
+  to increment the count by checking whether the row is already there, and the check and the upsert
+  were separate steps: concurrent adds of the same path all read "absent" and all incremented. The
+  two now run in one `IMMEDIATE` transaction, so the check happens under the write lock.
 - **File-system change notifications blocked a thread pool thread on Linux and macOS.** When the
   engine is backed by a store, each monitored create, modify, delete or rename wrote to it, and the
   write was awaited synchronously from a callback. The whole notification pipeline is already async,
