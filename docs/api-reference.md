@@ -17,8 +17,7 @@ public interface ISearchEngine : IDisposable
     Task StopIndexingAsync(CancellationToken ct = default);
     Task RefreshIndexAsync(IEnumerable<string>? locations = null, CancellationToken ct = default);
 
-    // Index persistence — throws InvalidOperationException with no store configured,
-    // NotSupportedException where the engine cannot persist an index at all.
+    // Index persistence — throws InvalidOperationException when the engine has no store.
     Task<int> SaveIndexAsync(CancellationToken ct = default);
     Task<int> LoadIndexAsync(CancellationToken ct = default);
 
@@ -186,8 +185,14 @@ using var engine = FastFinder.CreateSearchEngine(new SearchEngineOptions
 with the corpus. `MirrorInMemory` keeps the in-memory index and writes through to the store, costing
 the memory of both.
 
-The Unix engine cannot be composed with a store or a custom index and throws `NotSupportedException`
-rather than ignoring one.
+Every platform can be composed with a store. The Linux and macOS engines support
+`QueryFromStore`; `MirrorInMemory` is rejected there with `NotSupportedException`, because it needs a
+shared in-memory `ISearchIndex` to mirror into and those engines keep their default in-memory index
+in a plain dictionary. Failing loudly is deliberate — accepting the mode and not mirroring would
+leave a caller believing their index was durable.
+
+A store-backed engine reports `IndexingStatistics.TotalSize` as 0: summing sizes means reading every
+row, which is what a store-backed index exists to avoid.
 
 ### Query semantics
 

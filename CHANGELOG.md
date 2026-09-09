@@ -25,6 +25,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to, and the message names the fix. This matches the Windows engine. Code catching
   `NotSupportedException` to detect "this platform cannot persist" needs updating.
 
+### Known limitations
+
+- `PersistenceMode.MirrorInMemory` is still not supported on Linux or macOS. It needs a shared
+  in-memory `ISearchIndex` to mirror into, and those engines keep their default in-memory index in a
+  plain dictionary. Composing with it throws rather than silently not mirroring; `QueryFromStore`,
+  the default, is supported.
+- A store-backed engine reports `IndexingStatistics.TotalSize` as 0. Summing sizes would mean reading
+  every row, which is what a store-backed index exists to avoid.
+
 ### Fixed
 
 - **The Unix engine answered some queries differently from every other backend.** It filtered its
