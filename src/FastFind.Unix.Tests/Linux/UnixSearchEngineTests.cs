@@ -33,22 +33,32 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         await _engine!.StartIndexingAsync(options);
     }
 
+    /// <remarks>
+    /// InvalidOperationException, not NotSupportedException: saving an index is supported on this
+    /// platform now, and this engine simply was not given a store. The distinction matters to a
+    /// caller — one says "never possible here", the other says "compose it differently" — and the
+    /// message names the fix. Composing with a store is covered in
+    /// <see cref="Core.EngineCompositionTests"/>.
+    /// </remarks>
     [Fact]
-    public async Task SaveIndexAsync_ShouldThrowNotSupported()
+    public async Task SaveIndexAsync_Without_A_Store_ShouldThrowInvalidOperation()
     {
         if (!OperatingSystem.IsLinux()) return;
 
         var act = () => _engine!.SaveIndexAsync();
-        await act.Should().ThrowAsync<NotSupportedException>();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*no persistence store*");
     }
 
+    /// <inheritdoc cref="SaveIndexAsync_Without_A_Store_ShouldThrowInvalidOperation"/>
     [Fact]
-    public async Task LoadIndexAsync_ShouldThrowNotSupported()
+    public async Task LoadIndexAsync_Without_A_Store_ShouldThrowInvalidOperation()
     {
         if (!OperatingSystem.IsLinux()) return;
 
         var act = () => _engine!.LoadIndexAsync();
-        await act.Should().ThrowAsync<NotSupportedException>();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*no persistence store*");
     }
 
     [Fact]

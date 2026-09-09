@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **The Linux and macOS engines can be composed with a persistence store.** They previously threw
+  `NotSupportedException` for any store or custom index, so `PersistenceMode.QueryFromStore` and
+  `ISearchEngine.Index` were Windows-only. `UnixSearchEngineImpl` now takes an `ISearchIndex` and
+  routes its reads, writes, monitoring updates, refresh, statistics and optimize through it when one
+  is supplied, keeping its in-memory dictionary as the default path.
+  `PersistenceMode.MirrorInMemory` is still rejected, and still loudly: it needs a shared in-memory
+  `ISearchIndex` to mirror into, which this engine does not have.
+- `FastFind.SQLite` now has automated coverage on Linux. It was exercised on Windows only.
+
+### Changed
+
+- **`ISearchEngine.SaveIndexAsync` / `LoadIndexAsync` on Linux and macOS throw
+  `InvalidOperationException` instead of `NotSupportedException` when the engine has no store.** The
+  operation is supported on those platforms now; an engine without a store simply has nothing to save
+  to, and the message names the fix. This matches the Windows engine. Code catching
+  `NotSupportedException` to detect "this platform cannot persist" needs updating.
+
 ### Fixed
 
 - **The Unix engine answered some queries differently from every other backend.** It filtered its

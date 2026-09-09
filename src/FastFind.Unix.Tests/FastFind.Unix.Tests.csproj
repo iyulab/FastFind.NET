@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FastFind\FastFind.csproj" />
     <ProjectReference Include="..\FastFind.Unix\FastFind.Unix.csproj" />
+    <ProjectReference Include="..\FastFind.SQLite\FastFind.SQLite.csproj" />
   </ItemGroup>
 
   <ItemGroup>

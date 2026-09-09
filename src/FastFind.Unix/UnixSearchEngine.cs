@@ -29,8 +29,8 @@ public static class UnixSearchEngine
     /// Creates a Linux-optimized search engine from a full set of composition options.
     /// </summary>
     /// <exception cref="NotSupportedException">
-    /// A store or a custom index was supplied. The Unix engine keeps its index internally and has no
-    /// persistence path yet — see the remarks on <see cref="RejectUnsupportedComposition"/>.
+    /// <see cref="SearchEngineOptions.PersistenceMode"/> is
+    /// <see cref="PersistenceMode.MirrorInMemory"/> — see <see cref="RejectUnsupportedComposition"/>.
     /// </exception>
     public static ISearchEngine CreateLinuxSearchEngine(SearchEngineOptions options)
     {
@@ -44,7 +44,7 @@ public static class UnixSearchEngine
         }
 
         var provider = new LinuxFileSystemProvider(options.LoggerFactory);
-        return new UnixSearchEngineImpl(provider, options.LoggerFactory);
+        return new UnixSearchEngineImpl(provider, options.LoggerFactory, options.ResolveIndex());
     }
 
     /// <summary>
@@ -61,7 +61,8 @@ public static class UnixSearchEngine
     /// Creates a macOS-optimized search engine from a full set of composition options.
     /// </summary>
     /// <exception cref="NotSupportedException">
-    /// A store or a custom index was supplied — see <see cref="RejectUnsupportedComposition"/>.
+    /// <see cref="SearchEngineOptions.PersistenceMode"/> is
+    /// <see cref="PersistenceMode.MirrorInMemory"/> — see <see cref="RejectUnsupportedComposition"/>.
     /// </exception>
     public static ISearchEngine CreateMacOSSearchEngine(SearchEngineOptions options)
     {
@@ -75,26 +76,29 @@ public static class UnixSearchEngine
         }
 
         var provider = new MacOSFileSystemProvider(options.LoggerFactory);
-        return new UnixSearchEngineImpl(provider, options.LoggerFactory);
+        return new UnixSearchEngineImpl(provider, options.LoggerFactory, options.ResolveIndex());
     }
 
     /// <summary>
-    /// Rejects composition options this engine cannot honour.
+    /// Rejects the one composition this engine still cannot honour.
     /// </summary>
     /// <remarks>
-    /// <see cref="UnixSearchEngineImpl"/> holds its index internally rather than taking an
-    /// <see cref="ISearchIndex"/>, so it cannot be given a store or a custom index. Failing loudly is
-    /// deliberate: accepting the option and ignoring it would leave a caller believing their index
-    /// was persisted when it was not.
+    /// A store or a custom index is now supported: <see cref="SearchEngineOptions.ResolveIndex"/>
+    /// produces the <see cref="ISearchIndex"/> and the engine routes through it.
+    /// <see cref="PersistenceMode.MirrorInMemory"/> is not, because it needs a shared in-memory
+    /// <see cref="ISearchIndex"/> to mirror into and this engine's in-memory path is a plain
+    /// dictionary rather than one. Failing loudly is deliberate: accepting the option and ignoring
+    /// it would leave a caller believing their index was mirrored when it was not.
     /// </remarks>
     private static void RejectUnsupportedComposition(SearchEngineOptions options)
     {
-        if (options.Persistence is null && options.Index is null) return;
+        if (options.Persistence is null) return;
+        if (options.PersistenceMode != PersistenceMode.MirrorInMemory) return;
 
         throw new NotSupportedException(
-            "The Unix search engine keeps its index internally and cannot be given an " +
-            "IIndexPersistence or a custom ISearchIndex. Use the in-memory engine, or a " +
-            "persistence provider directly.");
+            "The Unix search engine cannot honour PersistenceMode.MirrorInMemory: it has no " +
+            "in-memory ISearchIndex to mirror into. Use PersistenceMode.QueryFromStore, which is " +
+            "supported, or supply your own ISearchIndex.");
     }
 }
 
@@ -107,6 +111,17 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private readonly IFileSystemProvider _provider;
     private readonly ILogger<UnixSearchEngineImpl> _logger;
     private readonly ConcurrentDictionary<string, FileItem> _index = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The index this engine reads and writes when it was composed with one, otherwise
+    /// <c>null</c> and <see cref="_index"/> is used instead.
+    /// </summary>
+    private readonly ISearchIndex? _searchIndex;
+
+    /// <summary>
+    /// How many items are accumulated before being written to a supplied index.
+    /// </summary>
+    private const int IndexWriteBatchSize = 10_000;
 
     private CancellationTokenSource? _indexingCts;
     private CancellationTokenSource? _monitoringCts;
@@ -141,16 +156,28 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Always <c>null</c>: this engine keeps its index in an internal dictionary rather than behind
-    /// an <see cref="ISearchIndex"/>, which is also why it rejects a supplied index or store.
+    /// The supplied index when this engine was composed with one — including the
+    /// <c>PersistentSearchIndex</c> that <see cref="SearchEngineOptions.ResolveIndex"/> builds from a
+    /// store. <c>null</c> when it was not, in which case the engine keeps its index in an internal
+    /// dictionary that is not reachable as an <see cref="ISearchIndex"/>.
     /// </remarks>
-    public ISearchIndex? Index => null;
+    public ISearchIndex? Index => _searchIndex;
 
-    public UnixSearchEngineImpl(IFileSystemProvider provider, ILoggerFactory? loggerFactory = null)
+    /// <summary>
+    /// Whether this engine answers from a supplied <see cref="ISearchIndex"/> rather than from its
+    /// own dictionary.
+    /// </summary>
+    private bool UsesSuppliedIndex => _searchIndex is not null;
+
+    public UnixSearchEngineImpl(
+        IFileSystemProvider provider,
+        ILoggerFactory? loggerFactory = null,
+        ISearchIndex? searchIndex = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         var factory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = factory.CreateLogger<UnixSearchEngineImpl>();
+        _searchIndex = searchIndex;
     }
 
     /// <inheritdoc/>
@@ -180,10 +207,22 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 string.Empty,
                 IndexingPhase.Initializing));
 
-            _index.Clear();
+            if (UsesSuppliedIndex)
+            {
+                await _searchIndex!.ClearAsync(linkedToken).ConfigureAwait(false);
+            }
+            else
+            {
+                _index.Clear();
+            }
+
             Interlocked.Exchange(ref _totalIndexedFiles, 0);
             long processedFiles = 0;
             bool capReached = false;
+
+            // Writes to a supplied index are batched: a store-backed index pays a round trip per
+            // call, so adding one item at a time would dominate enumeration.
+            var pending = UsesSuppliedIndex ? new List<FastFileItem>(IndexWriteBatchSize) : null;
 
             OnIndexingProgressChanged(new IndexingProgressEventArgs(
                 string.Join(", ", locations),
@@ -197,7 +236,20 @@ internal class UnixSearchEngineImpl : ISearchEngine
             {
                 linkedToken.ThrowIfCancellationRequested();
 
-                _index[item.FullPath] = item;
+                if (pending is not null)
+                {
+                    pending.Add(item.ToFastFileItem());
+                    if (pending.Count >= IndexWriteBatchSize)
+                    {
+                        await _searchIndex!.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
+                        pending.Clear();
+                    }
+                }
+                else
+                {
+                    _index[item.FullPath] = item;
+                }
+
                 var count = Interlocked.Increment(ref processedFiles);
                 Interlocked.Exchange(ref _totalIndexedFiles, count);
 
@@ -217,6 +269,14 @@ internal class UnixSearchEngineImpl : ISearchEngine
                         item.FullPath,
                         IndexingPhase.Scanning));
                 }
+            }
+
+            // Flush whatever the last batch left, including on the cap-reached break above:
+            // dropping the tail would silently lose up to a batch of files.
+            if (pending is { Count: > 0 })
+            {
+                await _searchIndex!.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
+                pending.Clear();
             }
 
             stopwatch.Stop();
@@ -291,7 +351,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <inheritdoc/>
-    public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default)
+    public async Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -301,7 +361,13 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
         try
         {
-            var results = SearchIndex(query, cancellationToken);
+            // Both paths evaluate through SearchQueryEvaluator — the dictionary path directly, the
+            // supplied index inside its own implementation — so the same query returns the same set
+            // whichever one answers it.
+            var results = UsesSuppliedIndex
+                ? await CollectFromIndexAsync(query, cancellationToken).ConfigureAwait(false)
+                : SearchIndex(query, cancellationToken).Select(item => item.ToFastFileItem()).ToList();
+
             stopwatch.Stop();
 
             var totalMatches = results.Count;
@@ -316,31 +382,47 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
             var hasMore = query.MaxResults.HasValue && totalMatches > query.MaxResults.Value;
 
-            var asyncFiles = ConvertToFastFileItemAsync(limitedResults);
+            var asyncFiles = ToAsyncEnumerable(limitedResults);
 
-            OnSearchProgressChanged(query, totalMatches, _index.Count, stopwatch.Elapsed, true, SearchPhase.Completed);
+            OnSearchProgressChanged(query, totalMatches, TotalIndexedFiles, stopwatch.Elapsed, true, SearchPhase.Completed);
 
-            return Task.FromResult(SearchResult.Success(
+            return SearchResult.Success(
                 query,
                 totalMatches,
                 limitedResults.Count,
                 stopwatch.Elapsed,
                 asyncFiles,
-                hasMoreResults: hasMore));
+                hasMoreResults: hasMore);
         }
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
             OnSearchProgressChanged(query, 0, 0, stopwatch.Elapsed, true, SearchPhase.Cancelled);
-            return Task.FromResult(SearchResult.Empty(query, stopwatch.Elapsed));
+            return SearchResult.Empty(query, stopwatch.Elapsed);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _logger.LogError(ex, "Search error");
             OnSearchProgressChanged(query, 0, 0, stopwatch.Elapsed, true, SearchPhase.Failed);
-            return Task.FromResult(SearchResult.Failed(query, stopwatch.Elapsed, ex.Message));
+            return SearchResult.Failed(query, stopwatch.Elapsed, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Drains the supplied index's results for a query.
+    /// </summary>
+    private async Task<List<FastFileItem>> CollectFromIndexAsync(
+        SearchQuery query, CancellationToken cancellationToken)
+    {
+        var results = new List<FastFileItem>();
+
+        await foreach (var item in _searchIndex!.SearchAsync(query, cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(item);
+        }
+
+        return results;
     }
 
     /// <inheritdoc/>
@@ -360,7 +442,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <inheritdoc/>
-    public Task<IndexingStatistics> GetIndexingStatisticsAsync(CancellationToken cancellationToken = default)
+    public async Task<IndexingStatistics> GetIndexingStatisticsAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -368,14 +450,26 @@ internal class UnixSearchEngineImpl : ISearchEngine
         var totalDirs = 0L;
         var totalSize = 0L;
 
-        foreach (var item in _index.Values)
+        if (UsesSuppliedIndex)
         {
-            if (item.Attributes.HasFlag(System.IO.FileAttributes.Directory))
-                totalDirs++;
-            else
-                totalFiles++;
+            // A store-backed index counts without materialising the corpus; enumerating it here to
+            // sum sizes would defeat the point of not holding one.
+            var indexStats = await _searchIndex!.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+            totalFiles = indexStats.TotalFiles;
+            totalDirs = indexStats.TotalDirectories;
+            totalSize = 0;
+        }
+        else
+        {
+            foreach (var item in _index.Values)
+            {
+                if (item.Attributes.HasFlag(System.IO.FileAttributes.Directory))
+                    totalDirs++;
+                else
+                    totalFiles++;
 
-            totalSize += item.Size;
+                totalSize += item.Size;
+            }
         }
 
         var stats = new IndexingStatistics
@@ -394,7 +488,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
             IndexingOperations = 1
         };
 
-        return Task.FromResult(stats);
+        return stats;
     }
 
     /// <inheritdoc/>
@@ -421,45 +515,80 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <inheritdoc/>
-    public Task ClearCacheAsync(CancellationToken cancellationToken = default)
+    public async Task ClearCacheAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        _index.Clear();
+
+        if (UsesSuppliedIndex)
+        {
+            await _searchIndex!.ClearAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            _index.Clear();
+        }
+
         Interlocked.Exchange(ref _totalIndexedFiles, 0);
         Interlocked.Exchange(ref _totalSearches, 0);
         Interlocked.Exchange(ref _totalMatches, 0);
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// This engine keeps its index in memory and exposes no <see cref="ISearchIndex"/>, so it cannot
-    /// persist one whatever it is composed with — which is also why it rejects a supplied store at
-    /// construction. Use a persistence provider directly for a durable index on this platform.
-    /// </remarks>
-    public Task<int> SaveIndexAsync(CancellationToken cancellationToken = default)
+    /// <exception cref="InvalidOperationException">
+    /// This engine has no store — it was created without one, so there is nothing to save to. Same
+    /// behaviour as the Windows engine.
+    /// </exception>
+    public async Task<int> SaveIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        throw new NotSupportedException(
-            "The Unix search engine uses in-memory indexing only and cannot save an index. " +
-            "Use a FastFind.SQLite persistence provider directly for durable storage.");
+
+        var persistence = RequirePersistence();
+
+        var savedCount = await _searchIndex!.SaveToPersistenceAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Index saved to {Store}: {SavedCount} items", persistence.StoragePath, savedCount);
+
+        return savedCount;
     }
 
     /// <inheritdoc cref="SaveIndexAsync"/>
-    public Task<int> LoadIndexAsync(CancellationToken cancellationToken = default)
+    public async Task<int> LoadIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        throw new NotSupportedException(
-            "The Unix search engine uses in-memory indexing only and cannot load an index. " +
-            "Use a FastFind.SQLite persistence provider directly for durable storage.");
+
+        var persistence = RequirePersistence();
+
+        var loadedCount = await _searchIndex!.LoadFromPersistenceAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
+        _logger.LogInformation("Index loaded from {Store}: {LoadedCount} items", persistence.StoragePath, loadedCount);
+
+        return loadedCount;
+    }
+
+    /// <summary>
+    /// The store backing this engine's index, or a failure explaining how to give it one.
+    /// </summary>
+    /// <remarks>
+    /// Throwing rather than returning zero is deliberate and matches the Windows engine: a save that
+    /// reports success without a store is how a caller ends up believing their index was persisted.
+    /// </remarks>
+    private IIndexPersistence RequirePersistence()
+    {
+        return _searchIndex?.Persistence ?? throw new InvalidOperationException(
+            "This engine has no persistence store, so there is nothing to save to or load from. " +
+            "Create it with FastFinder.CreateSearchEngine(persistence) to give it one.");
     }
 
     /// <inheritdoc/>
-    public Task OptimizeIndexAsync(CancellationToken cancellationToken = default)
+    public async Task OptimizeIndexAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // ConcurrentDictionary in-memory index does not require optimization
-        return Task.CompletedTask;
+
+        if (UsesSuppliedIndex)
+        {
+            await _searchIndex!.OptimizeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // The ConcurrentDictionary in-memory index requires no optimization.
     }
 
     /// <inheritdoc/>
@@ -477,12 +606,27 @@ internal class UnixSearchEngineImpl : ISearchEngine
         _logger.LogInformation("Refreshing index for {Count} locations", paths.Length);
 
         // Remove stale entries for the specified locations
-        var keysToRemove = _index.Keys
-            .Where(k => paths.Any(p => k.StartsWith(p, StringComparison.Ordinal)))
-            .ToList();
+        if (UsesSuppliedIndex)
+        {
+            foreach (var path in paths)
+            {
+                await foreach (var stale in _searchIndex!
+                                   .GetByDirectoryAsync(path, recursive: true, cancellationToken)
+                                   .ConfigureAwait(false))
+                {
+                    await _searchIndex.RemoveAsync(stale.FullPath, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+        else
+        {
+            var keysToRemove = _index.Keys
+                .Where(k => paths.Any(p => k.StartsWith(p, StringComparison.Ordinal)))
+                .ToList();
 
-        foreach (var key in keysToRemove)
-            _index.TryRemove(key, out _);
+            foreach (var key in keysToRemove)
+                _index.TryRemove(key, out _);
+        }
 
         // Re-enumerate the locations
         var options = new IndexingOptions
@@ -496,11 +640,21 @@ internal class UnixSearchEngineImpl : ISearchEngine
         await foreach (var item in _provider.EnumerateFilesAsync(paths, options, cancellationToken)
                            .ConfigureAwait(false))
         {
-            _index[item.FullPath] = item;
+            if (UsesSuppliedIndex)
+            {
+                await _searchIndex!.AddAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                _index[item.FullPath] = item;
+            }
+
             refreshed++;
         }
 
-        Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
+        Interlocked.Exchange(
+            ref _totalIndexedFiles,
+            UsesSuppliedIndex ? _searchIndex!.Count : _index.Count);
         _logger.LogInformation("Refresh completed: {Refreshed} items re-indexed", refreshed);
     }
 
@@ -551,15 +705,15 @@ internal class UnixSearchEngineImpl : ISearchEngine
         return results;
     }
 
-    private static async IAsyncEnumerable<FastFileItem> ConvertToFastFileItemAsync(
-        IList<FileItem> items,
+    private static async IAsyncEnumerable<FastFileItem> ToAsyncEnumerable(
+        IList<FastFileItem> items,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await Task.Yield();
         foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return item.ToFastFileItem();
+            yield return item;
         }
     }
 
@@ -614,13 +768,12 @@ internal class UnixSearchEngineImpl : ISearchEngine
                     break;
 
                 case FileChangeType.Deleted:
-                    _index.TryRemove(change.NewPath, out _);
-                    Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
+                    RemoveIndexEntry(change.NewPath);
                     break;
 
                 case FileChangeType.Renamed:
                     if (change.OldPath != null)
-                        _index.TryRemove(change.OldPath, out _);
+                        RemoveIndexEntry(change.OldPath);
                     UpdateIndexEntry(change.NewPath);
                     break;
             }
@@ -630,6 +783,23 @@ internal class UnixSearchEngineImpl : ISearchEngine
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Error handling file change: {Path}", change.NewPath);
+        }
+    }
+
+    /// <summary>
+    /// Drops a path from whichever index this engine is using.
+    /// </summary>
+    private void RemoveIndexEntry(string path)
+    {
+        if (UsesSuppliedIndex)
+        {
+            _searchIndex!.RemoveAsync(path).GetAwaiter().GetResult();
+            Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
+        }
+        else
+        {
+            _index.TryRemove(path, out _);
+            Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
         }
     }
 
@@ -678,8 +848,18 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
             if (item != null)
             {
-                _index[path] = item;
-                Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
+                if (UsesSuppliedIndex)
+                {
+                    // The monitor callback is synchronous; the index write is not. Blocking here
+                    // keeps the change and the count consistent, and a single-item write is cheap.
+                    _searchIndex!.AddAsync(item.ToFastFileItem()).GetAwaiter().GetResult();
+                    Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
+                }
+                else
+                {
+                    _index[path] = item;
+                    Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
+                }
             }
         }
         catch (Exception ex)
