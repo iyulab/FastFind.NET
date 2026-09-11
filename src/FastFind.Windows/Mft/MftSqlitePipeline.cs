@@ -15,7 +15,14 @@ namespace FastFind.Windows.Mft;
 /// 2. Channel-based producer/consumer pattern
 /// 3. Bulk SQLite inserts with optimized PRAGMA settings
 /// </summary>
+/// <remarks>
+/// Superseded by composing a search engine with the store —
+/// <c>FastFinder.CreateSearchEngine(store)</c> then <c>StartIndexingAsync</c> — which indexes
+/// through the same enumeration with correct paths and keeps the store current. This pipeline
+/// never resolves parent directories: it stores every entry as <c>&lt;drive&gt;:\&lt;name&gt;</c>.
+/// </remarks>
 [SupportedOSPlatform("windows")]
+[Obsolete("Stores every entry at the drive root: it never resolves parent directories. Compose an engine with the store instead: FastFinder.CreateSearchEngine(store), then StartIndexingAsync.")]
 public sealed class MftSqlitePipeline : IDisposable
 {
     private readonly ILogger<MftSqlitePipeline>? _logger;

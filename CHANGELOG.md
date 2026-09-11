@@ -117,6 +117,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`MftSqlitePipeline` and `UsnSqliteSyncService` are `[Obsolete]`.** Both wrote wrong paths into
+  the store: the pipeline stored every entry as `<drive>:\<name>`, never resolving its parent
+  directories, and the sync service stored a change's bare file name as its full path with an empty
+  directory. A search engine composed with the store does both jobs correctly —
+  `FastFinder.CreateSearchEngine(store)`, then `StartIndexingAsync`, with `EnableMonitoring` for
+  what the sync service did. They remain until the next major version.
 - `WindowsSearchEngineOptions.FileOperationTimeout` is `[Obsolete]` in favour of
   `IndexingTimeout`, which says what it bounds and defaults to no limit. Setting the old name still
   sets the limit.

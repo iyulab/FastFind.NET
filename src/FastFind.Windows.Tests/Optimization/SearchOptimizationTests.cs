@@ -7,6 +7,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using FastFind.Windows.Tests.Helpers;
 using Xunit.Abstractions;
 
 namespace FastFind.Windows.Tests.Optimization;
@@ -45,33 +46,42 @@ public class SearchOptimizationTests : IAsyncLifetime
         await _searchIndex.DisposeAsync();
     }
 
+    private static SearchQuery CoveredBasePathQuery() => new()
+    {
+        BasePath = @"C:\TestData\Folder50",  // Exists in our test data
+        SearchText = "file",
+        IncludeSubdirectories = true
+    };
+
     [Fact]
     public async Task SearchWithBasePath_UsesIndexWhenPathIsCovered()
     {
-        // Arrange
-        var query = new SearchQuery
-        {
-            BasePath = @"C:\TestData\Folder50",  // Exists in our test data
-            SearchText = "file",
-            IncludeSubdirectories = true
-        };
-
-        // Act
-        var sw = Stopwatch.StartNew();
         var results = new List<FastFileItem>();
-        await foreach (var item in _searchIndex.SearchAsync(query))
+        await foreach (var item in _searchIndex.SearchAsync(CoveredBasePathQuery()))
         {
             results.Add(item);
         }
+
+        _output.WriteLine($"Results: {results.Count:N0} files");
+        results.Should().NotBeEmpty("Index should contain files under the test path");
+    }
+
+    /// <remarks>
+    /// Split from <see cref="SearchWithBasePath_UsesIndexWhenPathIsCovered"/>, which asserted this
+    /// wall-clock bound inside the functional run and failed there intermittently on a loaded
+    /// machine. A timing claim belongs in the performance category.
+    /// </remarks>
+    [PerformanceTestFact]
+    [Trait("Category", "Performance")]
+    public async Task SearchWithBasePath_CompletesWithin100Milliseconds()
+    {
+        var sw = Stopwatch.StartNew();
+        await foreach (var _ in _searchIndex.SearchAsync(CoveredBasePathQuery()))
+        {
+        }
         sw.Stop();
 
-        // Assert
         _output.WriteLine($"Search time: {sw.ElapsedMilliseconds}ms");
-        _output.WriteLine($"Results: {results.Count:N0} files");
-
-        results.Should().NotBeEmpty("Index should contain files under the test path");
-
-        // With Trie optimization, path-based search should be fast
         sw.ElapsedMilliseconds.Should().BeLessThan(100,
             "Path-based search should complete in under 100ms with trie optimization");
     }
@@ -113,7 +123,7 @@ public class SearchOptimizationTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [PerformanceTestFact]
     [Trait("Category", "Performance")]
     public async Task SearchWithExtensionFilter_UsesExtensionIndex()
     {
@@ -168,7 +178,7 @@ public class SearchOptimizationTests : IAsyncLifetime
         results.Should().OnlyContain(f => f.Size >= 1000 && f.Size <= 5000);
     }
 
-    [Fact]
+    [PerformanceTestFact]
     [Trait("Category", "Performance")]
     public async Task CompareSearchPerformance_BeforeAndAfterOptimization()
     {

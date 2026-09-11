@@ -7,6 +7,10 @@ using Xunit;
 using FastFind.Windows.Tests.Helpers;
 using Xunit.Abstractions;
 
+// MftSqlitePipeline is obsolete (it never resolves parent directories); these tests cover it
+// until it is removed at the next major version.
+#pragma warning disable CS0618
+
 namespace FastFind.Windows.Tests.Mft;
 
 /// <summary>

@@ -107,33 +107,39 @@ public class SearchQuery
 
 ## Platform APIs
 
-### Windows — MFT Direct Access
+### Windows — NTFS change journal
+
+Enumeration and real-time monitoring on NTFS go through the volume's change journal
+(`FSCTL_ENUM_USN_DATA` / `FSCTL_READ_USN_JOURNAL`). This needs administrator rights and gives names,
+parents and attributes — not sizes or timestamps, which are read per entry when
+`IndexingOptions.CollectFileMetadata` is set. The engine uses it automatically when available
+(`ProviderMode.Auto`).
 
 ```csharp
-// MftReader: NTFS MFT enumeration (requires admin)
+// MftReader: journal enumeration of one volume (requires admin)
 public class MftReader : IDisposable
 {
     public static bool IsAvailable();
     public static char[] GetNtfsDrives();
     public IAsyncEnumerable<MftFileRecord> EnumerateFilesAsync(char driveLetter, CancellationToken ct = default);
 }
+```
 
-// MftSqlitePipeline: MFT → SQLite data flow
-public class MftSqlitePipeline : IDisposable
-{
-    public Task<int> IndexAllDrivesAsync(IIndexPersistence persistence, IProgress<IndexingProgress>? progress = null, CancellationToken ct = default);
-    public Task<int> IndexDrivesAsync(char[] driveLetters, IIndexPersistence persistence, IProgress<IndexingProgress>? progress = null, CancellationToken ct = default);
-}
+**Obsolete — use a search engine composed with the store instead.** `MftSqlitePipeline` stores
+every entry at the drive root (it never resolves parent directories) and `UsnSqliteSyncService`
+stores a change's bare file name as its full path. Both remain for compatibility until the next
+major version. The engine indexes into the store with correct paths and keeps it current:
 
-// UsnSqliteSyncService: Real-time USN Journal sync
-public class UsnSqliteSyncService : IAsyncDisposable
+```csharp
+var store = SqlitePersistence.Create(dbPath);
+await store.InitializeAsync();
+
+using var engine = FastFinder.CreateSearchEngine(store);   // PersistenceMode.QueryFromStore
+await engine.StartIndexingAsync(new IndexingOptions
 {
-    public Task StartAsync(CancellationToken ct = default);
-    public Task StartAsync(char[] driveLetters, CancellationToken ct = default);
-    public Task StopAsync();
-    public bool IsRunning { get; }
-    public SyncStatistics Statistics { get; }
-}
+    DriveLetters = ['C'],
+    EnableMonitoring = true,   // replaces UsnSqliteSyncService
+});
 ```
 
 ### Linux — Channel-based BFS

@@ -16,7 +16,9 @@ Vector256/Vector128/scalar, and `SearchQueryEvaluator` as the single definition 
 matches — so every backend returns the same set. `FastFind.SQLite` is an optional store that answers
 queries from disk, so an engine's memory does not grow with the corpus.
 
-Windows reads the NTFS Master File Table directly and tracks changes through the USN journal. Linux
+Windows enumerates NTFS volumes through the change journal and tracks changes through the same
+journal — reading the Master File Table itself, for sizes and times at enumeration speed, is a
+direction rather than current behaviour. Linux
 and macOS enumerate through a Channel-based parallel BFS and watch for changes through
 `FileSystemWatcher` (inotify and FSEvents respectively). Both are marked preview because they have
 had far less production exposure than the Windows path, not because of a known gap.

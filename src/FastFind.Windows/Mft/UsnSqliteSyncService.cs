@@ -10,7 +10,13 @@ namespace FastFind.Windows.Mft;
 /// Real-time synchronization service that monitors USN Journal changes
 /// and updates SQLite database accordingly.
 /// </summary>
+/// <remarks>
+/// Superseded by an engine composed with the store, whose monitoring keeps it current with real
+/// paths. This service never resolves a change's location: it stores the bare file name as the
+/// full path, with an empty directory.
+/// </remarks>
 [SupportedOSPlatform("windows")]
+[Obsolete("Stores a change's bare file name as its full path. Compose an engine with the store and enable monitoring instead: FastFinder.CreateSearchEngine(store), then StartIndexingAsync with EnableMonitoring.")]
 public sealed class UsnSqliteSyncService : IAsyncDisposable
 {
     private readonly ILogger<UsnSqliteSyncService>? _logger;
