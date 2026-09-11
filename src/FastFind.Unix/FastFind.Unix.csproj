@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="FastFind.Unix.Tests" />
+    <InternalsVisibleTo Include="FastFind.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>

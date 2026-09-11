@@ -11,6 +11,7 @@
   <!-- Make internal types visible to test project -->
   <ItemGroup>
     <InternalsVisibleTo Include="FastFind.Windows.Tests" />
+    <InternalsVisibleTo Include="FastFind.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>
