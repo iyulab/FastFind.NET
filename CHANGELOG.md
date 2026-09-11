@@ -98,6 +98,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The USN record parser accepted version 3 records but read them at version 2 offsets, which do not
   apply to them. It now rejects them. Enumeration requests version 2 records, so none were seen in
   practice.
+- The Windows in-memory index, when given a store, persisted the first *n* items of a batch where
+  *n* was the number it added — not the items it added, whenever the batch held an entry the index
+  already had.
 
 ### Added
 
@@ -117,6 +120,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The Windows in-memory index holds a quarter of the memory per entry, and scans about four times
+  faster.** It stored each entry as a `FileItem` object keyed by a lower-cased copy of its path, kept
+  a second lower-cased copy in its directory and extension maps, and built a path trie with a node
+  for every file — about 2,760 bytes an entry, more than half of it the trie. It now stores the
+  compact `FastFileItem` grouped by directory, keyed by the entry's own directory and name, with
+  case-insensitive identity coming from the comparer rather than from copies. Measured with 99-character
+  paths, 100 files to a directory, one process per measurement: **2,758 → 676 bytes an entry at
+  100,000 entries, 2,770 → 683 at 300,000**; a query that scans every entry, best of ten runs,
+  **135–141 → 24–45 ms at 100,000 and 560–573 → 125–132 ms at 300,000**, allocating an eighth as
+  much. Where every file has a
+  directory of its own, an entry costs about 1,070 bytes. A path spelled with forward slashes
+  (`C:/data/a.txt`) now finds, updates and removes its entry; it used to miss it.
 - **`MftSqlitePipeline` and `UsnSqliteSyncService` are `[Obsolete]`.** Both wrote wrong paths into
   the store: the pipeline stored every entry as `<drive>:\<name>`, never resolving its parent
   directories, and the sync service stored a change's bare file name as its full path with an empty

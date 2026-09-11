@@ -54,12 +54,14 @@ internal class ConcurrentHashSet<T> where T : notnull
 internal class WindowsSearchIndex : ISearchIndex
 {
     private readonly ILogger<WindowsSearchIndex> _logger;
-    private readonly ConcurrentDictionary<string, FileItem> _fileIndex = new();
-    private readonly ConcurrentDictionary<string, HashSet<string>> _directoryIndex = new();
-    private readonly ConcurrentDictionary<string, HashSet<string>> _extensionIndex = new();
-    private readonly PathTrieIndex _pathTrieIndex = new();  // O(log n) path lookups
-    private readonly ReaderWriterLockSlim _indexLock = new();
-    private readonly object _statsLock = new();
+
+    /// <summary>
+    /// Every indexed entry as a <see cref="FastFileItem"/>, grouped by directory. This used to be a
+    /// map of <see cref="FileItem"/> objects keyed by a lower-cased copy of each path, beside a
+    /// directory map and an extension map holding a second lower-cased copy, and a trie with a node
+    /// per file — about 2,760 bytes an entry, the trie alone more than half of it.
+    /// </summary>
+    private readonly FileEntryTable _entries = new();
 
     private long _memoryUsage = 0;
     private bool _isReady = false;
@@ -74,7 +76,7 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <inheritdoc/>
-    public long Count => _fileIndex.Count;
+    public long Count => _entries.Count;
 
     /// <inheritdoc/>
     public long MemoryUsage => Interlocked.Read(ref _memoryUsage);
@@ -91,27 +93,10 @@ internal class WindowsSearchIndex : ISearchIndex
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var fileItem = item.ToFileItem();
-
-        await Task.Run(() =>
+        if (_entries.TryAdd(item))
         {
-            _indexLock.EnterWriteLock();
-            try
-            {
-                var key = fileItem.FullPath.ToLowerInvariant();
-                var wasAdded = _fileIndex.TryAdd(key, fileItem);
-
-                if (wasAdded)
-                {
-                    UpdateIndices(fileItem, IndexOperation.Add);
-                    UpdateMemoryUsage(fileItem, IndexOperation.Add);
-                }
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
-            }
-        }, cancellationToken);
+            UpdateMemoryUsage(item, IndexOperation.Add);
+        }
 
         // Persist if enabled
         if (_persistence != null)
@@ -128,62 +113,33 @@ internal class WindowsSearchIndex : ISearchIndex
         if (cancellationToken.IsCancellationRequested)
             return 0;
 
-        var fastItems = items.ToArray();
-        if (fastItems.Length == 0)
-            return 0;
-
-        var addedCount = 0;
-
-        // 성능 최우선 고속 배치 처리 - OperationCanceledException 방지
-        await Task.Run(() =>
+        var added = await Task.Run(() =>
         {
-            try
+            var accepted = new List<FastFileItem>();
+            foreach (var item in items)
             {
-                // 단일 락으로 모든 작업을 한 번에 처리 (최고 성능)
-                _indexLock.EnterWriteLock();
-                try
+                if ((accepted.Count & 0xFFF) == 0 && cancellationToken.IsCancellationRequested)
+                    break;
+
+                if (_entries.TryAdd(item))
                 {
-                    var batchProcessed = 0;
-
-                    foreach (var fastItem in fastItems)
-                    {
-                        // 간소화된 취소 체크 (5000개마다만)
-                        if (++batchProcessed % 5000 == 0 && cancellationToken.IsCancellationRequested)
-                            break;
-
-                        var fileItem = fastItem.ToFileItem();
-                        var key = fileItem.FullPath.ToLowerInvariant();
-                        var wasAdded = _fileIndex.TryAdd(key, fileItem);
-
-                        if (wasAdded)
-                        {
-                            UpdateIndices(fileItem, IndexOperation.Add);
-                            UpdateMemoryUsage(fileItem, IndexOperation.Add);
-                            addedCount++;
-                        }
-                    }
-
-                    _logger.LogDebug("Added {AddedCount} files to index in single batch", addedCount);
-                }
-                finally
-                {
-                    _indexLock.ExitWriteLock();
+                    UpdateMemoryUsage(item, IndexOperation.Add);
+                    accepted.Add(item);
                 }
             }
-            catch (OperationCanceledException)
-            {
-                // 정상적인 취소 - 로깅만
-                _logger.LogDebug("Batch add operation cancelled");
-            }
-        }, CancellationToken.None); // 내부에서 취소 처리하므로 외부 토큰 사용 안함
 
-        // Persist if enabled
-        if (_persistence != null && addedCount > 0)
+            _logger.LogDebug("Added {AddedCount} files to index in single batch", accepted.Count);
+            return accepted;
+        }, CancellationToken.None);
+
+        // Persist what was added. This used to persist the batch's first `addedCount` items, which
+        // are not the added ones whenever the batch held an entry the index already had.
+        if (_persistence != null && added.Count > 0)
         {
-            await _persistence.AddBatchAsync(fastItems.Take(addedCount), cancellationToken);
+            await _persistence.AddBatchAsync(added, cancellationToken);
         }
 
-        return addedCount;
+        return added.Count;
     }
 
     /// <inheritdoc/>
@@ -192,26 +148,11 @@ internal class WindowsSearchIndex : ISearchIndex
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var removed = false;
-
-        await Task.Run(() =>
+        var removed = _entries.TryRemove(fullPath, out var removedItem);
+        if (removed)
         {
-            _indexLock.EnterWriteLock();
-            try
-            {
-                var key = fullPath.ToLowerInvariant();
-                if (_fileIndex.TryRemove(key, out var removedFile))
-                {
-                    UpdateIndices(removedFile, IndexOperation.Remove);
-                    UpdateMemoryUsage(removedFile, IndexOperation.Remove);
-                    removed = true;
-                }
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
-            }
-        }, cancellationToken);
+            UpdateMemoryUsage(removedItem, IndexOperation.Remove);
+        }
 
         // Persist if enabled
         if (_persistence != null && removed)
@@ -228,32 +169,12 @@ internal class WindowsSearchIndex : ISearchIndex
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var fileItem = item.ToFileItem();
-        var updated = false;
-
-        await Task.Run(() =>
+        var updated = _entries.Set(item, out var previous);
+        if (updated)
         {
-            _indexLock.EnterWriteLock();
-            try
-            {
-                var key = fileItem.FullPath.ToLowerInvariant();
-                if (_fileIndex.TryGetValue(key, out var existingFile))
-                {
-                    // Remove old indices and add new ones
-                    UpdateIndices(existingFile, IndexOperation.Remove);
-                    UpdateMemoryUsage(existingFile, IndexOperation.Remove);
-                    updated = true;
-                }
-
-                _fileIndex[key] = fileItem;
-                UpdateIndices(fileItem, IndexOperation.Add);
-                UpdateMemoryUsage(fileItem, IndexOperation.Add);
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
-            }
-        }, cancellationToken);
+            UpdateMemoryUsage(previous, IndexOperation.Remove);
+        }
+        UpdateMemoryUsage(item, IndexOperation.Add);
 
         // Persist if enabled
         if (_persistence != null)
@@ -282,7 +203,7 @@ internal class WindowsSearchIndex : ISearchIndex
         // Use hybrid search approach for optimal performance and completeness
         await foreach (var result in SearchHybridAsync(query, cancellationToken))
         {
-            yield return result.ToFastFileItem();
+            yield return result;
         }
     }
 
@@ -290,7 +211,7 @@ internal class WindowsSearchIndex : ISearchIndex
     /// Hybrid search combining indexed results with live filesystem scanning
     /// for optimal performance and complete results regardless of indexing state
     /// </summary>
-    private async IAsyncEnumerable<FileItem> SearchHybridAsync(
+    private async IAsyncEnumerable<FastFileItem> SearchHybridAsync(
         SearchQuery query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -341,7 +262,7 @@ internal class WindowsSearchIndex : ISearchIndex
                     yield break;
 
                 matchCount++;
-                yield return fsResult;
+                yield return fsResult.ToFastFileItem();
 
                 // Yield control periodically for better responsiveness
                 if (matchCount % 25 == 0)
@@ -411,15 +332,13 @@ internal class WindowsSearchIndex : ISearchIndex
 
     /// <summary>
     /// Checks if a path is covered by the index (has indexed files under it).
-    /// Uses PathTrieIndex for O(log n) lookup instead of O(n) scan.
     /// </summary>
     private bool IsPathCoveredByIndex(string path)
     {
         if (string.IsNullOrEmpty(path))
             return false;
 
-        // Use PathTrieIndex for fast O(log n) check
-        return _pathTrieIndex.ContainsPath(path);
+        return _entries.Covers(path);
     }
 
     /// <summary>
@@ -723,15 +642,7 @@ internal class WindowsSearchIndex : ISearchIndex
         else
         {
             // Fallback to indexed directories if no specific paths
-            _indexLock.EnterReadLock();
-            try
-            {
-                paths.AddRange(_directoryIndex.Keys.Take(5)); // Limit to avoid excessive scanning
-            }
-            finally
-            {
-                _indexLock.ExitReadLock();
-            }
+            paths.AddRange(_entries.Directories.Take(5)); // Limit to avoid excessive scanning
         }
 
         return paths;
@@ -844,26 +755,16 @@ internal class WindowsSearchIndex : ISearchIndex
         };
     }
 
-    private IEnumerable<FileItem> GetSearchCandidatesSync(SearchQuery query)
+    /// <summary>
+    /// The entries a query could match, narrowed by its scope. Everything else — extension, text,
+    /// size, dates — is decided by <see cref="SearchQueryEvaluator"/> on each candidate.
+    /// </summary>
+    private IEnumerable<FastFileItem> GetSearchCandidatesSync(SearchQuery query)
     {
         // BasePath takes precedence over SearchLocations
         if (!string.IsNullOrEmpty(query.BasePath))
         {
-            var basePathCandidates = GetFilesByLocationsSync(new[] { query.BasePath }, query.IncludeSubdirectories);
-
-            // If extension filter is also specified, apply it to base path results
-            if (!string.IsNullOrEmpty(query.ExtensionFilter))
-            {
-                return ApplyExtensionFilter(basePathCandidates, query.ExtensionFilter);
-            }
-
-            return basePathCandidates;
-        }
-
-        // Optimize search by using appropriate index
-        if (!string.IsNullOrEmpty(query.ExtensionFilter))
-        {
-            return GetFilesByExtensionSync(query.ExtensionFilter);
+            return GetFilesByLocationsSync([query.BasePath], query.IncludeSubdirectories);
         }
 
         if (query.SearchLocations.Count > 0)
@@ -871,97 +772,37 @@ internal class WindowsSearchIndex : ISearchIndex
             return GetFilesByLocationsSync(query.SearchLocations, query.IncludeSubdirectories);
         }
 
-        // Return all files
-        return _fileIndex.Values;
+        return _entries.All();
     }
 
-    private IEnumerable<FileItem> GetFilesByExtensionSync(string extension)
-    {
-        var normalizedExtension = extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
-        if (_extensionIndex.TryGetValue(normalizedExtension, out var filePaths))
-        {
-            foreach (var filePath in filePaths)
-            {
-                if (_fileIndex.TryGetValue(filePath, out var fileItem))
-                {
-                    yield return fileItem;
-                }
-            }
-        }
-    }
-
-    private IEnumerable<FileItem> GetFilesByLocationsSync(IList<string> locations, bool includeSubdirectories = true)
+    private IEnumerable<FastFileItem> GetFilesByLocationsSync(IList<string> locations, bool includeSubdirectories)
     {
         foreach (var location in locations)
         {
-            if (includeSubdirectories)
+            var entries = includeSubdirectories ? _entries.Under(location) : _entries.InDirectory(location);
+            foreach (var entry in entries)
             {
-                // Use PathTrieIndex for O(k) lookup where k = files under path
-                // This is a massive improvement over O(n) full index scan
-                foreach (var fileKey in _pathTrieIndex.GetFileKeysUnderPath(location))
-                {
-                    if (_fileIndex.TryGetValue(fileKey, out var fileItem))
-                    {
-                        yield return fileItem;
-                    }
-                }
-            }
-            else
-            {
-                // Search only in the specified directory (exact match)
-                var normalizedPath = Path.GetFullPath(location).ToLowerInvariant().TrimEnd('\\', '/');
-                if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
-                {
-                    foreach (var filePath in filePaths)
-                    {
-                        if (_fileIndex.TryGetValue(filePath, out var fileItem))
-                        {
-                            yield return fileItem;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private IEnumerable<FileItem> ApplyExtensionFilter(IEnumerable<FileItem> candidates, string extension)
-    {
-        var normalizedExtension = extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
-        foreach (var candidate in candidates)
-        {
-            if (candidate.Extension.ToLowerInvariant() == normalizedExtension)
-            {
-                yield return candidate;
+                yield return entry;
             }
         }
     }
 
     /// <inheritdoc/>
-    public async Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default)
+    public Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Phase 3.1: Lock-free read - ConcurrentDictionary.TryGetValue is thread-safe
-        return await Task.Run(() =>
-        {
-            var key = fullPath.ToLowerInvariant();
-            return _fileIndex.TryGetValue(key, out var fileItem) ? fileItem.ToFastFileItem() : (FastFileItem?)null;
-        }, cancellationToken);
+        return Task.FromResult(_entries.TryGet(fullPath, out var item) ? item : (FastFileItem?)null);
     }
 
     /// <inheritdoc/>
-    public async Task<bool> ContainsAsync(string fullPath, CancellationToken cancellationToken = default)
+    public Task<bool> ContainsAsync(string fullPath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Phase 3.1: Lock-free read - ConcurrentDictionary.ContainsKey is thread-safe
-        return await Task.Run(() =>
-        {
-            var key = fullPath.ToLowerInvariant();
-            return _fileIndex.ContainsKey(key);
-        }, cancellationToken);
+        return Task.FromResult(_entries.Contains(fullPath));
     }
 
     /// <inheritdoc/>
@@ -972,30 +813,11 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         ThrowIfDisposed();
 
-        var normalizedPath = directoryPath.ToLowerInvariant().TrimEnd('\\', '/');
-
-        // Recursive answers come from the path trie, which holds every level. The directory index
-        // holds one level only, so reading it for a recursive query returned direct children and
-        // nothing deeper.
-        IEnumerable<string> keys = recursive
-            ? _pathTrieIndex.GetFileKeysUnderPath(directoryPath)
-            : _directoryIndex.TryGetValue(normalizedPath, out var filePaths) ? filePaths.ToArray() : [];
-
-        var files = new List<FileItem>();
-        foreach (var key in keys)
-        {
-            if (_fileIndex.TryGetValue(key, out var fileItem)
-                && SearchQueryEvaluator.IsUnder(fileItem.DirectoryPath, directoryPath, recursive))
-            {
-                files.Add(fileItem);
-            }
-        }
-
-        // Yield files
-        foreach (var file in files)
+        var entries = recursive ? _entries.Under(directoryPath) : _entries.InDirectory(directoryPath);
+        foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return file.ToFastFileItem();
+            yield return entry;
         }
 
         await Task.Yield();
@@ -1006,24 +828,9 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         ThrowIfDisposed();
 
-        await Task.Run(() =>
-        {
-            _indexLock.EnterWriteLock();
-            try
-            {
-                _fileIndex.Clear();
-                _directoryIndex.Clear();
-                _extensionIndex.Clear();
-                _pathTrieIndex.Clear();  // Clear trie index
-                Interlocked.Exchange(ref _memoryUsage, 0);
-
-                _logger.LogInformation("Search index cleared");
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
-            }
-        }, cancellationToken);
+        _entries.Clear();
+        Interlocked.Exchange(ref _memoryUsage, 0);
+        _logger.LogInformation("Search index cleared");
 
         // Clear persistence if enabled
         if (_persistence != null)
@@ -1039,24 +846,15 @@ internal class WindowsSearchIndex : ISearchIndex
 
         await Task.Run(() =>
         {
-            _indexLock.EnterWriteLock();
-            try
-            {
-                // Force garbage collection to reclaim memory
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
+            // Force garbage collection to reclaim memory
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
 
-                // Recalculate memory usage
-                RecalculateMemoryUsage();
+            RecalculateMemoryUsage();
 
-                _logger.LogInformation("Search index optimized. Memory usage: {MemoryMB} MB",
-                    MemoryUsage / (1024.0 * 1024.0));
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
-            }
+            _logger.LogInformation("Search index optimized. Memory usage: {MemoryMB} MB",
+                MemoryUsage / (1024.0 * 1024.0));
         }, cancellationToken);
 
         // Optimize persistence if enabled
@@ -1071,23 +869,26 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         ThrowIfDisposed();
 
-        // Phase 3.1: Lock-free read - ConcurrentDictionary operations are thread-safe
         return await Task.Run(() =>
         {
-            // Take a snapshot of values for counting (thread-safe)
-            var allItems = _fileIndex.Values.ToArray();
-            var files = allItems.Where(f => !f.IsDirectory).ToArray();
-            var directories = allItems.Where(f => f.IsDirectory).ToArray();
+            long total = 0, directories = 0;
+            var extensions = new HashSet<int>();
+            foreach (var item in _entries.All())
+            {
+                total++;
+                if (item.IsDirectory) directories++;
+                else if (!string.IsNullOrEmpty(item.Extension)) extensions.Add(item.ExtensionId);
+            }
 
             return new IndexStatistics
             {
-                TotalItems = allItems.Length,
-                TotalFiles = files.Length,
-                TotalDirectories = directories.Length,
+                TotalItems = total,
+                TotalFiles = total - directories,
+                TotalDirectories = directories,
                 MemoryUsageBytes = MemoryUsage,
                 PersistenceEnabled = _persistence != null,
                 LastUpdated = DateTime.UtcNow,
-                UniqueExtensions = _extensionIndex.Count
+                UniqueExtensions = extensions.Count
             };
         }, cancellationToken);
     }
@@ -1108,22 +909,10 @@ internal class WindowsSearchIndex : ISearchIndex
 
         await foreach (var item in _persistence.SearchAsync(query, cancellationToken))
         {
-            var fileItem = item.ToFileItem();
-            var key = fileItem.FullPath.ToLowerInvariant();
-
-            _indexLock.EnterWriteLock();
-            try
+            if (_entries.TryAdd(item))
             {
-                if (_fileIndex.TryAdd(key, fileItem))
-                {
-                    UpdateIndices(fileItem, IndexOperation.Add);
-                    UpdateMemoryUsage(fileItem, IndexOperation.Add);
-                    loadedCount++;
-                }
-            }
-            finally
-            {
-                _indexLock.ExitWriteLock();
+                UpdateMemoryUsage(item, IndexOperation.Add);
+                loadedCount++;
             }
         }
 
@@ -1142,8 +931,7 @@ internal class WindowsSearchIndex : ISearchIndex
             return 0;
         }
 
-        // Phase 3.1: Lock-free read - take a snapshot for persistence
-        var items = _fileIndex.Values.Select(f => f.ToFastFileItem()).ToList();
+        var items = _entries.All().ToList();
 
         var savedCount = await _persistence.AddBatchAsync(items, cancellationToken);
         _logger.LogInformation("Saved {Count} items to persistence", savedCount);
@@ -1174,77 +962,24 @@ internal class WindowsSearchIndex : ISearchIndex
     /// provider answer the same question the same way. This method used to carry its own copy of
     /// the predicate, and the copy in the SQLite provider had silently drifted from it.
     /// </remarks>
+    private static bool MatchesQuery(in FastFileItem item, SearchQuery query, System.Text.RegularExpressions.Regex? regex)
+    {
+        return SearchQueryEvaluator.Matches(item, query, regex);
+    }
+
+    /// <summary>A filesystem-fallback hit, which arrives as a <see cref="FileItem"/>.</summary>
     private static bool MatchesQuery(FileItem file, SearchQuery query, System.Text.RegularExpressions.Regex? regex)
     {
         return SearchQueryEvaluator.Matches(file.ToFastFileItem(), query, regex);
     }
 
-    private void UpdateIndices(FileItem fileItem, IndexOperation operation)
+    /// <summary>
+    /// Rough estimate of what an entry retains: the item, its name, and its table slot. Directory
+    /// strings are shared by every entry beneath them and are not counted per entry.
+    /// </summary>
+    private void UpdateMemoryUsage(in FastFileItem item, IndexOperation operation)
     {
-        var filePath = fileItem.FullPath.ToLowerInvariant();
-        var directoryPath = fileItem.DirectoryPath.ToLowerInvariant();
-        var extension = fileItem.Extension.ToLowerInvariant();
-
-        if (operation == IndexOperation.Add)
-        {
-            // Update directory index
-            _directoryIndex.AddOrUpdate(directoryPath,
-                new HashSet<string> { filePath },
-                (key, existing) =>
-                {
-                    existing.Add(filePath);
-                    return existing;
-                });
-
-            // Update extension index
-            if (!string.IsNullOrEmpty(extension))
-            {
-                _extensionIndex.AddOrUpdate(extension,
-                    new HashSet<string> { filePath },
-                    (key, existing) =>
-                    {
-                        existing.Add(filePath);
-                        return existing;
-                    });
-            }
-
-            // Update path trie index for O(log n) path lookups
-            _pathTrieIndex.Add(fileItem.FullPath, filePath);
-        }
-        else if (operation == IndexOperation.Remove)
-        {
-            // Update directory index
-            if (_directoryIndex.TryGetValue(directoryPath, out var directoryFiles))
-            {
-                directoryFiles.Remove(filePath);
-                if (directoryFiles.Count == 0)
-                {
-                    _directoryIndex.TryRemove(directoryPath, out _);
-                }
-            }
-
-            // Update extension index
-            if (!string.IsNullOrEmpty(extension) && _extensionIndex.TryGetValue(extension, out var extensionFiles))
-            {
-                extensionFiles.Remove(filePath);
-                if (extensionFiles.Count == 0)
-                {
-                    _extensionIndex.TryRemove(extension, out _);
-                }
-            }
-
-            // Update path trie index
-            _pathTrieIndex.Remove(fileItem.FullPath, filePath);
-        }
-    }
-
-    private void UpdateMemoryUsage(FileItem fileItem, IndexOperation operation)
-    {
-        // Rough estimation of memory usage
-        var estimatedSize = fileItem.FullPath.Length * 2 +
-                           fileItem.Name.Length * 2 +
-                           fileItem.DirectoryPath.Length * 2 +
-                           100; // Base object overhead
+        var estimatedSize = EstimateSize(item);
 
         if (operation == IndexOperation.Add)
         {
@@ -1256,10 +991,12 @@ internal class WindowsSearchIndex : ISearchIndex
         }
     }
 
+    private static long EstimateSize(in FastFileItem item) => item.Name.Length * 2L + 128;
+
     private void RecalculateMemoryUsage()
     {
-        var totalSize = _fileIndex.Values.Sum(f =>
-            f.FullPath.Length * 2 + f.Name.Length * 2 + f.DirectoryPath.Length * 2 + 100);
+        long totalSize = 0;
+        foreach (var item in _entries.All()) totalSize += EstimateSize(item);
 
         Interlocked.Exchange(ref _memoryUsage, totalSize);
     }
@@ -1274,8 +1011,6 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         if (!_disposed)
         {
-            _indexLock.Dispose();
-            _pathTrieIndex.Dispose();
             _disposed = true;
         }
     }
@@ -1284,8 +1019,6 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         if (!_disposed)
         {
-            _indexLock.Dispose();
-
             if (_persistence != null)
             {
                 await _persistence.DisposeAsync();
