@@ -4,6 +4,66 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **On the Windows MFT path, every item's timestamps were 1601-01-01, so date filters matched
+  nothing — silently.** That provider enumerates the volume with `FSCTL_ENUM_USN_DATA` and read the
+  record's `TimeStamp` as the file's creation, modification and access time. The specification
+  requires that field to be zero for this call, and in any case it records when a journal entry was
+  logged, not when a file was written. A `MinModifiedDate` of 2020 therefore excluded every file,
+  and the search reported success with no results. The standard provider, used when the process is
+  not elevated, was unaffected — so the same query answered correctly or not depending on the
+  process's privileges. Present in 1.4.0, 2.0.0 and 2.1.0.
+- **Date bounds are compared in UTC.** Item timestamps are UTC, but a `SearchQuery` date bound was
+  compared by raw ticks whatever its `Kind`, so a bound built from local time was off by the UTC
+  offset. `MinCreatedDate`, `MaxCreatedDate`, `MinModifiedDate` and `MaxModifiedDate` now convert
+  to UTC when set — an `Unspecified` value is taken as local time, as `DateTime.ToUniversalTime`
+  does — and read back as UTC.
+- `MftCompactRecord.ToMftFileRecord` returned the modification time as the creation and access
+  times. It now returns them unset: the compact form does not keep them.
+- `ISearchEngine.RefreshIndexAsync` with explicit locations dropped `MaxDepth`, `FollowSymlinks` and
+  the metadata setting from the options it re-indexed with.
+- The USN record parser accepted version 3 records but read them at version 2 offsets, which do not
+  apply to them. It now rejects them. Enumeration requests version 2 records, so none were seen in
+  practice.
+
+### Added
+
+- **`IndexingOptions.CollectFileMetadata`** — reads each entry's size and all three timestamps with
+  one file system query while indexing, on the one provider whose enumeration lacks them (Windows
+  MFT). It replaces `CollectFileSize`, which already paid for that query and kept only the size.
+  Directories are covered too; they previously never had a size or time read.
+- **A size or date filter the index cannot answer is refused, not answered with nothing.** When the
+  engine's last indexing run did not collect metadata, `SearchAsync` returns a result with
+  `HasError` set and a message naming `CollectFileMetadata`, where it returned an empty result that
+  read as "no such files". `SearchQueryEvaluator.RequiresFileMetadata(query)` tells whether a query
+  depends on metadata, and `IFileSystemProvider.ProvidesFileMetadata(options)` whether a provider
+  supplies it — a default interface member, so existing implementations need no change.
+
+### Changed
+
+- A timestamp that was not collected is `DateTime.MinValue`, not an invented value, and satisfies
+  no date bound — an unknown time is neither before nor after anything. `FastFileItem` keeps an
+  unspecified or local `MinValue` as unset rather than shifting it by the UTC offset.
+- `IndexingOptions.CollectFileSize` is `[Obsolete]` and forwards to `CollectFileMetadata`.
+  `IndexingOptions.FileSizeCollectionBatchSize` is `[Obsolete]`: it was documented as the batch size
+  of a parallel collection pass that has never existed, and it has no effect.
+
+### Known limitations
+
+- A size that was not collected is still 0, which a real empty file also has, so an individual
+  entry whose metadata could not be read still passes a `MaxSize` bound. The engine-level refusal
+  covers the systematic case — an index built without metadata — but not isolated unreadable
+  entries.
+- The refusal depends on the engine knowing how its index was built. An engine that loads a store
+  without indexing in the same process has no such knowledge, and answers date bounds from whatever
+  the store holds. Items stored by earlier versions from the MFT path carry 1601-01-01 until they
+  are re-indexed.
+- `IndexingOptions.MaxFileSize` cannot be applied on the MFT path without `CollectFileMetadata`,
+  since the size is unknown when the limit would be checked.
+
 ## [2.1.0] - 2026-09-10
 
 ### Added
@@ -199,6 +259,15 @@ fail loudly.
   index throws `NotSupportedException` rather than silently ignoring the request.
 - `SearchQuery.RequiredAttributes` and `ExcludedAttributes` are not honoured by any backend.
 - `FastFind.SQLite` has no automated coverage on Linux.
+
+### Dependency floors
+
+- The packages require `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.Logging`
+  and `Microsoft.Extensions.Logging.Abstractions` **10.0.12 or later**, and `FastFind.SQLite`
+  requires `Microsoft.Data.Sqlite` **10.0.12 or later** — the servicing band these releases were
+  built and tested against. A project pinning an earlier 10.0.x of any of them gets NuGet `NU1109`
+  downgrade errors on upgrade rather than a resolution, so move those pins to 10.0.12 in the same
+  change. The same floors apply to 2.1.0.
 
 ## [1.4.0]
 

@@ -67,6 +67,13 @@ public interface ISearchEngine : IDisposable
     /// <summary>
     /// Performs a search with the specified query
     /// </summary>
+    /// <remarks>
+    /// A query the engine cannot answer is reported, not thrown: the result has
+    /// <see cref="SearchResult.HasError"/> set and <see cref="SearchResult.ErrorMessage"/> says why.
+    /// That covers an invalid query, and a size or date bound over an index built without that
+    /// metadata (see <see cref="IndexingOptions.CollectFileMetadata"/>) — check it before reading
+    /// an empty result as "no matches".
+    /// </remarks>
     /// <param name="query">Search query</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Search results</returns>

@@ -129,6 +129,63 @@ public class SearchQueryEvaluatorTests
         Matches(item, new SearchQuery { MaxModifiedDate = Modified.AddDays(1) }).Should().BeTrue();
     }
 
+    [Fact]
+    public void A_Local_Date_Bound_Should_Mean_The_Same_Instant_As_Its_UTC_Equivalent()
+    {
+        // Item times are UTC. A bound given in local time names the same instant, so both an
+        // inclusive lower and an inclusive upper bound at that instant must match. Compared by raw
+        // ticks, the local bound is off by the UTC offset and one of the two fails.
+        var item = Item(@"C:\docs\report.txt");
+        var localInstant = Modified.ToLocalTime();
+
+        var lower = new SearchQuery { MinModifiedDate = localInstant };
+        var upper = new SearchQuery { MaxModifiedDate = localInstant };
+
+        lower.MinModifiedDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
+        lower.MinModifiedDate.Value.Should().Be(Modified);
+        Matches(item, lower).Should().BeTrue();
+        Matches(item, upper).Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_Uncollected_Timestamp_Should_Satisfy_No_Date_Bound()
+    {
+        // DateTime.MinValue is "not collected". It must not pass an upper bound just because it is
+        // earlier than everything, nor a lower one.
+        var item = Item(@"C:\docs\report.txt", created: DateTime.MinValue, modified: DateTime.MinValue);
+
+        item.ModifiedTime.Should().Be(DateTime.MinValue);
+        Matches(item, new SearchQuery { MaxModifiedDate = Modified }).Should().BeFalse();
+        Matches(item, new SearchQuery { MinModifiedDate = DateTime.MinValue }).Should().BeFalse();
+        Matches(item, new SearchQuery { MaxCreatedDate = Created }).Should().BeFalse();
+        Matches(item, new SearchQuery()).Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_Unspecified_MinValue_Should_Stay_Uncollected_Whatever_The_Time_Zone()
+    {
+        // FileItem's timestamps default to an Unspecified MinValue. Converting that to UTC as local
+        // time moves it forward wherever the offset is negative, and it would stop reading as unset.
+        var item = new FastFileItem(@"C:\docs\report.txt", "report.txt", @"C:\docs", ".txt", 0,
+            default, default, default, FileAttributes.Normal, 'C');
+
+        item.CreatedTicks.Should().Be(0);
+        item.ModifiedTicks.Should().Be(0);
+        item.AccessedTicks.Should().Be(0);
+    }
+
+    [Fact]
+    public void RequiresFileMetadata_Should_Detect_Every_Size_And_Date_Bound()
+    {
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { SearchText = "*.md" }).Should().BeFalse();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MinSize = 1 }).Should().BeTrue();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MaxSize = 1 }).Should().BeTrue();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MinCreatedDate = Created }).Should().BeTrue();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MaxCreatedDate = Created }).Should().BeTrue();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MinModifiedDate = Modified }).Should().BeTrue();
+        SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { MaxModifiedDate = Modified }).Should().BeTrue();
+    }
+
     [Theory]
     [InlineData(".txt", true)]
     [InlineData("txt", true)]   // a leading dot is optional on the filter

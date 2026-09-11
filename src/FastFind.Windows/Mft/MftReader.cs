@@ -5,16 +5,19 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 
 namespace FastFind.Windows.Mft;
 
 /// <summary>
-/// High-performance MFT reader using direct NTFS access.
-/// Provides Everything-level performance for file enumeration.
+/// Enumerates an NTFS volume's entries through its change journal (<c>FSCTL_ENUM_USN_DATA</c>).
 /// </summary>
+/// <remarks>
+/// Despite the name, this does not parse the Master File Table. The journal enumeration yields each
+/// entry's name, parent and attributes only — no size and no timestamps, so records carry 0 and
+/// <see cref="DateTime.MinValue"/> for those.
+/// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed class MftReader : IDisposable
 {
@@ -132,8 +135,7 @@ public sealed class MftReader : IDisposable
     }
 
     /// <summary>
-    /// Enumerates all files on a drive using MFT direct access.
-    /// This is the high-performance path that achieves Everything-level speed.
+    /// Enumerates every entry on a drive through its change journal.
     /// </summary>
     public async IAsyncEnumerable<MftFileRecord> EnumerateFilesAsync(
         char driveLetter,
@@ -201,16 +203,19 @@ public sealed class MftReader : IDisposable
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        var record = ParseUsnRecord(buffer, offset, out var recordLength);
-                        if (recordLength == 0)
+                        var recordLength = (int)MftParserV2.GetRecordLength(buffer, offset);
+                        if (recordLength <= 0 || offset + recordLength > bytesReturned)
                             break;
 
-                        offset += (int)recordLength;
+                        // The parser advances past records it accepts or skips, but not past ones
+                        // it rejects, so the next record's position is taken from the length.
+                        var recordStart = offset;
+                        var parsed = MftParserV2.TryParseUsnRecord(
+                            buffer.AsSpan(0, (int)bytesReturned), ref offset, out var mftRecord);
+                        offset = recordStart + recordLength;
 
-                        if (record.HasValue)
+                        if (parsed)
                         {
-                            var mftRecord = record.Value;
-
                             // Cache directory records for path building
                             if (mftRecord.IsDirectory)
                             {
@@ -444,64 +449,6 @@ public sealed class MftReader : IDisposable
             var handle = OpenVolume(d);
             return handle ?? new SafeFileHandle(IntPtr.Zero, false);
         });
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static MftFileRecord? ParseUsnRecord(byte[] buffer, int offset, out uint recordLength)
-    {
-        if (offset + 4 > buffer.Length)
-        {
-            recordLength = 0;
-            return null;
-        }
-
-        recordLength = BitConverter.ToUInt32(buffer, offset);
-        if (recordLength == 0 || offset + recordLength > buffer.Length)
-        {
-            recordLength = 0;
-            return null;
-        }
-
-        // Parse USN_RECORD_V2 structure
-        var majorVersion = BitConverter.ToUInt16(buffer, offset + 4);
-        if (majorVersion != 2 && majorVersion != 3)
-        {
-            // Unsupported version, skip
-            return null;
-        }
-
-        var fileReferenceNumber = BitConverter.ToUInt64(buffer, offset + 8);
-        var parentFileReferenceNumber = BitConverter.ToUInt64(buffer, offset + 16);
-        var timeStamp = BitConverter.ToInt64(buffer, offset + 32);
-        var fileAttributes = (FileAttributes)BitConverter.ToUInt32(buffer, offset + 52);
-        var fileNameLength = BitConverter.ToUInt16(buffer, offset + 56);
-        var fileNameOffset = BitConverter.ToUInt16(buffer, offset + 58);
-
-        if (fileNameLength == 0 || offset + fileNameOffset + fileNameLength > buffer.Length)
-        {
-            return null;
-        }
-
-        var fileName = Encoding.Unicode.GetString(buffer, offset + fileNameOffset, fileNameLength);
-
-        // Skip system files and metadata
-        if (fileName.StartsWith("$") || string.IsNullOrEmpty(fileName))
-        {
-            return null;
-        }
-
-        // Convert FILETIME to DateTime
-        var dateTime = DateTime.FromFileTimeUtc(timeStamp);
-
-        return new MftFileRecord(
-            fileReferenceNumber,
-            parentFileReferenceNumber,
-            fileAttributes,
-            0, // Size not available in USN record
-            fileName,
-            dateTime,
-            dateTime,
-            dateTime);
     }
 
     /// <summary>

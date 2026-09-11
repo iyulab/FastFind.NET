@@ -205,23 +205,25 @@ public readonly struct MftCompactRecord
 
     /// <summary>
     /// Converts back to a standard MftFileRecord.
-    /// Note: Creation and Access times will be set to ModificationTime.
     /// </summary>
+    /// <remarks>
+    /// The compact form keeps only the modification time, so creation and access times come back
+    /// as <see cref="DateTime.MinValue"/> — not collected — rather than as copies of the
+    /// modification time, which would read as real values.
+    /// </remarks>
     /// <returns>A new MftFileRecord with data from this compact record.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public MftFileRecord ToMftFileRecord()
     {
-        var modifiedTime = ModifiedTime;
-
         return new MftFileRecord(
             fileReferenceNumber: FileReferenceNumber,
             parentFileReferenceNumber: ParentFileReferenceNumber,
             attributes: GetFileAttributes(),
             fileSize: FileSize,
             fileName: GetFileName(),
-            creationTime: modifiedTime,     // Lost in compact form
-            modificationTime: modifiedTime,
-            accessTime: modifiedTime);      // Lost in compact form
+            creationTime: default,
+            modificationTime: ModifiedTime,
+            accessTime: default);
     }
 
     #endregion

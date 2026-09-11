@@ -26,7 +26,7 @@ await engine.StartIndexingAsync(new IndexingOptions
     SpecificDirectories = [@"D:\Projects"],       // Windows
     // MountPoints = ["/home", "/opt"],           // Linux
     ExcludedPaths = ["node_modules", ".git", "bin", "obj"],
-    CollectFileSize = true
+    CollectFileMetadata = true   // sizes and timestamps on the Windows MFT path
 });
 
 while (engine.IsIndexing) await Task.Delay(500);
@@ -65,7 +65,8 @@ var options = new IndexingOptions
     IncludeSystem = false,      // Windows only (no effect on Linux/macOS)
 
     // Performance
-    CollectFileSize = false,    // false = max indexing speed
+    CollectFileMetadata = false, // Windows MFT path only: false = max indexing speed,
+                                 // but no sizes or timestamps, so size/date filters are refused
     MaxFileSize = 100 * 1024 * 1024,
     ParallelThreads = Environment.ProcessorCount,
     BatchSize = 1000
@@ -180,7 +181,9 @@ Console.WriteLine($"Platform: {validation.Platform}, Ready: {validation.IsReady}
 - **Set `IncludeSubdirectories = false`** when you only need direct files
 - **Use `SearchFileNameOnly = true`** for faster filename-only searches
 - **Set `MaxResults`** to limit memory usage for large result sets
-- **Use `CollectFileSize = false`** (default) for maximum indexing speed
+- **Leave `CollectFileMetadata = false`** (default) for maximum indexing speed on the Windows
+  MFT path — at the cost of sizes and timestamps. Size and date filters on such an index return a
+  result with `HasError` set, not an empty one
 
 ## Next Steps
 

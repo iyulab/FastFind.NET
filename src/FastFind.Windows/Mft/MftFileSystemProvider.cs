@@ -8,10 +8,15 @@ using System.Threading.Channels;
 namespace FastFind.Windows.Mft;
 
 /// <summary>
-/// Ultra-high performance MFT-based file system provider.
-/// Achieves Everything-level speed by reading directly from NTFS Master File Table.
-/// Requires administrator privileges on Windows.
+/// NTFS file system provider that enumerates a volume through its change journal
+/// (<c>FSCTL_ENUM_USN_DATA</c>). Requires administrator privileges on Windows.
 /// </summary>
+/// <remarks>
+/// It does not parse the Master File Table itself. Journal enumeration returns each entry's
+/// name, parent and attributes, but no size and no timestamps — the record's timestamp field is
+/// specified to be zero for this call. Size and times are therefore read per entry, and only when
+/// <see cref="IndexingOptions.CollectFileMetadata"/> is set; see <see cref="ProvidesFileMetadata"/>.
+/// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 {
@@ -43,6 +48,17 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
 
     /// <inheritdoc/>
     public bool IsAvailable => OperatingSystem.IsWindows() && MftReader.IsAvailable();
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Only with <see cref="IndexingOptions.CollectFileMetadata"/>: the journal enumeration this
+    /// provider reads carries no sizes or times of its own.
+    /// </remarks>
+    public bool ProvidesFileMetadata(IndexingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.CollectFileMetadata;
+    }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> EnumerateFilesAsync(
@@ -182,7 +198,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             if (!IsPathInLocations(fullPath, locationFilters))
                 continue;
 
-            var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileSize);
+            var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileMetadata);
             if (ShouldIncludeFile(fileItem, options))
             {
                 await writer.WriteAsync(fileItem, cancellationToken);
@@ -213,8 +229,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             if (!IsPathInLocations(fullPath, locationFilters))
                 continue;
 
-            // Directories don't need size collection (always 0)
-            var fileItem = ConvertToFileItem(record, fullPath, collectFileSize: false);
+            var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileMetadata);
             if (ShouldIncludeFile(fileItem, options))
             {
                 await writer.WriteAsync(fileItem, cancellationToken);
@@ -290,16 +305,29 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         return false;
     }
 
-    private static FileItem ConvertToFileItem(MftFileRecord record, string fullPath, bool collectFileSize = false)
+    /// <summary>
+    /// Builds an item from a journal record, reading the entry's size and timestamps from the file
+    /// system when <paramref name="collectMetadata"/> is set.
+    /// </summary>
+    /// <remarks>
+    /// Without it, the record's own values pass through. For a journal-enumerated record those are
+    /// a size of 0 and <see cref="DateTime.MinValue"/> times — "not collected". An entry whose
+    /// metadata cannot be read (gone since enumeration, or denied) keeps those values too rather
+    /// than acquiring invented ones.
+    /// </remarks>
+    internal static FileItem ConvertToFileItem(MftFileRecord record, string fullPath, bool collectMetadata)
     {
         var directoryPath = Path.GetDirectoryName(fullPath) ?? string.Empty;
         var extension = record.IsDirectory ? string.Empty : Path.GetExtension(record.FileName);
 
-        // Performance optimization: Only collect file size when explicitly requested
-        var fileSize = record.FileSize;
-        if (collectFileSize && fileSize == 0 && !record.IsDirectory)
+        var size = record.FileSize;
+        var created = record.CreationTime;
+        var modified = record.ModificationTime;
+        var accessed = record.AccessTime;
+
+        if (collectMetadata && TryReadMetadata(fullPath, record.IsDirectory, out var metadata))
         {
-            fileSize = GetFileSizeFast(fullPath);
+            (size, created, modified, accessed) = metadata;
         }
 
         return new FileItem
@@ -308,10 +336,10 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             Name = record.FileName,
             DirectoryPath = directoryPath,
             Extension = extension,
-            Size = fileSize,
-            CreatedTime = record.CreationTime,
-            ModifiedTime = record.ModificationTime,
-            AccessedTime = record.AccessTime,
+            Size = size,
+            CreatedTime = created,
+            ModifiedTime = modified,
+            AccessedTime = accessed,
             Attributes = record.Attributes,
             DriveLetter = fullPath.Length > 0 ? fullPath[0] : '\0'
         };
@@ -618,24 +646,41 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     }
 
 
-    #region File Size Collection (Performance-Optimized)
+    #region Metadata collection
 
     /// <summary>
-    /// Gets file size for a single file using optimized file system API.
-    /// Called during enumeration when CollectFileSize option is enabled.
+    /// Reads an entry's size and UTC timestamps with a single file system query.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static long GetFileSizeFast(string filePath)
+    /// <returns>
+    /// <c>false</c> when the entry no longer exists or cannot be queried. The caller must then not
+    /// use <paramref name="metadata"/>: <see cref="FileSystemInfo"/> reports 1601-01-01 for the
+    /// times of an entry it could not read, which is exactly the kind of value that must not reach
+    /// the index.
+    /// </returns>
+    internal static bool TryReadMetadata(
+        string path,
+        bool isDirectory,
+        out (long Size, DateTime Created, DateTime Modified, DateTime Accessed) metadata)
     {
         try
         {
-            var info = new FileInfo(filePath);
-            return info.Exists ? info.Length : 0;
+            FileSystemInfo info = isDirectory ? new DirectoryInfo(path) : new FileInfo(path);
+            if (info.Exists)
+            {
+                metadata = (
+                    info is FileInfo file ? file.Length : 0,
+                    info.CreationTimeUtc,
+                    info.LastWriteTimeUtc,
+                    info.LastAccessTimeUtc);
+                return true;
+            }
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return 0;
         }
+
+        metadata = default;
+        return false;
     }
 
     #endregion

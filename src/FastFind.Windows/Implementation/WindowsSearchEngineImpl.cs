@@ -40,6 +40,10 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     private readonly SimpleObjectPool<List<FileItem>> _listPool;
 
     private IndexingOptions? _currentIndexingOptions;
+
+    // Set when the last indexing run's items lack real sizes and timestamps, so size and date
+    // bounds cannot be answered. Such a query is refused rather than answered with an empty set.
+    private volatile bool _fileMetadataUnavailable;
     private Task? _indexingTask;
     private Task? _monitoringTask;
     private Task? _fileChangeProcessingTask;
@@ -130,6 +134,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         }
 
         _currentIndexingOptions = options;
+        _fileMetadataUnavailable = !_fileSystemProvider.ProvidesFileMetadata(options);
 
         // Create a fresh per-run CTS so Stop/Start cycles don't inherit a cancelled token
         CancellationTokenSource runCts;
@@ -283,6 +288,14 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         if (!validation.IsValid)
         {
             return SearchResult.Failed(query, TimeSpan.Zero, validation.ErrorMessage!);
+        }
+
+        if (_fileMetadataUnavailable && SearchQueryEvaluator.RequiresFileMetadata(query))
+        {
+            return SearchResult.Failed(query, TimeSpan.Zero,
+                "This query filters on file size or dates, but the index was built without them: " +
+                "the file system provider in use does not read sizes or timestamps unless " +
+                "IndexingOptions.CollectFileMetadata is set. Re-index with it set to use these filters.");
         }
 
         var searchId = Guid.NewGuid().ToString("N")[..8];
@@ -596,6 +609,9 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 IncludeHidden = _currentIndexingOptions.IncludeHidden,
                 IncludeSystem = _currentIndexingOptions.IncludeSystem,
                 MaxFileSize = _currentIndexingOptions.MaxFileSize,
+                MaxDepth = _currentIndexingOptions.MaxDepth,
+                FollowSymlinks = _currentIndexingOptions.FollowSymlinks,
+                CollectFileMetadata = _currentIndexingOptions.CollectFileMetadata,
                 ParallelThreads = _currentIndexingOptions.ParallelThreads,
                 BatchSize = _currentIndexingOptions.BatchSize
             };

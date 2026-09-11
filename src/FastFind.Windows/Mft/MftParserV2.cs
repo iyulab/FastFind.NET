@@ -23,11 +23,6 @@ public static class MftParserV2
     private const ushort USN_RECORD_V2 = 2;
 
     /// <summary>
-    /// USN_RECORD_V3 major version
-    /// </summary>
-    private const ushort USN_RECORD_V3 = 3;
-
-    /// <summary>
     /// Try to parse a USN record from the buffer using zero-allocation Span operations.
     /// </summary>
     /// <param name="buffer">Buffer containing USN records from DeviceIoControl</param>
@@ -58,15 +53,16 @@ public static class MftParserV2
         // Slice to record boundary
         var recordSpan = span[..(int)recordLength];
 
-        // Check version (offset 4-5)
+        // Check version (offset 4-5). Only V2 is laid out the way the offsets below assume; a V3
+        // record has 128-bit file references and every later field moves. Enumeration with
+        // MFT_ENUM_DATA_V0 returns V2 only.
         var majorVersion = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[4..]);
-        if (majorVersion != USN_RECORD_V2 && majorVersion != USN_RECORD_V3)
+        if (majorVersion != USN_RECORD_V2)
             return false;
 
         // Parse fields using BinaryPrimitives (zero-allocation)
         var fileReferenceNumber = BinaryPrimitives.ReadUInt64LittleEndian(recordSpan[8..]);
         var parentFileReferenceNumber = BinaryPrimitives.ReadUInt64LittleEndian(recordSpan[16..]);
-        var timeStamp = BinaryPrimitives.ReadInt64LittleEndian(recordSpan[32..]);
         var fileAttributes = (FileAttributes)BinaryPrimitives.ReadUInt32LittleEndian(recordSpan[52..]);
         var fileNameLength = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[56..]);
         var fileNameOffset = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[58..]);
@@ -88,19 +84,7 @@ public static class MftParserV2
             return false;
         }
 
-        // Convert FILETIME to DateTime
-        var dateTime = DateTime.FromFileTimeUtc(timeStamp);
-
-        // Create record
-        record = new MftFileRecord(
-            fileReferenceNumber,
-            parentFileReferenceNumber,
-            fileAttributes,
-            0, // Size not available in USN record
-            fileName,
-            dateTime,
-            dateTime,
-            dateTime);
+        record = CreateRecord(fileReferenceNumber, parentFileReferenceNumber, fileAttributes, fileName);
 
         // Update offset for next record
         offset += (int)recordLength;
@@ -137,12 +121,11 @@ public static class MftParserV2
         var recordSpan = span[..(int)recordLength];
 
         var majorVersion = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[4..]);
-        if (majorVersion != USN_RECORD_V2 && majorVersion != USN_RECORD_V3)
+        if (majorVersion != USN_RECORD_V2)
             return false;
 
         var fileReferenceNumber = BinaryPrimitives.ReadUInt64LittleEndian(recordSpan[8..]);
         var parentFileReferenceNumber = BinaryPrimitives.ReadUInt64LittleEndian(recordSpan[16..]);
-        var timeStamp = BinaryPrimitives.ReadInt64LittleEndian(recordSpan[32..]);
         var fileAttributes = (FileAttributes)BinaryPrimitives.ReadUInt32LittleEndian(recordSpan[52..]);
         var fileNameLength = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[56..]);
         var fileNameOffset = BinaryPrimitives.ReadUInt16LittleEndian(recordSpan[58..]);
@@ -172,21 +155,31 @@ public static class MftParserV2
             fileName = new string(fileNameChars);
         }
 
-        var dateTime = DateTime.FromFileTimeUtc(timeStamp);
-
-        record = new MftFileRecord(
-            fileReferenceNumber,
-            parentFileReferenceNumber,
-            fileAttributes,
-            0,
-            fileName,
-            dateTime,
-            dateTime,
-            dateTime);
+        record = CreateRecord(fileReferenceNumber, parentFileReferenceNumber, fileAttributes, fileName);
 
         offset += (int)recordLength;
         return true;
     }
+
+    /// <summary>
+    /// Builds a record from the fields a USN record actually carries about the file.
+    /// </summary>
+    /// <remarks>
+    /// A USN record has no file size and no file timestamps. Its <c>TimeStamp</c> is when a
+    /// journal entry was logged, and for records returned by <c>FSCTL_ENUM_USN_DATA</c> it is
+    /// specified to be zero ([MS-FSCC] 2.3.62.2). Reading it as a file time gave every entry
+    /// 1601-01-01 as its creation, modification and access time. Size and times are left unset —
+    /// 0 and <see cref="DateTime.MinValue"/> — for the provider to fill from the file system when
+    /// asked to.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MftFileRecord CreateRecord(
+        ulong fileReferenceNumber,
+        ulong parentFileReferenceNumber,
+        FileAttributes fileAttributes,
+        string fileName) =>
+        new(fileReferenceNumber, parentFileReferenceNumber, fileAttributes,
+            fileSize: 0, fileName, default, default, default);
 
     /// <summary>
     /// Get the record length at the specified offset without full parsing.

@@ -50,6 +50,11 @@ public class IndexingOptions
     /// <summary>
     /// Maximum file size to index (in bytes, null for no limit)
     /// </summary>
+    /// <remarks>
+    /// Applied only where a file's size is known at enumeration time. The MFT provider learns
+    /// sizes only when <see cref="CollectFileMetadata"/> is set; without it every file passes this
+    /// limit.
+    /// </remarks>
     public long? MaxFileSize { get; set; } = 100 * 1024 * 1024; // 100MB default
 
     /// <summary>
@@ -105,17 +110,48 @@ public class IndexingOptions
     public ThreadPriority IndexingPriority { get; set; } = ThreadPriority.BelowNormal;
 
     /// <summary>
-    /// Whether to collect file sizes during indexing.
-    /// When false (default), file sizes will be 0 for maximum indexing performance.
-    /// When true, file sizes are collected in a parallel batch after MFT enumeration.
-    /// Note: This adds ~10-30% overhead to indexing time depending on file count.
+    /// Whether to read each item's size and timestamps while indexing, on providers whose
+    /// enumeration does not already report them.
     /// </summary>
-    public bool CollectFileSize { get; set; } = false;
+    /// <remarks>
+    /// <para>
+    /// Only the Windows MFT provider is affected. It enumerates the volume through the change
+    /// journal, which reports names, parents and attributes but no sizes or times, so with this
+    /// off its items carry a size of 0 and <see cref="DateTime.MinValue"/> for every timestamp —
+    /// "not collected", never a real value. With it on, each item costs one metadata read of the
+    /// file system entry, which is noticeably slower on a large volume. The standard Windows,
+    /// Linux and macOS providers always report metadata and ignore this setting.
+    /// </para>
+    /// <para>
+    /// A search engine refuses a query with a size or date bound over an index built without
+    /// metadata — it returns a result with <see cref="SearchResult.HasError"/> set rather than an
+    /// empty result that would look like "no such files".
+    /// </para>
+    /// </remarks>
+    public bool CollectFileMetadata { get; set; } = false;
 
     /// <summary>
-    /// Batch size for parallel file size collection (only used when CollectFileSize is true).
-    /// Higher values improve throughput but use more memory.
+    /// Former name of <see cref="CollectFileMetadata"/>, from when only the size was read.
     /// </summary>
+    /// <remarks>
+    /// Setting it sets <see cref="CollectFileMetadata"/>, which now also fills timestamps from the
+    /// same read.
+    /// </remarks>
+    [Obsolete("Use CollectFileMetadata. The same read now fills timestamps as well as the size.")]
+    public bool CollectFileSize
+    {
+        get => CollectFileMetadata;
+        set => CollectFileMetadata = value;
+    }
+
+    /// <summary>
+    /// Has no effect.
+    /// </summary>
+    /// <remarks>
+    /// It was documented as the batch size of a parallel size-collection pass. No such pass
+    /// exists: metadata is read inline, one entry at a time, as items are enumerated.
+    /// </remarks>
+    [Obsolete("Has no effect. Metadata is read inline during enumeration, not in batches.")]
     public int FileSizeCollectionBatchSize { get; set; } = 5000;
 
     /// <summary>

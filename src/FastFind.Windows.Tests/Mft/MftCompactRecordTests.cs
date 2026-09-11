@@ -322,8 +322,10 @@ public class MftCompactRecordTests
         restored.Attributes.Should().Be(FileAttributes.Archive);
         restored.FileSize.Should().Be(2048);
         restored.FileName.Should().Be(fileName);
-        // Note: Creation and Access time are set to ModificationTime in compact form
         restored.ModificationTime.Ticks.Should().Be(modifiedTicks);
+        // The compact form does not keep them, so they come back unset rather than invented.
+        restored.CreationTime.Should().Be(DateTime.MinValue);
+        restored.AccessTime.Should().Be(DateTime.MinValue);
     }
 
     #endregion

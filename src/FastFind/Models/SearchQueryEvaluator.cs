@@ -68,11 +68,9 @@ public static class SearchQueryEvaluator
         if (query.MinSize.HasValue && item.Size < query.MinSize.Value) return false;
         if (query.MaxSize.HasValue && item.Size > query.MaxSize.Value) return false;
 
-        // Date filters
-        if (query.MinCreatedDate.HasValue && item.CreatedTime < query.MinCreatedDate.Value) return false;
-        if (query.MaxCreatedDate.HasValue && item.CreatedTime > query.MaxCreatedDate.Value) return false;
-        if (query.MinModifiedDate.HasValue && item.ModifiedTime < query.MinModifiedDate.Value) return false;
-        if (query.MaxModifiedDate.HasValue && item.ModifiedTime > query.MaxModifiedDate.Value) return false;
+        // Date filters. SearchQuery holds its bounds in UTC, matching the item's ticks.
+        if (!IsWithin(item.CreatedTicks, query.MinCreatedDate, query.MaxCreatedDate)) return false;
+        if (!IsWithin(item.ModifiedTicks, query.MinModifiedDate, query.MaxModifiedDate)) return false;
 
         // Attribute filters. RequiredAttributes must all be present; ExcludedAttributes rejects an
         // item carrying any of them — "exclude read-only or hidden" is one query, not two.
@@ -91,6 +89,37 @@ public static class SearchQueryEvaluator
         if (!MatchesLocation(item, query)) return false;
 
         return MatchesText(item, query, textMatcher);
+    }
+
+    /// <summary>
+    /// Whether a query constrains size or timestamps — the metadata an index built without
+    /// <see cref="IndexingOptions.CollectFileMetadata"/> may not have.
+    /// </summary>
+    /// <remarks>
+    /// An engine uses this to refuse such a query rather than answer it from values that were
+    /// never read, which would return an empty result indistinguishable from "no such files".
+    /// </remarks>
+    public static bool RequiresFileMetadata(SearchQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        return query.MinSize.HasValue || query.MaxSize.HasValue
+            || query.MinCreatedDate.HasValue || query.MaxCreatedDate.HasValue
+            || query.MinModifiedDate.HasValue || query.MaxModifiedDate.HasValue;
+    }
+
+    /// <summary>
+    /// Whether a timestamp falls inside a date range. A timestamp that was not collected — zero
+    /// ticks, <see cref="DateTime.MinValue"/> — satisfies no bound: an unknown time is neither
+    /// before nor after anything.
+    /// </summary>
+    private static bool IsWithin(long ticks, DateTime? min, DateTime? max)
+    {
+        if (min is null && max is null) return true;
+        if (ticks == 0) return false;
+        if (min is { } lower && ticks < lower.Ticks) return false;
+        if (max is { } upper && ticks > upper.Ticks) return false;
+        return true;
     }
 
     /// <summary>

@@ -24,6 +24,10 @@ public readonly struct FastFileItem
     public int ExtensionId => _extensionId;
 
     // 원시 타입으로 최대 성능
+    /// <summary>
+    /// Size in bytes. Also 0 when the size was not collected — the Windows MFT provider reads it
+    /// only when <see cref="IndexingOptions.CollectFileMetadata"/> is set.
+    /// </summary>
     public readonly long Size;
     public readonly long CreatedTicks;
     public readonly long ModifiedTicks;
@@ -43,9 +47,9 @@ public readonly struct FastFileItem
         _extensionId = StringPool.InternExtension(extension);
 
         Size = size;
-        CreatedTicks = created.Kind == DateTimeKind.Utc ? created.Ticks : created.ToUniversalTime().Ticks;
-        ModifiedTicks = modified.Kind == DateTimeKind.Utc ? modified.Ticks : modified.ToUniversalTime().Ticks;
-        AccessedTicks = accessed.Kind == DateTimeKind.Utc ? accessed.Ticks : accessed.ToUniversalTime().Ticks;
+        CreatedTicks = ToUtcTicks(created);
+        ModifiedTicks = ToUtcTicks(modified);
+        AccessedTicks = ToUtcTicks(accessed);
         Attributes = attributes;
         DriveLetter = driveLetter;
         FileRecordNumber = fileRecordNumber ?? 0;
@@ -76,23 +80,48 @@ public readonly struct FastFileItem
         get => StringPool.Get(_extensionId);
     }
 
+    /// <summary>
+    /// Creation time in UTC, or <see cref="DateTime.MinValue"/> when it was not collected.
+    /// </summary>
     public DateTime CreatedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new DateTime(CreatedTicks, DateTimeKind.Utc);
     }
 
+    /// <summary>
+    /// Last write time in UTC, or <see cref="DateTime.MinValue"/> when it was not collected.
+    /// </summary>
+    /// <remarks>
+    /// The Windows MFT provider collects timestamps only when
+    /// <see cref="IndexingOptions.CollectFileMetadata"/> is set.
+    /// </remarks>
     public DateTime ModifiedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new DateTime(ModifiedTicks, DateTimeKind.Utc);
     }
 
+    /// <summary>
+    /// Last access time in UTC, or <see cref="DateTime.MinValue"/> when it was not collected.
+    /// </summary>
     public DateTime AccessedTime
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => new DateTime(AccessedTicks, DateTimeKind.Utc);
     }
+
+    /// <summary>
+    /// Converts a timestamp to UTC ticks, keeping <see cref="DateTime.MinValue"/> — "not
+    /// collected" — as itself.
+    /// </summary>
+    /// <remarks>
+    /// A local <see cref="DateTime.MinValue"/> would otherwise convert to a few hours past it
+    /// wherever the UTC offset is negative, and stop reading as unset.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long ToUtcTicks(DateTime value) =>
+        value.Ticks == 0 || value.Kind == DateTimeKind.Utc ? value.Ticks : value.ToUniversalTime().Ticks;
 
     // 비트 연산으로 최대 성능
     public bool IsDirectory

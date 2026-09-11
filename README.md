@@ -50,7 +50,7 @@ await engine.StartIndexingAsync(new IndexingOptions
     SpecificDirectories = [@"D:\Projects"],         // Windows
     // MountPoints = ["/home", "/opt"],             // Linux / macOS
     ExcludedPaths = ["node_modules", ".git", "bin", "obj"],
-    CollectFileSize = true
+    CollectFileMetadata = true   // sizes and timestamps on the Windows MFT path
 });
 
 while (engine.IsIndexing) await Task.Delay(500);

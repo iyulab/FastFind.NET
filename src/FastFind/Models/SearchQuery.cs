@@ -69,25 +69,41 @@ public class SearchQuery
     /// </summary>
     public long? MaxSize { get; set; }
 
-    /// <summary>
-    /// Minimum creation date (null for no limit)
-    /// </summary>
-    public DateTime? MinCreatedDate { get; set; }
+    // Date bounds are held in UTC because item timestamps are. Comparing DateTime values compares
+    // ticks and ignores Kind, so a local bound left as-is would be off by the UTC offset.
 
     /// <summary>
-    /// Maximum creation date (null for no limit)
+    /// Minimum creation date (null for no limit). Stored in UTC; see <see cref="MinModifiedDate"/>.
     /// </summary>
-    public DateTime? MaxCreatedDate { get; set; }
+    public DateTime? MinCreatedDate { get => _minCreatedDate; set => _minCreatedDate = ToUtc(value); }
+    private DateTime? _minCreatedDate;
 
     /// <summary>
-    /// Minimum modification date (null for no limit)
+    /// Maximum creation date (null for no limit). Stored in UTC; see <see cref="MinModifiedDate"/>.
     /// </summary>
-    public DateTime? MinModifiedDate { get; set; }
+    public DateTime? MaxCreatedDate { get => _maxCreatedDate; set => _maxCreatedDate = ToUtc(value); }
+    private DateTime? _maxCreatedDate;
 
     /// <summary>
-    /// Maximum modification date (null for no limit)
+    /// Minimum modification date (null for no limit).
     /// </summary>
-    public DateTime? MaxModifiedDate { get; set; }
+    /// <remarks>
+    /// Converted to UTC when set, so reading it back returns a <see cref="DateTimeKind.Utc"/>
+    /// value. A <see cref="DateTimeKind.Unspecified"/> value is taken as local time, as
+    /// <see cref="DateTime.ToUniversalTime"/> does. An item whose timestamp was not collected
+    /// satisfies no bound on it.
+    /// </remarks>
+    public DateTime? MinModifiedDate { get => _minModifiedDate; set => _minModifiedDate = ToUtc(value); }
+    private DateTime? _minModifiedDate;
+
+    /// <summary>
+    /// Maximum modification date (null for no limit). Stored in UTC; see <see cref="MinModifiedDate"/>.
+    /// </summary>
+    public DateTime? MaxModifiedDate { get => _maxModifiedDate; set => _maxModifiedDate = ToUtc(value); }
+    private DateTime? _maxModifiedDate;
+
+    private static DateTime? ToUtc(DateTime? value) =>
+        value is { Kind: not DateTimeKind.Utc } local ? local.ToUniversalTime() : value;
 
     /// <summary>
     /// Maximum number of results to return (null for no limit)

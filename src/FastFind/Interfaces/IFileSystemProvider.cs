@@ -30,6 +30,18 @@ public interface IFileSystemProvider : IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Whether items this provider enumerates under <paramref name="options"/> carry their real
+    /// size and timestamps.
+    /// </summary>
+    /// <remarks>
+    /// A provider whose enumeration source lacks metadata — and reads it only when
+    /// <see cref="IndexingOptions.CollectFileMetadata"/> asks — returns <c>false</c> without it,
+    /// so a search engine can refuse size and date bounds instead of evaluating them against
+    /// values that were never read. The default is <c>true</c>.
+    /// </remarks>
+    bool ProvidesFileMetadata(IndexingOptions options) => true;
+
+    /// <summary>
     /// Gets file information for a specific path
     /// </summary>
     /// <param name="filePath">Path to get information for</param>
