@@ -44,11 +44,56 @@ public class FastFileItemTests
             FileAttributes.Normal, 'C');
         
         // Assert
-        item.FullPathId.Should().NotBe(0, "FullPath should be interned with valid ID");
         item.NameId.Should().NotBe(0, "Name should be interned with valid ID");
         item.DirectoryId.Should().NotBe(0, "Directory should be interned with valid ID");
         item.ExtensionId.Should().NotBe(0, "Extension should be interned with valid ID");
     }
+
+    [Theory]
+    [InlineData(@"C:\Test\File.txt", "File.txt", @"C:\Test")]        // directory, \, name
+    [InlineData("/home/user/file.txt", "file.txt", "/home/user")]     // directory, /, name
+    [InlineData(@"C:\File.txt", "File.txt", @"C:\")]                 // directory ends in a separator
+    [InlineData("/file.txt", "file.txt", "/")]
+    [InlineData(@"C:\Test\Sub\", "Sub", @"C:\Test")]                  // not a composition: kept as given
+    [InlineData(@"C:\Test\File.txt", "Other.txt", @"C:\Elsewhere")]  // parts disagree: kept as given
+    [InlineData("", "", "")]
+    public void FullPath_Should_Read_Back_As_Given(string fullPath, string name, string directory)
+    {
+        var item = new FastFileItem(fullPath, name, directory, "", 0,
+            DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C');
+
+        // The pool folds '/' to '\' on Windows, and always has; elsewhere nothing is rewritten.
+        var expected = OperatingSystem.IsWindows() ? fullPath.Replace('/', '\\') : fullPath;
+        item.FullPath.Should().Be(expected);
+        item.MatchesPath(expected).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Items_With_The_Same_Path_Should_Be_Equal_However_It_Is_Stored()
+    {
+        // One composed from its parts, one kept whole because its parts do not compose to it.
+        var composed = new FastFileItem(@"C:\a\b.txt", "b.txt", @"C:\a", ".txt", 0,
+            DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C');
+        var whole = new FastFileItem(@"C:\a\b.txt", "x", @"C:\z", ".txt", 0,
+            DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C');
+        var different = new FastFileItem(@"C:\a\c.txt", "c.txt", @"C:\a", ".txt", 0,
+            DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C');
+
+        (composed == whole).Should().BeTrue();
+        composed.GetHashCode().Should().Be(whole.GetHashCode());
+        (composed == different).Should().BeFalse();
+        composed.Equals(different).Should().BeFalse();
+    }
+
+#pragma warning disable CS0618 // The obsolete member's contract is what is under test.
+    [Fact]
+    public void The_Obsolete_FullPathId_Should_Still_Name_The_Full_Path()
+    {
+        var item = CreateTestFastFileItem("Legacy.txt");
+
+        StringPool.Get(item.FullPathId).Should().Be(item.FullPath);
+    }
+#pragma warning restore CS0618
     
     [Theory]
     [InlineData("test", true)]   // Case-insensitive matching

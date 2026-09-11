@@ -125,6 +125,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`FastFileItem` no longer keeps its full path; it rebuilds it from the directory and the name.**
+  The full path is unique per file, so interning it deduplicated nothing, and it was the largest
+  string an item held. When the path is exactly directory, separator and name — as every provider
+  in this library produces it — only those two are kept and `FullPath` is composed on read; any
+  other path is still interned, so `FullPath` reads back as it was stored in every case. Measured,
+  one process per measurement, on top of the index changes below: the Windows in-memory index
+  **676 → 388 bytes an entry at 100,000 and 683 → 385 at 300,000**; the Unix engine, end to end on
+  a real tree, **626 → 341 at 101,010 and 642 → 348 at 303,030**. Consequences:
+  - Each read of `FullPath` allocates. Read it once into a local where a loop uses it repeatedly.
+    Matching a query's text against the full path does not allocate — the path is composed on the
+    stack — and costs about 15% more on a full scan that matches text against every full path;
+    a name-only scan is unaffected.
+  - `FastFileItem.FullPathId` is `[Obsolete]`. It still returns an id `StringPool.Get` resolves to
+    the full path, interning the path on demand to do so.
+  - Equality and the hash code still follow the full path, ordinally.
 - **The Windows in-memory index holds a quarter of the memory per entry, and scans about four times
   faster.** It stored each entry as a `FileItem` object keyed by a lower-cased copy of its path, kept
   a second lower-cased copy in its directory and extension maps, and built a path trie with a node

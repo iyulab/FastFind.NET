@@ -208,14 +208,22 @@ public static class SearchQueryEvaluator
         var searchText = query.SearchText;
         if (string.IsNullOrEmpty(searchText)) return true;
 
-        var target = query.SearchFileNameOnly ? item.Name : item.FullPath;
+        if (query.SearchFileNameOnly) return MatchesText(item.Name, searchText, query.CaseSensitive, textMatcher);
 
+        // The full path is composed on the stack rather than built as a string: this runs once per
+        // candidate, and a string per candidate is an allocation per indexed entry per search.
+        return item.WithFullPath((searchText, query.CaseSensitive, textMatcher),
+            static (path, state) => MatchesText(path, state.searchText, state.CaseSensitive, state.textMatcher));
+    }
+
+    private static bool MatchesText(ReadOnlySpan<char> target, string searchText, bool caseSensitive, Regex? textMatcher)
+    {
         if (textMatcher is not null) return textMatcher.IsMatch(target);
 
-        if (query.CaseSensitive) return target.Contains(searchText, StringComparison.Ordinal);
+        if (caseSensitive) return target.Contains(searchText.AsSpan(), StringComparison.Ordinal);
 
         // SIMD-accelerated case-insensitive substring match.
-        return SIMDStringMatcher.ContainsVectorized(target.AsSpan(), searchText.AsSpan());
+        return SIMDStringMatcher.ContainsVectorized(target, searchText.AsSpan());
     }
 
     private static bool HasWildcard(string? text) =>
