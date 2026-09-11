@@ -43,6 +43,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Monitoring can be stopped and started again. The monitor was shared by the provider and could
     not restart: its cancellation source stayed cancelled and its channel stayed completed.
   - Version 3 journal records are skipped rather than read at version 2 offsets.
+- **The Windows engine cut every indexing run short at 30 seconds, and said nothing.** It bounded
+  the whole run with `WindowsSearchEngineOptions.FileOperationTimeout`, whose optimised default was
+  30 or 60 seconds depending on memory — read from `GC.GetTotalMemory`, the managed heap in use,
+  so 30 on every machine. A run that hit it raised neither `Completed` nor `Failed`. Measured on a
+  whole-drive MFT index: **726,000 of 1,618,541 entries at 30.2 s**, then silence; the index looked
+  finished. Indexing now has no time limit unless `IndexingTimeout` sets one, and a run cut short
+  by it raises `Failed` naming the option, keeping what it indexed. The same whole-drive run now
+  completes (67.6 s). The memory reading behind the other optimised defaults (concurrency, cache
+  sizes) is the machine's available memory now, as intended.
 - **A location or scope written with forward slashes did not match on Windows.** `C:/data` is a
   valid Windows path, but it was compared as written against stored backslash paths. On the MFT
   path a location that matched nothing left its drive unfiltered, so indexing `C:/data` indexed all
@@ -90,6 +99,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `WindowsSearchEngineOptions.FileOperationTimeout` is `[Obsolete]` in favour of
+  `IndexingTimeout`, which says what it bounds and defaults to no limit. Setting the old name still
+  sets the limit.
 - `UsnChangeRecord` carries the `DriveLetter` of the volume that logged it. A file reference means
   nothing without its volume. The existing constructor remains and leaves it `'\0'`.
 - `MftReader.GetFullPath` and `MftReader.BuildPathCache` are `[Obsolete]`. `GetFullPath` returns the

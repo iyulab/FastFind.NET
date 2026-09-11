@@ -149,9 +149,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         if (_fileChangeProcessingTask == null || _fileChangeProcessingTask.IsCompleted)
             _fileChangeProcessingTask = ProcessFileChangesAsync(_engineLifetimeCts.Token);
 
-        // Indexing gets a timeout-bound CTS; monitoring gets a separate CTS with no timeout
-        // so that indexing completion or timeout does not cancel monitoring.
-        var indexingCts = new CancellationTokenSource(_options.FileOperationTimeout);
+        // Indexing gets its own CTS, bounded by IndexingTimeout when one is set; monitoring gets a
+        // separate one so that indexing completing or timing out does not cancel monitoring.
+        var indexingCts = _options.IndexingTimeout is { } limit
+            ? new CancellationTokenSource(limit)
+            : new CancellationTokenSource();
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(runCts.Token, indexingCts.Token);
         var monitoringCts = CancellationTokenSource.CreateLinkedTokenSource(runCts.Token);
 
@@ -159,7 +161,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         {
             try
             {
-                await IndexingWorkerAsync(options, combinedCts.Token).ConfigureAwait(false);
+                await IndexingWorkerAsync(options, combinedCts.Token, indexingCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -623,7 +625,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     /// <summary>
     /// .NET 10: Enhanced indexing worker with advanced parallel processing
     /// </summary>
-    private async Task IndexingWorkerAsync(IndexingOptions options, CancellationToken cancellationToken)
+    private async Task IndexingWorkerAsync(IndexingOptions options, CancellationToken cancellationToken, CancellationToken timeoutToken)
     {
         var stopwatch = Stopwatch.StartNew();
         var processedFiles = 0L;
@@ -709,6 +711,25 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                     string.Join(", ", locations), processedFiles, processedFiles, stopwatch.Elapsed,
                     "Completed", IndexingPhase.Completed));
             }
+        }
+        catch (OperationCanceledException) when (timeoutToken.IsCancellationRequested)
+        {
+            // Cut short by IndexingTimeout, not by the caller: the index is incomplete and nothing
+            // else would say so. Items indexed so far remain searchable.
+            if (batch.Count > 0)
+            {
+                await _searchIndex.AddBatchAsync(batch.Select(f => f.ToFastFileItem()), CancellationToken.None).ConfigureAwait(false);
+                Interlocked.Exchange(ref _totalIndexedFiles, processedFiles);
+            }
+
+            var message =
+                $"Indexing timed out after {_options.IndexingTimeout} with {processedFiles} items indexed; " +
+                "the index is incomplete. Raise or remove WindowsSearchEngineOptions.IndexingTimeout.";
+            _logger.LogWarning("{Message}", message);
+
+            IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
+                "Timeout", processedFiles, processedFiles, stopwatch.Elapsed,
+                message, IndexingPhase.Failed));
         }
         catch (OperationCanceledException)
         {

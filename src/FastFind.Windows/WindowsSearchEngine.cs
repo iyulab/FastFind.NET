@@ -208,7 +208,10 @@ public static class WindowsSearchEngine
     {
         var capabilities = GetNtfsCapabilities();
         var processorCount = Environment.ProcessorCount;
-        var totalMemoryGB = GC.GetTotalMemory(false) / (1024.0 * 1024.0 * 1024.0);
+        // Memory the GC may use, which is the machine's (or the container's) memory. It read
+        // GC.GetTotalMemory — the managed heap in use, near zero at startup — so every branch below
+        // took its smallest-system value on every machine.
+        var totalMemoryGB = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024.0 * 1024.0);
 
         return new WindowsSearchEngineOptions
         {
@@ -237,7 +240,6 @@ public static class WindowsSearchEngine
             EnableRealtimeMonitoring = true,
             EnableIndexCompression = true,
             UseVolumeSnapshotService = capabilities.SupportsAdvancedFeatures,
-            FileOperationTimeout = TimeSpan.FromSeconds(totalMemoryGB > 8 ? 60 : 30),
 
             // .NET 10 specific optimizations
             UseAdvancedStringOptimizations = true,
@@ -468,9 +470,32 @@ public class WindowsSearchEngineOptions
     public int MetadataCacheSize { get; set; } = 10000;
 
     /// <summary>
-    /// Timeout for file operations
+    /// Longest an indexing run may take before it is cut short, or <c>null</c> for no limit
+    /// (the default).
     /// </summary>
-    public TimeSpan FileOperationTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    /// <remarks>
+    /// A run that hits the limit stops where it is and raises
+    /// <see cref="IndexingPhase.Failed"/> saying so; what was indexed before it stays searchable.
+    /// To stop a run on demand instead, cancel the token passed to
+    /// <see cref="ISearchEngine.StartIndexingAsync"/> or call <see cref="ISearchEngine.StopIndexingAsync"/>.
+    /// </remarks>
+    public TimeSpan? IndexingTimeout { get; set; }
+
+    /// <summary>
+    /// Former name of <see cref="IndexingTimeout"/>. Despite the name, it bounded the whole
+    /// indexing run, not a file operation.
+    /// </summary>
+    /// <remarks>
+    /// It defaulted to 30 seconds, which cut a whole-drive index short with no event to say so.
+    /// Setting it sets <see cref="IndexingTimeout"/>; <see cref="Timeout.InfiniteTimeSpan"/> means
+    /// no limit.
+    /// </remarks>
+    [Obsolete("It bounded the whole indexing run, not a file operation. Use IndexingTimeout, which defaults to no limit.")]
+    public TimeSpan FileOperationTimeout
+    {
+        get => IndexingTimeout ?? Timeout.InfiniteTimeSpan;
+        set => IndexingTimeout = value == Timeout.InfiniteTimeSpan ? null : value;
+    }
 
     // .NET 10 specific optimizations
 
@@ -525,8 +550,8 @@ public class WindowsSearchEngineOptions
         if (MetadataCacheSize < 1000)
             errors.Add("MetadataCacheSize must be at least 1000");
 
-        if (FileOperationTimeout < TimeSpan.FromSeconds(5))
-            errors.Add("FileOperationTimeout must be at least 5 seconds");
+        if (IndexingTimeout is { } timeout && timeout <= TimeSpan.Zero)
+            errors.Add("IndexingTimeout must be positive, or null for no limit");
 
         return (errors.Count == 0, errors.Count > 0 ? string.Join("; ", errors) : null);
     }
