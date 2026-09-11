@@ -8,6 +8,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The Windows MFT provider gave many files a wrong path, or dropped them.** It placed files in
+  batches while it was still discovering directories, and a file whose parent directory is
+  enumerated later — journal enumeration runs in file-reference order, which does not put a
+  directory before its contents — had its path cut short and rooted at the drive:
+  `D:\src\App\Models\Item.cs` was indexed as `D:\Item.cs`. Files sharing a name then collided on
+  that one path. On a whole-drive index of 1.6 million entries, **36% of a sample pointed at paths
+  that do not exist**; an index of one folder silently lost the same files, since their wrong paths
+  fell outside it. Paths are now built only from a parent chain that reaches the volume root; an
+  entry whose chain is not yet complete waits until enumeration ends. The same sample now finds
+  0.04% missing — files deleted while the index was built. An entry beneath a directory the
+  enumeration never returns, such as the `$`-prefixed metadata directories, is left out rather
+  than given a guessed path.
+
+  The directory-path cache was also shared, unsynchronised, across drives enumerated in parallel,
+  and every NTFS volume's root is record 5, so a multi-drive index could place one drive's
+  directories under another. Each volume now resolves with its own state.
 - **On the Windows MFT path, every item's timestamps were 1601-01-01, so date filters matched
   nothing — silently.** That provider enumerates the volume with `FSCTL_ENUM_USN_DATA` and read the
   record's `TimeStamp` as the file's creation, modification and access time. The specification

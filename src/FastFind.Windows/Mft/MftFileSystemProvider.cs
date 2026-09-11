@@ -23,11 +23,8 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     private readonly ILogger<MftFileSystemProvider>? _logger;
     private readonly MftReader _mftReader;
     private readonly UsnJournalMonitor _usnMonitor;
-    private readonly Dictionary<ulong, string> _directoryPathCache;
     private bool _disposed;
 
-    // Performance constants
-    private const int BATCH_SIZE = 10000;
     private const int CHANNEL_CAPACITY = 100000;
 
     /// <summary>
@@ -40,7 +37,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         _logger = logger;
         _mftReader = new MftReader(logger as ILogger<MftReader>);
         _usnMonitor = new UsnJournalMonitor(logger as ILogger<UsnJournalMonitor>);
-        _directoryPathCache = new Dictionary<ulong, string>();
     }
 
     /// <inheritdoc/>
@@ -134,67 +130,11 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             .Where(l => l.StartsWith(driveRoot, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        // First pass: collect directory records for path building
-        var directoryRecords = new Dictionary<ulong, MftFileRecord>();
-        var fileRecords = new List<MftFileRecord>(100000);
+        var unresolved = new StrongBox<int>();
+        var records = _mftReader.EnumerateFilesAsync(driveLetter, cancellationToken);
 
-        // Initialize root directory
-        _directoryPathCache[5] = driveRoot; // Root directory is always record 5
-
-        await foreach (var record in _mftReader.EnumerateFilesAsync(driveLetter, cancellationToken))
+        await foreach (var (record, fullPath) in MftPathResolver.ResolveAsync(records, driveRoot, unresolved, cancellationToken))
         {
-            if (record.IsDirectory)
-            {
-                directoryRecords[record.GetRecordNumber()] = record;
-            }
-            else
-            {
-                fileRecords.Add(record);
-            }
-
-            // Process in batches for memory efficiency
-            if (fileRecords.Count >= BATCH_SIZE)
-            {
-                await ProcessAndWriteRecordsAsync(
-                    driveLetter, fileRecords, directoryRecords,
-                    locationFilters, options, writer, cancellationToken);
-                fileRecords.Clear();
-            }
-        }
-
-        // Process remaining records
-        if (fileRecords.Count > 0)
-        {
-            await ProcessAndWriteRecordsAsync(
-                driveLetter, fileRecords, directoryRecords,
-                locationFilters, options, writer, cancellationToken);
-        }
-
-        // Also yield directories (always included for complete enumeration)
-        await ProcessAndWriteDirectoriesAsync(
-            driveLetter, directoryRecords.Values,
-            locationFilters, options, writer, cancellationToken);
-    }
-
-    private async Task ProcessAndWriteRecordsAsync(
-        char driveLetter,
-        IList<MftFileRecord> records,
-        Dictionary<ulong, MftFileRecord> directories,
-        string[] locationFilters,
-        IndexingOptions options,
-        ChannelWriter<FileItem> writer,
-        CancellationToken cancellationToken)
-    {
-        foreach (var record in records)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-
-            var fullPath = BuildFullPath(driveLetter, record, directories);
-            if (fullPath == null)
-                continue;
-
-            // Check if path matches any of the location filters
             if (!IsPathInLocations(fullPath, locationFilters))
                 continue;
 
@@ -204,91 +144,13 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
                 await writer.WriteAsync(fileItem, cancellationToken);
             }
         }
-    }
 
-    private async Task ProcessAndWriteDirectoriesAsync(
-        char driveLetter,
-        IEnumerable<MftFileRecord> directories,
-        string[] locationFilters,
-        IndexingOptions options,
-        ChannelWriter<FileItem> writer,
-        CancellationToken cancellationToken)
-    {
-        var allDirs = directories.ToDictionary(d => d.GetRecordNumber());
-
-        foreach (var record in directories)
+        if (unresolved.Value > 0)
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-
-            var fullPath = BuildFullPath(driveLetter, record, allDirs);
-            if (fullPath == null)
-                continue;
-
-            // Check if path matches any of the location filters
-            if (!IsPathInLocations(fullPath, locationFilters))
-                continue;
-
-            var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileMetadata);
-            if (ShouldIncludeFile(fileItem, options))
-            {
-                await writer.WriteAsync(fileItem, cancellationToken);
-            }
+            _logger?.LogDebug(
+                "Drive {Drive}: {Count} entries skipped because an ancestor directory was not enumerated",
+                driveLetter, unresolved.Value);
         }
-    }
-
-    private string? BuildFullPath(char driveLetter, MftFileRecord record, Dictionary<ulong, MftFileRecord> directories)
-    {
-        var recordNumber = record.GetRecordNumber();
-
-        // Check cache first
-        if (_directoryPathCache.TryGetValue(recordNumber, out var cachedPath))
-            return cachedPath;
-
-        // Build path from parent chain
-        var pathParts = new Stack<string>();
-        pathParts.Push(record.FileName);
-
-        var currentParent = MftFileRecord.ExtractRecordNumber(record.ParentFileReferenceNumber);
-        var visited = new HashSet<ulong> { recordNumber };
-
-        while (currentParent != 0 && !_directoryPathCache.ContainsKey(currentParent))
-        {
-            if (!directories.TryGetValue(currentParent, out var parentRecord))
-                break;
-
-            if (visited.Contains(currentParent))
-                break; // Circular reference protection
-
-            visited.Add(currentParent);
-            pathParts.Push(parentRecord.FileName);
-            currentParent = MftFileRecord.ExtractRecordNumber(parentRecord.ParentFileReferenceNumber);
-        }
-
-        // Build the path
-        string basePath;
-        if (_directoryPathCache.TryGetValue(currentParent, out var parentPath))
-        {
-            basePath = parentPath;
-        }
-        else
-        {
-            basePath = $"{driveLetter}:\\";
-        }
-
-        var fullPath = basePath;
-        while (pathParts.Count > 0)
-        {
-            fullPath = Path.Combine(fullPath, pathParts.Pop());
-        }
-
-        // Cache if directory
-        if (record.IsDirectory)
-        {
-            _directoryPathCache[recordNumber] = fullPath;
-        }
-
-        return fullPath;
     }
 
     /// <summary>
@@ -698,7 +560,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         {
             _mftReader.Dispose();
             _usnMonitor.Dispose();
-            _directoryPathCache.Clear();
             _disposed = true;
         }
     }
@@ -709,7 +570,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         {
             _mftReader.Dispose();
             await _usnMonitor.DisposeAsync();
-            _directoryPathCache.Clear();
             _disposed = true;
         }
     }
