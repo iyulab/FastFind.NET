@@ -291,14 +291,21 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         return fullPath;
     }
 
-    private static bool IsPathInLocations(string path, string[] locationFilters)
+    /// <summary>
+    /// Whether a path is one of the locations being indexed or lies beneath one.
+    /// </summary>
+    /// <remarks>
+    /// A location must match at a separator: <c>C:\src\App</c> covers <c>C:\src\App\x.cs</c> but
+    /// not <c>C:\src\App.Tests\x.cs</c>, which a bare prefix test admitted.
+    /// </remarks>
+    internal static bool IsPathInLocations(string path, string[] locationFilters)
     {
         if (locationFilters.Length == 0)
             return true;
 
         foreach (var location in locationFilters)
         {
-            if (path.StartsWith(location, StringComparison.OrdinalIgnoreCase))
+            if (SearchQueryEvaluator.IsUnder(path, location, includeSubdirectories: true))
                 return true;
         }
 

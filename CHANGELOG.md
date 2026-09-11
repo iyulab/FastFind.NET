@@ -25,6 +25,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   times. It now returns them unset: the compact form does not keep them.
 - `ISearchEngine.RefreshIndexAsync` with explicit locations dropped `MaxDepth`, `FollowSymlinks` and
   the metadata setting from the options it re-indexed with.
+- **The MFT provider's location scoping matched by bare string prefix.** Indexing `C:\src\App`
+  also indexed `C:\src\App.Tests` and `C:\src\Application`, and a location given with a trailing
+  separator excluded its own directory entry. Locations now match at a path separator, through the
+  same check the query evaluator uses.
 - The USN record parser accepted version 3 records but read them at version 2 offsets, which do not
   apply to them. It now rejects them. Enumeration requests version 2 records, so none were seen in
   practice.
