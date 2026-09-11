@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FastFind\FastFind.csproj" />
     <ProjectReference Include="..\FastFind.Windows\FastFind.Windows.csproj" Condition="'$(OS)' == 'Windows_NT'" />
+    <ProjectReference Include="..\FastFind.Unix\FastFind.Unix.csproj" Condition="'$(OS)' == 'Windows_NT'" />
   </ItemGroup>
 
 </Project>

@@ -123,15 +123,20 @@ public class SearchOptimizationTests : IAsyncLifetime
         }
     }
 
+    /// <remarks>
+    /// Warmed up first: timed cold, this measured the first search's JIT as much as the index, and
+    /// swung between ~40 ms and over 500 ms on the same build.
+    /// </remarks>
     [PerformanceTestFact]
     [Trait("Category", "Performance")]
-    public async Task SearchWithExtensionFilter_UsesExtensionIndex()
+    public async Task SearchWithExtensionFilter_CompletesQuickly()
     {
         // Arrange
         var query = new SearchQuery
         {
             ExtensionFilter = ".cs"
         };
+        await foreach (var _ in _searchIndex.SearchAsync(query)) { }
 
         // Act
         var sw = Stopwatch.StartNew();
@@ -146,9 +151,9 @@ public class SearchOptimizationTests : IAsyncLifetime
         _output.WriteLine($"Extension search time: {sw.ElapsedMilliseconds}ms");
         _output.WriteLine($"Results: {results.Count:N0} .cs files");
 
-        // Extension index lookup should be fast (relaxed for CI/CD and parallel test environments)
+        // A scan of 10,000 entries with the evaluator (relaxed for parallel test environments)
         sw.ElapsedMilliseconds.Should().BeLessThan(500,
-            "Extension-based search should complete quickly with dedicated index");
+            "an extension filter over 10,000 in-memory entries should complete quickly");
     }
 
     [Fact]

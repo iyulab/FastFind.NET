@@ -11,14 +11,41 @@ namespace FastFind.Models;
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public readonly struct FastFileItem
 {
-    // 인터닝된 문자열 ID로 메모리 절약 - 특화된 인터닝 사용
+    /// <summary>
+    /// How <see cref="FullPath"/> is produced: a <see cref="StringPool"/> id when it is at least
+    /// zero, otherwise one of the <c>Derived…</c> values below.
+    /// </summary>
+    /// <remarks>
+    /// The full path is unique per file, so interning it deduplicates nothing, and it is the
+    /// largest string an item has. Almost always it is exactly the directory, a separator and the
+    /// name — each of which is shared or needed anyway — so it is rebuilt from them on read instead
+    /// of being kept. Only a path that is not that composition is interned, which keeps
+    /// <see cref="FullPath"/> verbatim in every case.
+    /// </remarks>
     private readonly int _fullPathId;
     private readonly int _nameId;
     private readonly int _directoryPathId;
     private readonly int _extensionId;
 
-    // Public ID 접근자들
-    public int FullPathId => _fullPathId;
+    /// <summary>Directory, <c>\</c>, name.</summary>
+    private const int DerivedWithBackslash = -1;
+
+    /// <summary>Directory, <c>/</c>, name.</summary>
+    private const int DerivedWithSlash = -2;
+
+    /// <summary>Directory then name — the directory already ends in a separator, or is empty.</summary>
+    private const int DerivedByConcatenation = -3;
+
+    /// <summary>
+    /// A <see cref="StringPool"/> id for <see cref="FullPath"/>.
+    /// </summary>
+    /// <remarks>
+    /// The full path is no longer interned when it can be rebuilt from the directory and name, so
+    /// reading this interns it on demand — putting back, for this item, the memory the change saves.
+    /// </remarks>
+    [Obsolete("The full path is rebuilt from DirectoryId and NameId rather than interned. Reading this interns it on demand; use FullPath, or DirectoryId and NameId.")]
+    public int FullPathId => _fullPathId >= 0 ? _fullPathId : StringPool.InternPath(FullPath);
+
     public int NameId => _nameId;
     public int DirectoryId => _directoryPathId;
     public int ExtensionId => _extensionId;
@@ -40,11 +67,10 @@ public readonly struct FastFileItem
                        long size, DateTime created, DateTime modified, DateTime accessed,
                        FileAttributes attributes, char driveLetter, ulong? fileRecordNumber = null)
     {
-        // 특화된 인터닝으로 중복 제거율 극대화
-        _fullPathId = StringPool.InternPath(fullPath);
         _nameId = StringPool.InternName(name);
         _directoryPathId = StringPool.InternPath(directoryPath);
         _extensionId = StringPool.InternExtension(extension);
+        _fullPathId = HowToBuild(fullPath, StringPool.Get(_directoryPathId), StringPool.Get(_nameId));
 
         Size = size;
         CreatedTicks = ToUtcTicks(created);
@@ -55,11 +81,112 @@ public readonly struct FastFileItem
         FileRecordNumber = fileRecordNumber ?? 0;
     }
 
-    // 고성능 속성 접근자 - 인라인 최적화
-    public string FullPath
+    /// <summary>
+    /// The item's path, exactly as it was given.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt from <see cref="DirectoryPath"/> and <see cref="Name"/> on each read, so each read
+    /// allocates. Read it once into a local in a loop that uses it more than once.
+    /// </remarks>
+    public string FullPath => _fullPathId >= 0
+        ? StringPool.Get(_fullPathId)
+        : string.Create(FullPathLength, this, static (destination, item) => item.CopyFullPathTo(destination));
+
+    /// <summary>Length of <see cref="FullPath"/>, without building it.</summary>
+    internal int FullPathLength => _fullPathId switch
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StringPool.Get(_fullPathId);
+        >= 0 => StringPool.Get(_fullPathId).Length,
+        DerivedByConcatenation => DirectoryPath.Length + Name.Length,
+        _ => DirectoryPath.Length + 1 + Name.Length,
+    };
+
+    /// <summary>
+    /// Writes <see cref="FullPath"/> into <paramref name="destination"/>, which must hold
+    /// <see cref="FullPathLength"/> characters, without allocating.
+    /// </summary>
+    internal void CopyFullPathTo(Span<char> destination)
+    {
+        if (_fullPathId >= 0)
+        {
+            StringPool.Get(_fullPathId).AsSpan().CopyTo(destination);
+            return;
+        }
+
+        var directory = DirectoryPath;
+        var name = Name;
+        directory.AsSpan().CopyTo(destination);
+        var at = directory.Length;
+        if (_fullPathId != DerivedByConcatenation)
+        {
+            destination[at++] = _fullPathId == DerivedWithBackslash ? '\\' : '/';
+        }
+
+        name.AsSpan().CopyTo(destination[at..]);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="use"/> over <see cref="FullPath"/>'s characters without allocating a
+    /// string for them.
+    /// </summary>
+    internal TResult WithFullPath<TState, TResult>(TState state, FullPathFunc<TState, TResult> use)
+        where TState : allows ref struct
+    {
+        if (_fullPathId >= 0) return use(StringPool.Get(_fullPathId), state);
+
+        var length = FullPathLength;
+        char[]? rented = null;
+        var buffer = length <= 512
+            ? stackalloc char[512]
+            : (rented = System.Buffers.ArrayPool<char>.Shared.Rent(length));
+        try
+        {
+            var path = buffer[..length];
+            CopyFullPathTo(path);
+            return use(path, state);
+        }
+        finally
+        {
+            if (rented is not null) System.Buffers.ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    internal delegate TResult FullPathFunc<TState, out TResult>(ReadOnlySpan<char> fullPath, TState state)
+        where TState : allows ref struct;
+
+    /// <summary>
+    /// The <see cref="_fullPathId"/> for a path: a <c>Derived…</c> value when the path is exactly its
+    /// directory and name composed, otherwise the interned path.
+    /// </summary>
+    /// <param name="fullPath">The path as given.</param>
+    /// <param name="directoryPath">The directory as the pool stores it.</param>
+    /// <param name="name">The name as the pool stores it.</param>
+    /// <remarks>
+    /// Compared against the pooled parts, and with separators folded the way the pool folds a path
+    /// on Windows, so a rebuilt path reads back exactly as an interned one would have.
+    /// </remarks>
+    private static int HowToBuild(string fullPath, string directoryPath, string name)
+    {
+        var stored = OperatingSystem.IsWindows() && fullPath.Contains('/') ? fullPath.Replace('/', '\\') : fullPath;
+        var path = stored.AsSpan();
+        if (path.StartsWith(directoryPath, StringComparison.Ordinal)
+            && path.EndsWith(name, StringComparison.Ordinal))
+        {
+            if (path.Length == directoryPath.Length + name.Length)
+            {
+                return DerivedByConcatenation;
+            }
+
+            if (path.Length == directoryPath.Length + 1 + name.Length)
+            {
+                switch (path[directoryPath.Length])
+                {
+                    case '\\': return DerivedWithBackslash;
+                    case '/': return DerivedWithSlash;
+                }
+            }
+        }
+
+        return StringPool.InternPath(fullPath);
     }
 
     public string Name
@@ -192,16 +319,14 @@ public readonly struct FastFileItem
         return SIMDStringMatcher.ContainsVectorized(Name.AsSpan(), searchTerm);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MatchesPath(string searchTerm)
     {
-        return SIMDStringMatcher.ContainsVectorized(FullPath.AsSpan(), searchTerm.AsSpan());
+        return WithFullPath(searchTerm, static (path, term) => SIMDStringMatcher.ContainsVectorized(path, term.AsSpan()));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MatchesPath(ReadOnlySpan<char> searchTerm)
     {
-        return SIMDStringMatcher.ContainsVectorized(FullPath.AsSpan(), searchTerm);
+        return WithFullPath(searchTerm, static (path, term) => SIMDStringMatcher.ContainsVectorized(path, term));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -295,26 +420,32 @@ public readonly struct FastFileItem
         return CreatedTicks >= startDate.Ticks && CreatedTicks <= endDate.Ticks;
     }
 
-    // 고성능 비교 연산자들
-    public override bool Equals(object? obj)
-    {
-        return obj is FastFileItem other && _fullPathId == other._fullPathId;
-    }
+    /// <summary>
+    /// Two items are equal when their <see cref="FullPath"/>s are, ordinally — the same identity the
+    /// full-path intern id used to give.
+    /// </summary>
+    public override bool Equals(object? obj) => obj is FastFileItem other && this == other;
 
-    public override int GetHashCode()
-    {
-        return _fullPathId; // ID 기반 해시는 매우 빠름
-    }
+    public override int GetHashCode() =>
+        WithFullPath(0, static (path, _) => string.GetHashCode(path, StringComparison.Ordinal));
 
     public static bool operator ==(FastFileItem left, FastFileItem right)
     {
-        return left._fullPathId == right._fullPathId;
+        // Same composition from the same interned parts is the same path; ids are ordinal.
+        if (left._fullPathId == right._fullPathId
+            && (left._fullPathId >= 0
+                || (left._directoryPathId == right._directoryPathId && left._nameId == right._nameId)))
+        {
+            return true;
+        }
+
+        if (left.FullPathLength != right.FullPathLength) return false;
+
+        return left.WithFullPath(right, static (path, other) =>
+            other.WithFullPath(path, static (otherPath, first) => first.SequenceEqual(otherPath)));
     }
 
-    public static bool operator !=(FastFileItem left, FastFileItem right)
-    {
-        return left._fullPathId != right._fullPathId;
-    }
+    public static bool operator !=(FastFileItem left, FastFileItem right) => !(left == right);
 
     // 기존 FileItem과의 호환성을 위한 변환
     public FileItem ToFileItem()

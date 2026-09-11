@@ -4,8 +4,8 @@ using FastFind.Models;
 namespace FastFind.Benchmarks.Infrastructure;
 
 /// <summary>
-/// Measures how much managed heap a corpus of indexed items retains, with and without the string
-/// interning <see cref="FastFileItem"/> performs.
+/// Measures how much managed heap a corpus retains: as bare strings, as <see cref="FastFileItem"/>s,
+/// and inside each in-memory index.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,18 +28,18 @@ namespace FastFind.Benchmarks.Infrastructure;
 /// dotnet run -c Release --project src/FastFind.Benchmarks -- --memory-retention
 /// </code>
 /// <para>
-/// <b>What it compares, and what that leaves out.</b> One side holds four strings per item directly;
-/// the other holds a <see cref="FastFileItem"/> per item, which stores interning ids and puts the
-/// strings in the pool. That is the choice a consumer actually faces, but the two sides do not hold
-/// the same struct: <see cref="FastFileItem"/> is roughly twice the width of four bare references, so
-/// some of the difference is the item, not the interning. Read the result as "what does this
-/// representation cost", not as "what does interning alone cost".
+/// <b>What the first table compares.</b> One side holds four strings per item directly; the other
+/// holds a <see cref="FastFileItem"/> per item, which interns the directory, name and extension and
+/// composes the full path from them on read. The two sides do not hold the same struct, so read the
+/// result as "what does this representation cost", not as "what does interning alone cost". Before
+/// the item stopped keeping its full path, interning measured here as a net cost of 13–17%; the
+/// earlier, never-committed figures recorded it as a 2–5% saving, and the two were never reconciled.
 /// </para>
 /// <para>
-/// <b>It does not reproduce the earlier figures</b>, which recorded interning as a small saving
-/// (480.0 → 454.3 B/item at 100,000). Here it is a cost at both corpus sizes and both corpus shapes.
-/// The earlier harness was never committed — that is precisely why this one exists — so the two
-/// cannot be diffed, and neither number should be published until they are reconciled.
+/// <b>The second table is the one that describes an engine.</b> An index adds its own keys and
+/// structure on top of the items, which the first table cannot show — the Windows index once held
+/// 2,760 bytes an entry while the bare items took 600. Each in-memory index is filled with the same
+/// corpus in batches, as the engines fill them.
 /// </para>
 /// </remarks>
 public static class MemoryRetentionMeasurement
@@ -65,7 +65,7 @@ public static class MemoryRetentionMeasurement
     {
         if (args.Length > 0 && args[0] == ChildSwitch)
         {
-            RunChild(int.Parse(args[1]), args[2], int.Parse(args[3]));
+            RunChild(int.Parse(args[1]), args[2], int.Parse(args[3])).GetAwaiter().GetResult();
             return true;
         }
 
@@ -117,18 +117,48 @@ public static class MemoryRetentionMeasurement
         }
 
         Console.WriteLine();
-        Console.WriteLine("A negative saving is not a bug in the measurement. Interning stores each");
-        Console.WriteLine("distinct string once plus a dictionary entry and an array slot; when the");
-        Console.WriteLine("strings are mostly distinct, that bookkeeping costs more than the sharing");
-        Console.WriteLine("saves. The full path is unique per file and is the largest of the four");
-        Console.WriteLine("strings an item holds, so it can never be deduplicated at all.");
+        Console.WriteLine("The raw side holds four strings per item, the full path among them. A");
+        Console.WriteLine("FastFileItem keeps the directory and name interned and composes the full");
+        Console.WriteLine("path from them on read, since a path unique per file cannot be deduplicated.");
+        Console.WriteLine("The two sides do not hold the same struct, so part of any difference is");
+        Console.WriteLine("FastFileItem rather than interning.");
         Console.WriteLine();
-        Console.WriteLine("Two caveats before quoting any of this. The two sides do not hold the same");
-        Console.WriteLine("struct, so part of the difference is FastFileItem rather than interning.");
-        Console.WriteLine("And these numbers do not reproduce the earlier measurement that recorded");
-        Console.WriteLine("interning as a small saving; that harness was never committed, so the two");
-        Console.WriteLine("cannot be compared. Reconcile them before publishing either.");
+
+        Console.WriteLine("Managed heap retained per entry by the in-memory indexes");
+        Console.WriteLine("-------------------------------------------------------");
+        Console.WriteLine();
+        Console.WriteLine("What an engine actually holds. An array of items says nothing about this:");
+        Console.WriteLine("an index adds its own keys and structure, and once measured at 2,760 bytes an");
+        Console.WriteLine("entry against 600 for the bare array.");
+        Console.WriteLine();
+        Console.WriteLine("| index                     | files/dir | corpus  | per entry |");
+        Console.WriteLine("|---------------------------|-----------|---------|-----------|");
+
+        foreach (var (variant, label) in IndexVariants)
+        {
+            foreach (var filesPerDirectory in FilesPerDirectory)
+            {
+                foreach (var size in CorpusSizes)
+                {
+                    var bytes = Measure(size, variant, filesPerDirectory);
+                    var cell = bytes is null ? "failed" : $"{bytes.Value / (double)size,7:F1} B";
+                    Console.WriteLine($"| {label,-25} | {filesPerDirectory,9:N0} | {size,7:N0} | {cell,9} |");
+                }
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("The Unix engine's index is measured on this host: its structure is the same");
+        Console.WriteLine("on every platform, but the strings a Linux provider hands it are not these.");
+        Console.WriteLine("For an end-to-end Linux figure, index a real tree with the Unix engine.");
     }
+
+    /// <summary>The in-memory indexes, by child-process variant name.</summary>
+    private static readonly (string Variant, string Label)[] IndexVariants =
+    [
+        ("windows-index", "Windows in-memory index"),
+        ("unix-index", "Unix engine's own index"),
+    ];
 
     private static long? Measure(int count, string variant, int filesPerDirectory)
     {
@@ -173,7 +203,7 @@ public static class MemoryRetentionMeasurement
         return null;
     }
 
-    private static void RunChild(int count, string variant, int filesPerDirectory)
+    private static async Task RunChild(int count, string variant, int filesPerDirectory)
     {
         var before = Settle();
 
@@ -181,6 +211,11 @@ public static class MemoryRetentionMeasurement
         {
             "raw" => BuildRaw(count, filesPerDirectory),
             "interned" => BuildInterned(count, filesPerDirectory),
+            "windows-index" when OperatingSystem.IsWindows() => await Fill(
+                new FastFind.Windows.Implementation.WindowsSearchIndex(
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<FastFind.Windows.Implementation.WindowsSearchIndex>.Instance),
+                count, filesPerDirectory),
+            "unix-index" => await Fill(new FastFind.Unix.MemorySearchIndex(), count, filesPerDirectory),
             _ => throw new ArgumentException($"Unknown variant '{variant}'.", nameof(variant)),
         };
 
@@ -225,25 +260,46 @@ public static class MemoryRetentionMeasurement
     private static FastFileItem[] BuildInterned(int count, int filesPerDirectory)
     {
         var items = new FastFileItem[count];
-        var when = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < count; i++) items[i] = ItemFor(i, filesPerDirectory);
+        return items;
+    }
 
-        for (var i = 0; i < count; i++)
+    /// <summary>
+    /// Adds the corpus to an index in batches, the way the engines do, so no array of every item
+    /// outlives the fill and gets counted as the index's.
+    /// </summary>
+    private static async Task<FastFind.Interfaces.ISearchIndex> Fill(
+        FastFind.Interfaces.ISearchIndex index, int count, int filesPerDirectory)
+    {
+        const int batchSize = 10_000;
+        var batch = new FastFileItem[batchSize];
+
+        for (var start = 0; start < count; start += batchSize)
         {
-            var path = PathFor(i, filesPerDirectory);
-            items[i] = new FastFileItem(
-                path,
-                new string(Path.GetFileName(path.AsSpan())),
-                new string(Path.GetDirectoryName(path.AsSpan())),
-                new string(Path.GetExtension(path.AsSpan())),
-                size: 4096,
-                created: when,
-                modified: when,
-                accessed: when,
-                attributes: FileAttributes.Normal,
-                driveLetter: 'C');
+            var n = Math.Min(batchSize, count - start);
+            for (var k = 0; k < n; k++) batch[k] = ItemFor(start + k, filesPerDirectory);
+            await index.AddBatchAsync(batch.Take(n));
         }
 
-        return items;
+        return index;
+    }
+
+    private static readonly DateTime When = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static FastFileItem ItemFor(int index, int filesPerDirectory)
+    {
+        var path = PathFor(index, filesPerDirectory);
+        return new FastFileItem(
+            path,
+            new string(Path.GetFileName(path.AsSpan())),
+            new string(Path.GetDirectoryName(path.AsSpan())),
+            new string(Path.GetExtension(path.AsSpan())),
+            size: 4096,
+            created: When,
+            modified: When,
+            accessed: When,
+            attributes: FileAttributes.Normal,
+            driveLetter: 'C');
     }
 
     /// <summary>

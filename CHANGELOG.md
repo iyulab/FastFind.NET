@@ -6,6 +6,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`FastFileItem` no longer keeps its full path; it rebuilds it from the directory and the name.**
+  The full path is unique per file, so interning it deduplicated nothing, and it was the largest
+  string an item held. When the path is exactly directory, separator and name — as every provider
+  in this library produces it — only those two are kept and `FullPath` is composed on read; any
+  other path is still interned, so `FullPath` reads back as it was stored in every case. Measured,
+  one process per measurement, on top of the index changes below: the Windows in-memory index
+  **676 → 388 bytes an entry at 100,000 and 683 → 385 at 300,000**; the Unix engine, end to end on
+  a real tree, **626 → 341 at 101,010 and 642 → 348 at 303,030**. Consequences:
+  - Each read of `FullPath` allocates. Read it once into a local where a loop uses it repeatedly.
+    Matching a query's text against the full path does not allocate — the path is composed on the
+    stack — and costs about 15% more on a full scan that matches text against every full path;
+    a name-only scan is unaffected.
+  - `FastFileItem.FullPathId` is `[Obsolete]`. It still returns an id `StringPool.Get` resolves to
+    the full path, interning the path on demand to do so.
+  - Equality and the hash code still follow the full path, ordinally.
+- **The Windows in-memory index holds a quarter of the memory per entry, and scans about four times
+  faster.** It stored each entry as a `FileItem` object keyed by a lower-cased copy of its path, kept
+  a second lower-cased copy in its directory and extension maps, and built a path trie with a node
+  for every file — about 2,760 bytes an entry, more than half of it the trie. It now stores the
+  compact `FastFileItem` grouped by directory, keyed by the entry's own directory and name, with
+  case-insensitive identity coming from the comparer rather than from copies. Measured with 99-character
+  paths, 100 files to a directory, one process per measurement: **2,758 → 676 bytes an entry at
+  100,000 entries, 2,770 → 683 at 300,000**; a query that scans every entry, best of ten runs,
+  **135–141 → 24–45 ms at 100,000 and 560–573 → 125–132 ms at 300,000**, allocating an eighth as
+  much. Where every file has a
+  directory of its own, an entry costs about 1,070 bytes. A path spelled with forward slashes
+  (`C:/data/a.txt`) now finds, updates and removes its entry; it used to miss it.
+- **The Unix engine's own index holds a fifth less memory per entry and scans three to six times
+  faster.** Without a supplied index it kept `FileItem` objects in a dictionary and converted each
+  one back to a `FastFileItem` — re-interning four strings — for every candidate of every search.
+  It now keeps `FastFileItem` values in the same directory-grouped table as the Windows index, as
+  an `ISearchIndex`, so the engine has one code path whether or not it was given an index. Measured
+  end to end on Linux, indexing a real tree of 99-character paths, one process per measurement:
+  **796 → 626 bytes an entry at 101,010 entries and 817 → 642 at 303,030**; a full scan, best of
+  ten, **91–138 → 62–64 ms and 483–899 → 145–150 ms**, allocating a sixth as much.
+
+### Fixed
+
+- `RefreshIndexAsync` on the Unix engine without a supplied index removed entries by bare path
+  prefix, so refreshing `/src/app` also dropped everything under `/src/app-tests` and did not put it
+  back.
+- A query with overlapping `SearchLocations` — `C:\a` and `C:\a\b` — returned an entry once for
+  each location holding it, on the Windows in-memory index.
+- The Windows in-memory index, when given a store, persisted the first *n* items of a batch where
+  *n* was the number it added — not the items it added, whenever the batch held an entry the index
+  already had.
+
 ## [2.2.0] - 2026-09-11
 
 ### Fixed
