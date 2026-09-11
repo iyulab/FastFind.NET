@@ -182,13 +182,18 @@ public static class SearchQueryEvaluator
     /// <summary>
     /// Whether a directory sits at, or beneath, a scope root.
     /// </summary>
+    /// <remarks>
+    /// On Windows <c>/</c> is a separator too, so <c>C:/data</c> and <c>C:\data</c> name the same
+    /// scope. The paths are compared with separators folded; neither is rewritten. Elsewhere a
+    /// backslash is an ordinary file name character and nothing is folded.
+    /// </remarks>
     public static bool IsUnder(string directoryPath, string scopeRoot, bool includeSubdirectories)
     {
         if (string.IsNullOrEmpty(scopeRoot)) return true;
         if (string.IsNullOrEmpty(directoryPath)) return false;
 
-        var directory = TrimTrailingSeparator(directoryPath);
-        var root = TrimTrailingSeparator(scopeRoot);
+        var directory = TrimTrailingSeparator(FoldSeparators(directoryPath));
+        var root = TrimTrailingSeparator(FoldSeparators(scopeRoot));
 
         if (directory.Equals(root, PathComparison)) return true;
         if (!includeSubdirectories) return false;
@@ -217,6 +222,11 @@ public static class SearchQueryEvaluator
         !string.IsNullOrEmpty(text) && (text.Contains('*') || text.Contains('?'));
 
     private static string TrimTrailingSeparator(string path) => path.TrimEnd('\\', '/');
+
+    // string.Replace returns the same instance when there is nothing to replace, so the common case
+    // — a Windows path that already uses backslashes — allocates nothing.
+    private static string FoldSeparators(string path) =>
+        OperatingSystem.IsWindows() ? path.Replace('/', '\\') : path;
 
     private static bool IsSeparator(char c) => c is '\\' or '/';
 }

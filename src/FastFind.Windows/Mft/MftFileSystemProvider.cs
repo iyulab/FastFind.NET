@@ -22,7 +22,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
 {
     private readonly ILogger<MftFileSystemProvider>? _logger;
     private readonly MftReader _mftReader;
-    private readonly UsnJournalMonitor _usnMonitor;
     private bool _disposed;
 
     private const int CHANNEL_CAPACITY = 100000;
@@ -36,7 +35,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     {
         _logger = logger;
         _mftReader = new MftReader(logger as ILogger<MftReader>);
-        _usnMonitor = new UsnJournalMonitor(logger as ILogger<UsnJournalMonitor>);
     }
 
     /// <inheritdoc/>
@@ -126,7 +124,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         CancellationToken cancellationToken)
     {
         var driveRoot = $"{driveLetter}:\\";
-        var locationFilters = locations
+        var locationFilters = NormalizeLocations(locations)
             .Where(l => l.StartsWith(driveRoot, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
@@ -340,6 +338,13 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Each call reads the change journal with its own monitor, so monitoring can be stopped and
+    /// started again. Every change is placed on disk by asking Windows where its parent directory
+    /// is now (<see cref="FileIdDirectoryPaths"/>); a change whose parent no longer exists is not
+    /// reported. A rename is reported once, with both paths; one that crosses the edge of the
+    /// monitored locations is reported as the deletion or creation it is from inside them.
+    /// </remarks>
     public async IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(
         IEnumerable<string> locations,
         MonitoringOptions options,
@@ -347,85 +352,62 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     {
         ThrowIfDisposed();
 
-        var driveLetters = GetDriveLettersFromLocations(locations);
+        var locationFilters = NormalizeLocations(locations);
+        var driveLetters = GetDriveLettersFromLocations(locationFilters);
 
-        // Start USN Journal monitoring
-        await _usnMonitor.StartMonitoringAsync(driveLetters, null, cancellationToken);
+        await using var monitor = new UsnJournalMonitor(_logger as ILogger<UsnJournalMonitor>);
+        using var directories = new FileIdDirectoryPaths();
+        var translator = new UsnChangeTranslator(directories);
 
-        try
+        await monitor.StartMonitoringAsync(driveLetters, null, cancellationToken);
+
+        await foreach (var record in monitor.Changes.ReadAllAsync(cancellationToken))
         {
-            await foreach (var change in _usnMonitor.Changes.ReadAllAsync(cancellationToken))
-            {
-                // Filter based on monitoring options
-                if (!ShouldIncludeChange(change, options))
-                    continue;
+            if (record.IsDirectory && !options.MonitorDirectories)
+                continue;
 
-                // Build full path for the change
-                var fullPath = _mftReader.GetFullPath(
-                    change.FileName[0], // Drive letter approximation
-                    MftFileRecord.ExtractRecordNumber(change.FileReferenceNumber),
-                    change.ParentFileReferenceNumber,
-                    change.FileName);
-
-                if (fullPath == null)
-                    continue;
-
-                // Check location filters
-                var locationFilters = locations.ToArray();
-                if (!IsPathInLocations(fullPath, locationFilters))
-                    continue;
-
-                yield return ConvertToChangeEventArgs(change, fullPath);
-            }
-        }
-        finally
-        {
-            await _usnMonitor.StopMonitoringAsync();
+            var change = ScopeToLocations(translator.Translate(record), locationFilters);
+            if (change is not null && IsMonitored(change.ChangeType, options))
+                yield return change;
         }
     }
 
-    private static FileChangeEventArgs ConvertToChangeEventArgs(UsnChangeRecord record, string fullPath)
+    /// <summary>
+    /// Restricts a change to the monitored locations. A rename out of them is, from inside, a
+    /// deletion; a rename into them is a creation.
+    /// </summary>
+    internal static FileChangeEventArgs? ScopeToLocations(FileChangeEventArgs? change, string[] locationFilters)
     {
-        var changeType = DetermineChangeType(record.Reason);
-        return new FileChangeEventArgs(changeType, fullPath);
+        if (change is null) return null;
+
+        var inside = IsPathInLocations(change.NewPath, locationFilters);
+        if (change.ChangeType != FileChangeType.Renamed || change.OldPath is null)
+            return inside ? change : null;
+
+        var wasInside = IsPathInLocations(change.OldPath, locationFilters);
+        return (wasInside, inside) switch
+        {
+            (true, true) => change,
+            (true, false) => new FileChangeEventArgs(FileChangeType.Deleted, change.OldPath),
+            (false, true) => new FileChangeEventArgs(FileChangeType.Created, change.NewPath),
+            _ => null,
+        };
     }
 
-    private static FileChangeType DetermineChangeType(UsnReason reason)
+    private static bool IsMonitored(FileChangeType type, MonitoringOptions options) => type switch
     {
-        if ((reason & UsnReason.FileCreate) != 0)
-            return FileChangeType.Created;
+        FileChangeType.Created => options.MonitorCreation,
+        FileChangeType.Deleted => options.MonitorDeletion,
+        FileChangeType.Renamed => options.MonitorRename,
+        _ => options.MonitorModification,
+    };
 
-        if ((reason & UsnReason.FileDelete) != 0)
-            return FileChangeType.Deleted;
-
-        if ((reason & (UsnReason.RenameNewName | UsnReason.RenameOldName)) != 0)
-            return FileChangeType.Renamed;
-
-        if ((reason & (UsnReason.DataOverwrite | UsnReason.DataExtend | UsnReason.DataTruncation)) != 0)
-            return FileChangeType.Modified;
-
-        return FileChangeType.Modified;
-    }
-
-    private static bool ShouldIncludeChange(UsnChangeRecord change, MonitoringOptions options)
-    {
-        if (change.IsCreated && !options.MonitorCreation)
-            return false;
-
-        if (change.IsDeleted && !options.MonitorDeletion)
-            return false;
-
-        if ((change.IsRenamedFrom || change.IsRenamedTo) && !options.MonitorRename)
-            return false;
-
-        if (change.IsDataModified && !options.MonitorModification)
-            return false;
-
-        if (change.IsDirectory && !options.MonitorDirectories)
-            return false;
-
-        return true;
-    }
+    /// <summary>
+    /// Locations as absolute paths with the platform separator. <c>C:/data</c> is a valid Windows
+    /// path, and compared as written it matched nothing — which, for a drive, meant no filter.
+    /// </summary>
+    private static string[] NormalizeLocations(IEnumerable<string> locations) =>
+        locations.Where(l => !string.IsNullOrWhiteSpace(l)).Select(Path.GetFullPath).ToArray();
 
     /// <inheritdoc/>
     public async Task<bool> ExistsAsync(string path, CancellationToken cancellationToken = default)
@@ -559,7 +541,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         if (!_disposed)
         {
             _mftReader.Dispose();
-            _usnMonitor.Dispose();
             _disposed = true;
         }
     }
@@ -569,7 +550,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         if (!_disposed)
         {
             _mftReader.Dispose();
-            await _usnMonitor.DisposeAsync();
             _disposed = true;
         }
     }

@@ -102,6 +102,28 @@ internal static partial class NativeMethods
         out uint lpBytesReturned,
         nint lpOverlapped);
 
+    /// <summary>Opens a file or directory by its file reference on the volume of <paramref name="hVolumeHint"/>.</summary>
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static partial SafeFileHandle OpenFileById(
+        SafeFileHandle hVolumeHint,
+        in FILE_ID_DESCRIPTOR lpFileId,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        nint lpSecurityAttributes,
+        uint dwFlagsAndAttributes);
+
+    /// <summary>Retrieves the final path of an open handle. Returns the length, or the size needed.</summary>
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static unsafe partial uint GetFinalPathNameByHandleW(
+        SafeFileHandle hFile,
+        char* lpszFilePath,
+        uint cchFilePath,
+        uint dwFlags);
+
+    public const uint FILE_READ_ATTRIBUTES = 0x00000080;
+    public const uint FILE_NAME_NORMALIZED = 0x0;
+    public const uint VOLUME_NAME_DOS = 0x0;
+
     [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     public static partial uint GetDriveTypeW(string lpRootPathName);
 
@@ -133,6 +155,25 @@ internal static partial class NativeMethods
 }
 
 #region Native Structures
+
+/// <summary>
+/// <c>FILE_ID_DESCRIPTOR</c> for <see cref="NativeMethods.OpenFileById"/>, carrying a 64-bit file
+/// reference (<c>FileIdType</c>). The union is sized for its largest member, a 128-bit id.
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 24)]
+internal struct FILE_ID_DESCRIPTOR
+{
+    [FieldOffset(0)] public uint dwSize;
+    [FieldOffset(4)] public int Type;
+    [FieldOffset(8)] public long FileId;
+
+    public static FILE_ID_DESCRIPTOR ForFileReference(ulong fileReferenceNumber) => new()
+    {
+        dwSize = 24,
+        Type = 0, // FileIdType
+        FileId = unchecked((long)fileReferenceNumber),
+    };
+}
 
 /// <summary>
 /// NTFS volume data structure returned by FSCTL_GET_NTFS_VOLUME_DATA

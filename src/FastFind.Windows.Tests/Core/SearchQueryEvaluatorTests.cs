@@ -175,6 +175,17 @@ public class SearchQueryEvaluatorTests
     }
 
     [Fact]
+    public void A_BasePath_With_Forward_Slashes_Should_Scope_Like_Its_Backslash_Form_On_Windows()
+    {
+        var inside = Item(@"C:\docs\sub\report.txt");
+        var sibling = Item(@"C:\docs2\report.txt");
+
+        Matches(inside, new SearchQuery { BasePath = "C:/docs" }).Should().BeTrue();
+        Matches(sibling, new SearchQuery { BasePath = "C:/docs" }).Should().BeFalse();
+        Matches(inside, new SearchQuery { SearchLocations = { "C:/docs/" } }).Should().BeTrue();
+    }
+
+    [Fact]
     public void RequiresFileMetadata_Should_Detect_Every_Size_And_Date_Bound()
     {
         SearchQueryEvaluator.RequiresFileMetadata(new SearchQuery { SearchText = "*.md" }).Should().BeFalse();

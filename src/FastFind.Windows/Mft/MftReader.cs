@@ -297,6 +297,11 @@ public sealed class MftReader : IDisposable
     /// <summary>
     /// Gets the full path for a file reference number
     /// </summary>
+    /// <remarks>
+    /// Resolves only through directories registered with <see cref="BuildPathCache"/>, and for any
+    /// other parent returns the name at the drive root — a path that is usually wrong.
+    /// </remarks>
+    [Obsolete("Guesses a drive-rooted path for any parent not in its cache. Resolve a parent by file reference with OpenFileById, or place enumerated records with the provider.")]
     public string? GetFullPath(char driveLetter, ulong fileReferenceNumber, ulong parentFileReferenceNumber, string fileName)
     {
         var parentRecordNumber = MftFileRecord.ExtractRecordNumber(parentFileReferenceNumber);
@@ -313,6 +318,7 @@ public sealed class MftReader : IDisposable
     /// <summary>
     /// Builds full paths for all records using parent-child relationships
     /// </summary>
+    [Obsolete("Only feeds GetFullPath, which is obsolete.")]
     public void BuildPathCache(char driveLetter, IEnumerable<MftFileRecord> directoryRecords)
     {
         var rootPath = $"{driveLetter}:\\";

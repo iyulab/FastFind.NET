@@ -151,9 +151,18 @@ public readonly struct UsnChangeRecord
     public readonly string FileName;
 
     /// <summary>
-    /// Timestamp of the change
+    /// When the journal logged the change (not a file timestamp)
     /// </summary>
     public readonly DateTime TimeStamp;
+
+    /// <summary>
+    /// Drive letter of the volume whose journal logged the change, or <c>'\0'</c> when unknown.
+    /// </summary>
+    /// <remarks>
+    /// File reference numbers are meaningful only within their volume, so a record cannot be
+    /// placed on a path without it.
+    /// </remarks>
+    public readonly char DriveLetter;
 
     public UsnChangeRecord(
         long usn,
@@ -163,6 +172,19 @@ public readonly struct UsnChangeRecord
         FileAttributes attributes,
         string fileName,
         DateTime timeStamp)
+        : this(usn, fileReferenceNumber, parentFileReferenceNumber, reason, attributes, fileName, timeStamp, '\0')
+    {
+    }
+
+    public UsnChangeRecord(
+        long usn,
+        ulong fileReferenceNumber,
+        ulong parentFileReferenceNumber,
+        UsnReason reason,
+        FileAttributes attributes,
+        string fileName,
+        DateTime timeStamp,
+        char driveLetter)
     {
         Usn = usn;
         FileReferenceNumber = fileReferenceNumber;
@@ -171,6 +193,7 @@ public readonly struct UsnChangeRecord
         Attributes = attributes;
         FileName = fileName;
         TimeStamp = timeStamp;
+        DriveLetter = driveLetter;
     }
 
     /// <summary>

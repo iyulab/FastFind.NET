@@ -23,6 +23,15 @@ public class MftLocationScopeTests
     }
 
     [Fact]
+    public void A_Location_Written_With_Forward_Slashes_Should_Cover_The_Same_Directory()
+    {
+        // C:/src/App is a valid Windows path. Compared as written it matched nothing — and for a
+        // drive filter, matching nothing meant indexing the whole drive.
+        MftFileSystemProvider.IsPathInLocations(@"C:\src\App\Program.cs", ["C:/src/App"]).Should().BeTrue();
+        MftFileSystemProvider.IsPathInLocations(@"C:\src\App.Tests\Program.cs", ["C:/src/App"]).Should().BeFalse();
+    }
+
+    [Fact]
     public void A_Drive_Root_Location_Should_Cover_The_Whole_Drive()
     {
         MftFileSystemProvider.IsPathInLocations(@"C:\src\App\Program.cs", [@"C:\"]).Should().BeTrue();

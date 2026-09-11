@@ -24,6 +24,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The directory-path cache was also shared, unsynchronised, across drives enumerated in parallel,
   and every NTFS volume's root is record 5, so a multi-drive index could place one drive's
   directories under another. Each volume now resolves with its own state.
+- **Real-time monitoring on the Windows MFT path reported no changes.** It placed each change by
+  passing the first letter of the *file name* as the drive letter to a directory cache nothing
+  filled, so every change got a path like `r:\readme.md` and the location filter discarded it.
+  Measured on an elevated engine: creating, renaming and deleting files under a monitored folder
+  produced **0 events**, and the index kept the deleted file and never gained the new ones. Each
+  change is now placed by asking Windows where its parent directory is (`OpenFileById` with
+  `GetFinalPathNameByHandle`), which needs no copy of the volume's directory tree. The same
+  operations now produce one event each and the index follows them. Also in the monitor:
+  - A rename is one `Renamed` event carrying both paths, so the index drops the old entry; it
+    previously kept it. A rename across the edge of the monitored locations is reported as the
+    deletion or creation it is from inside them.
+  - Creations, modifications and deletions are reported once, from the journal's closing record,
+    instead of once per intermediate record.
+  - The newest record was re-read on every poll until a newer one arrived — a deletion was reported
+    seven times in four seconds — because each read restarted at that record's own sequence number.
+    Reads now resume where the journal says the next record is.
+  - Monitoring can be stopped and started again. The monitor was shared by the provider and could
+    not restart: its cancellation source stayed cancelled and its channel stayed completed.
+  - Version 3 journal records are skipped rather than read at version 2 offsets.
+- **A location or scope written with forward slashes did not match on Windows.** `C:/data` is a
+  valid Windows path, but it was compared as written against stored backslash paths. On the MFT
+  path a location that matched nothing left its drive unfiltered, so indexing `C:/data` indexed all
+  of C: (4.5 million entries, measured); and a query `BasePath` or `SearchLocations` entry written
+  that way matched nothing. Locations are normalised, and scopes are compared with separators folded
+  on Windows only — stored paths are not rewritten, and elsewhere a backslash stays an ordinary
+  file name character.
 - **On the Windows MFT path, every item's timestamps were 1601-01-01, so date filters matched
   nothing — silently.** That provider enumerates the volume with `FSCTL_ENUM_USN_DATA` and read the
   record's `TimeStamp` as the file's creation, modification and access time. The specification
@@ -64,6 +90,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `UsnChangeRecord` carries the `DriveLetter` of the volume that logged it. A file reference means
+  nothing without its volume. The existing constructor remains and leaves it `'\0'`.
+- `MftReader.GetFullPath` and `MftReader.BuildPathCache` are `[Obsolete]`. `GetFullPath` returns the
+  name at the drive root for any parent it has not cached, and nothing in the library calls either
+  any more.
 - A timestamp that was not collected is `DateTime.MinValue`, not an invented value, and satisfies
   no date bound — an unknown time is neither before nor after anything. `FastFileItem` keeps an
   unspecified or local `MinValue` as unset rather than shifting it by the UTC offset.

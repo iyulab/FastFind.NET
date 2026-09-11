@@ -233,7 +233,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                 yield break;
             }
 
-            await foreach (var record in ReadUsnRecordsAsync(handle, journalData.Value, startUsn, cancellationToken))
+            await foreach (var record in ReadUsnRecordsAsync(handle, journalData.Value, new StrongBox<long>(startUsn), driveLetter, cancellationToken))
             {
                 yield return record;
             }
@@ -253,9 +253,11 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
         TimeSpan pollingInterval,
         CancellationToken cancellationToken)
     {
-        var currentUsn = journalData.NextUsn;
+        // Where the next read starts. The journal reports it with every batch; resuming from the last
+        // record's own USN instead re-reads that record, since a read starts at its USN inclusively.
+        var position = new StrongBox<long>(journalData.NextUsn);
 
-        _logger?.LogDebug("Starting monitor loop for drive {Drive}, starting USN: {Usn}", driveLetter, currentUsn);
+        _logger?.LogDebug("Starting monitor loop for drive {Drive}, starting USN: {Usn}", driveLetter, position.Value);
 
         try
         {
@@ -265,12 +267,8 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                 {
                     var recordsFound = 0;
 
-                    await foreach (var record in ReadUsnRecordsAsync(handle, journalData, currentUsn, cancellationToken))
+                    await foreach (var record in ReadUsnRecordsAsync(handle, journalData, position, driveLetter, cancellationToken))
                     {
-                        // Update current USN for next iteration
-                        if (record.Usn > currentUsn)
-                            currentUsn = record.Usn;
-
                         recordsFound++;
 
                         // Write to channel for streaming consumers
@@ -308,7 +306,8 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
     private async IAsyncEnumerable<UsnChangeRecord> ReadUsnRecordsAsync(
         SafeFileHandle handle,
         USN_JOURNAL_DATA_V0 journalData,
-        long startUsn,
+        StrongBox<long> position,
+        char driveLetter,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = _bufferPool.Rent(USN_BUFFER_SIZE);
@@ -317,7 +316,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
         {
             var readData = new READ_USN_JOURNAL_DATA_V0
             {
-                StartUsn = startUsn,
+                StartUsn = position.Value,
                 ReasonMask = 0xFFFFFFFF, // All reasons
                 ReturnOnlyOnClose = 0,
                 Timeout = 0,
@@ -347,6 +346,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                         {
                             _logger?.LogWarning("USN Journal entries deleted, resetting to lowest valid USN");
                             readData.StartUsn = journalData.LowestValidUsn;
+                            position.Value = readData.StartUsn;
                             continue;
                         }
                         break;
@@ -358,6 +358,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                     // First 8 bytes contain the next USN
                     var nextUsn = BitConverter.ToInt64(buffer, 0);
                     readData.StartUsn = nextUsn;
+                    position.Value = nextUsn;
 
                     // Process USN records in the buffer
                     var offset = 8;
@@ -365,7 +366,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        var record = ParseUsnRecord(buffer, offset, out var recordLength);
+                        var record = ParseUsnRecord(buffer, offset, driveLetter, out var recordLength);
                         if (recordLength == 0)
                             break;
 
@@ -397,7 +398,7 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static UsnChangeRecord? ParseUsnRecord(byte[] buffer, int offset, out uint recordLength)
+    private static UsnChangeRecord? ParseUsnRecord(byte[] buffer, int offset, char driveLetter, out uint recordLength)
     {
         if (offset + 4 > buffer.Length)
         {
@@ -412,11 +413,11 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
             return null;
         }
 
-        // Parse USN_RECORD_V2 structure
+        // Parse USN_RECORD_V2. A V3 record has 128-bit references and different offsets; reads
+        // request V2 (READ_USN_JOURNAL_DATA_V0), so any other version is skipped, not misread.
         var majorVersion = BitConverter.ToUInt16(buffer, offset + 4);
-        if (majorVersion != 2 && majorVersion != 3)
+        if (majorVersion != 2)
         {
-            // Unsupported version, skip
             return null;
         }
 
@@ -452,7 +453,8 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
             reason,
             fileAttributes,
             fileName,
-            dateTime);
+            dateTime,
+            driveLetter);
     }
 
     private SafeFileHandle? OpenVolume(char driveLetter)
