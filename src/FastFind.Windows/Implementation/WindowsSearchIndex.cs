@@ -1,3 +1,4 @@
+using FastFind.Indexing;
 using FastFind.Interfaces;
 using FastFind.Models;
 using Microsoft.Extensions.Logging;
@@ -761,30 +762,15 @@ internal class WindowsSearchIndex : ISearchIndex
     /// </summary>
     private IEnumerable<FastFileItem> GetSearchCandidatesSync(SearchQuery query)
     {
-        // BasePath takes precedence over SearchLocations
-        if (!string.IsNullOrEmpty(query.BasePath))
-        {
-            return GetFilesByLocationsSync([query.BasePath], query.IncludeSubdirectories);
-        }
+        // BasePath takes precedence over SearchLocations. One scope narrows; several may overlap —
+        // C:\a and C:\a\b — and narrowing each would return an entry once per scope holding it, so
+        // they take one pass and the evaluator decides.
+        var scope = !string.IsNullOrEmpty(query.BasePath) ? query.BasePath
+            : query.SearchLocations.Count == 1 ? query.SearchLocations[0]
+            : null;
 
-        if (query.SearchLocations.Count > 0)
-        {
-            return GetFilesByLocationsSync(query.SearchLocations, query.IncludeSubdirectories);
-        }
-
-        return _entries.All();
-    }
-
-    private IEnumerable<FastFileItem> GetFilesByLocationsSync(IList<string> locations, bool includeSubdirectories)
-    {
-        foreach (var location in locations)
-        {
-            var entries = includeSubdirectories ? _entries.Under(location) : _entries.InDirectory(location);
-            foreach (var entry in entries)
-            {
-                yield return entry;
-            }
-        }
+        if (scope is null) return _entries.All();
+        return query.IncludeSubdirectories ? _entries.Under(scope) : _entries.InDirectory(scope);
     }
 
     /// <inheritdoc/>

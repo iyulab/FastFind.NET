@@ -1,3 +1,4 @@
+using FastFind.Indexing;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
 using FluentAssertions;
@@ -167,5 +168,24 @@ public class WindowsSearchIndexIdentityTests
         (await index.GetAsync(spelling))!.Value.FullPath.Should().Be(@"C:\data\a.txt");
         (await index.RemoveAsync(spelling)).Should().BeTrue();
         index.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Overlapping_Locations_Should_Return_Each_Entry_Once()
+    {
+        await using var index = new WindowsSearchIndex(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WindowsSearchIndex>.Instance);
+        await index.AddBatchAsync(Enumerable.Range(0, 20).Select(i =>
+            new FastFileItem($@"C:\scope\a\b\file{i}.cs", $"file{i}.cs", @"C:\scope\a\b", ".cs", 1,
+                DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C')));
+
+        var query = new SearchQuery { SearchText = "file7.cs", SearchFileNameOnly = true };
+        query.SearchLocations.Add(@"C:\scope\a");
+        query.SearchLocations.Add(@"C:\scope\a\b");
+
+        var found = new List<string>();
+        await foreach (var item in index.SearchAsync(query)) found.Add(item.FullPath);
+
+        found.Should().Equal(@"C:\scope\a\b\file7.cs");
     }
 }

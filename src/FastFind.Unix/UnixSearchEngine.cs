@@ -104,19 +104,23 @@ public static class UnixSearchEngine
 
 /// <summary>
 /// Internal search engine implementation for Unix platforms.
-/// Uses ConcurrentDictionary as an in-memory index and LINQ-based search.
 /// </summary>
 internal class UnixSearchEngineImpl : ISearchEngine
 {
     private readonly IFileSystemProvider _provider;
     private readonly ILogger<UnixSearchEngineImpl> _logger;
-    private readonly ConcurrentDictionary<string, FileItem> _index = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The index this engine reads and writes when it was composed with one, otherwise
-    /// <c>null</c> and <see cref="_index"/> is used instead.
+    /// The index this engine was composed with, or <c>null</c>. Kept apart from
+    /// <see cref="_index"/> only because <see cref="Index"/> reports what the caller supplied.
     /// </summary>
     private readonly ISearchIndex? _searchIndex;
+
+    /// <summary>
+    /// The index every operation reads and writes: the supplied one, or this engine's own
+    /// <see cref="MemorySearchIndex"/>. One path for both — it used to be two, written twice.
+    /// </summary>
+    private readonly ISearchIndex _index;
 
     /// <summary>
     /// How many items are accumulated before being written to a supplied index.
@@ -163,12 +167,6 @@ internal class UnixSearchEngineImpl : ISearchEngine
     /// </remarks>
     public ISearchIndex? Index => _searchIndex;
 
-    /// <summary>
-    /// Whether this engine answers from a supplied <see cref="ISearchIndex"/> rather than from its
-    /// own dictionary.
-    /// </summary>
-    private bool UsesSuppliedIndex => _searchIndex is not null;
-
     public UnixSearchEngineImpl(
         IFileSystemProvider provider,
         ILoggerFactory? loggerFactory = null,
@@ -178,6 +176,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
         var factory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = factory.CreateLogger<UnixSearchEngineImpl>();
         _searchIndex = searchIndex;
+        _index = searchIndex ?? new MemorySearchIndex();
     }
 
     /// <inheritdoc/>
@@ -207,22 +206,15 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 string.Empty,
                 IndexingPhase.Initializing));
 
-            if (UsesSuppliedIndex)
-            {
-                await _searchIndex!.ClearAsync(linkedToken).ConfigureAwait(false);
-            }
-            else
-            {
-                _index.Clear();
-            }
+            await _index.ClearAsync(linkedToken).ConfigureAwait(false);
 
             Interlocked.Exchange(ref _totalIndexedFiles, 0);
             long processedFiles = 0;
             bool capReached = false;
 
-            // Writes to a supplied index are batched: a store-backed index pays a round trip per
-            // call, so adding one item at a time would dominate enumeration.
-            var pending = UsesSuppliedIndex ? new List<FastFileItem>(IndexWriteBatchSize) : null;
+            // Writes are batched: a store-backed index pays a round trip per call, so adding one
+            // item at a time would dominate enumeration.
+            var pending = new List<FastFileItem>(IndexWriteBatchSize);
 
             OnIndexingProgressChanged(new IndexingProgressEventArgs(
                 string.Join(", ", locations),
@@ -236,18 +228,11 @@ internal class UnixSearchEngineImpl : ISearchEngine
             {
                 linkedToken.ThrowIfCancellationRequested();
 
-                if (pending is not null)
+                pending.Add(item.ToFastFileItem());
+                if (pending.Count >= IndexWriteBatchSize)
                 {
-                    pending.Add(item.ToFastFileItem());
-                    if (pending.Count >= IndexWriteBatchSize)
-                    {
-                        await _searchIndex!.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
-                        pending.Clear();
-                    }
-                }
-                else
-                {
-                    _index[item.FullPath] = item;
+                    await _index.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
+                    pending.Clear();
                 }
 
                 var count = Interlocked.Increment(ref processedFiles);
@@ -273,9 +258,9 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
             // Flush whatever the last batch left, including on the cap-reached break above:
             // dropping the tail would silently lose up to a batch of files.
-            if (pending is { Count: > 0 })
+            if (pending.Count > 0)
             {
-                await _searchIndex!.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
+                await _index.AddBatchAsync(pending, linkedToken).ConfigureAwait(false);
                 pending.Clear();
             }
 
@@ -361,12 +346,9 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
         try
         {
-            // Both paths evaluate through SearchQueryEvaluator — the dictionary path directly, the
-            // supplied index inside its own implementation — so the same query returns the same set
-            // whichever one answers it.
-            var results = UsesSuppliedIndex
-                ? await CollectFromIndexAsync(query, cancellationToken).ConfigureAwait(false)
-                : SearchIndex(query, cancellationToken).Select(item => item.ToFastFileItem()).ToList();
+            // Every index evaluates through SearchQueryEvaluator, so the same query returns the same
+            // set whichever one answers it.
+            var results = await CollectFromIndexAsync(query, cancellationToken).ConfigureAwait(false);
 
             stopwatch.Stop();
 
@@ -410,14 +392,14 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// Drains the supplied index's results for a query.
+    /// Drains the index's results for a query.
     /// </summary>
     private async Task<List<FastFileItem>> CollectFromIndexAsync(
         SearchQuery query, CancellationToken cancellationToken)
     {
         var results = new List<FastFileItem>();
 
-        await foreach (var item in _searchIndex!.SearchAsync(query, cancellationToken).ConfigureAwait(false))
+        await foreach (var item in _index.SearchAsync(query, cancellationToken).ConfigureAwait(false))
         {
             results.Add(item);
         }
@@ -450,26 +432,27 @@ internal class UnixSearchEngineImpl : ISearchEngine
         var totalDirs = 0L;
         var totalSize = 0L;
 
-        if (UsesSuppliedIndex)
+        if (_index is MemorySearchIndex memory)
         {
-            // A store-backed index counts without materialising the corpus; enumerating it here to
-            // sum sizes would defeat the point of not holding one.
-            var indexStats = await _searchIndex!.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
-            totalFiles = indexStats.TotalFiles;
-            totalDirs = indexStats.TotalDirectories;
-            totalSize = 0;
-        }
-        else
-        {
-            foreach (var item in _index.Values)
+            // Held in memory already, so the sizes can be summed.
+            foreach (var item in memory.Entries)
             {
-                if (item.Attributes.HasFlag(System.IO.FileAttributes.Directory))
+                if (item.IsDirectory)
                     totalDirs++;
                 else
                     totalFiles++;
 
                 totalSize += item.Size;
             }
+        }
+        else
+        {
+            // A store-backed index counts without materialising the corpus; enumerating it here to
+            // sum sizes would defeat the point of not holding one.
+            var indexStats = await _index.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
+            totalFiles = indexStats.TotalFiles;
+            totalDirs = indexStats.TotalDirectories;
+            totalSize = 0;
         }
 
         var stats = new IndexingStatistics
@@ -519,14 +502,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
-        if (UsesSuppliedIndex)
-        {
-            await _searchIndex!.ClearAsync(cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            _index.Clear();
-        }
+        await _index.ClearAsync(cancellationToken).ConfigureAwait(false);
 
         Interlocked.Exchange(ref _totalIndexedFiles, 0);
         Interlocked.Exchange(ref _totalSearches, 0);
@@ -583,12 +559,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
-        if (UsesSuppliedIndex)
-        {
-            await _searchIndex!.OptimizeAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        // The ConcurrentDictionary in-memory index requires no optimization.
+        await _index.OptimizeAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -605,27 +576,22 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
         _logger.LogInformation("Refreshing index for {Count} locations", paths.Length);
 
-        // Remove stale entries for the specified locations
-        if (UsesSuppliedIndex)
+        // Remove stale entries for the specified locations. Collected first: removing while the
+        // index enumerates its own entries is not something every index supports.
+        foreach (var path in paths)
         {
-            foreach (var path in paths)
+            var stale = new List<string>();
+            await foreach (var item in _index
+                               .GetByDirectoryAsync(path, recursive: true, cancellationToken)
+                               .ConfigureAwait(false))
             {
-                await foreach (var stale in _searchIndex!
-                                   .GetByDirectoryAsync(path, recursive: true, cancellationToken)
-                                   .ConfigureAwait(false))
-                {
-                    await _searchIndex.RemoveAsync(stale.FullPath, cancellationToken).ConfigureAwait(false);
-                }
+                stale.Add(item.FullPath);
             }
-        }
-        else
-        {
-            var keysToRemove = _index.Keys
-                .Where(k => paths.Any(p => k.StartsWith(p, StringComparison.Ordinal)))
-                .ToList();
 
-            foreach (var key in keysToRemove)
-                _index.TryRemove(key, out _);
+            foreach (var fullPath in stale)
+            {
+                await _index.RemoveAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         // Re-enumerate the locations
@@ -640,21 +606,11 @@ internal class UnixSearchEngineImpl : ISearchEngine
         await foreach (var item in _provider.EnumerateFilesAsync(paths, options, cancellationToken)
                            .ConfigureAwait(false))
         {
-            if (UsesSuppliedIndex)
-            {
-                await _searchIndex!.AddAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                _index[item.FullPath] = item;
-            }
-
+            await _index.AddAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
             refreshed++;
         }
 
-        Interlocked.Exchange(
-            ref _totalIndexedFiles,
-            UsesSuppliedIndex ? _searchIndex!.Count : _index.Count);
+        Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
         _logger.LogInformation("Refresh completed: {Refreshed} items re-indexed", refreshed);
     }
 
@@ -672,38 +628,12 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
         StopMonitoring();
         _provider.Dispose();
-        _index.Clear();
+
+        // Only the index this engine made is this engine's to dispose.
+        if (_searchIndex is null) _index.Dispose();
     }
 
     // ────────────────────────────── Private Helpers ──────────────────────────────
-
-    /// <summary>
-    /// Filters the in-memory index for a query.
-    /// </summary>
-    /// <remarks>
-    /// Delegates to <see cref="SearchQueryEvaluator"/>, the single definition of what satisfies a
-    /// <see cref="SearchQuery"/>. This method previously re-implemented the whole predicate — around
-    /// a hundred lines of <c>Where</c> clauses — which is exactly the duplication that let the
-    /// backends disagree with one another before Phase B. Any filtering rule belongs in the
-    /// evaluator, not here.
-    /// </remarks>
-    private List<FileItem> SearchIndex(SearchQuery query, CancellationToken cancellationToken)
-    {
-        var textMatcher = SearchQueryEvaluator.CreateTextMatcher(query);
-        var results = new List<FileItem>();
-
-        foreach (var item in _index.Values)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (SearchQueryEvaluator.Matches(item.ToFastFileItem(), query, textMatcher))
-            {
-                results.Add(item);
-            }
-        }
-
-        return results;
-    }
 
     private static async IAsyncEnumerable<FastFileItem> ToAsyncEnumerable(
         IList<FastFileItem> items,
@@ -792,51 +722,16 @@ internal class UnixSearchEngineImpl : ISearchEngine
     /// </summary>
     private async Task RemoveIndexEntryAsync(string path)
     {
-        if (UsesSuppliedIndex)
-        {
-            var index = _searchIndex!;
-            await index.RemoveTreeAsync(path).ConfigureAwait(false);
-            Interlocked.Exchange(ref _totalIndexedFiles, index.Count);
-        }
-        else
-        {
-            if (!_index.TryRemove(path, out var removed) || removed.IsDirectory)
-            {
-                foreach (var key in _index.Keys.Where(k => SearchQueryEvaluator.IsUnder(k, path, includeSubdirectories: true)).ToList())
-                    _index.TryRemove(key, out _);
-            }
-            Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
-        }
+        await _index.RemoveTreeAsync(path).ConfigureAwait(false);
+        Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
     }
 
     /// <summary>
-    /// Moves a path — and, for a directory, everything beneath it — to its new location in
-    /// whichever index this engine is using.
+    /// Moves a path — and, for a directory, everything beneath it — to its new location.
     /// </summary>
     private async Task MoveIndexEntryAsync(string oldPath, string newPath)
     {
-        if (UsesSuppliedIndex)
-        {
-            var index = _searchIndex!;
-            await index.MoveTreeAsync(oldPath, newPath).ConfigureAwait(false);
-            Interlocked.Exchange(ref _totalIndexedFiles, index.Count);
-            return;
-        }
-
-        var oldRoot = oldPath.TrimEnd('/');
-        var newRoot = newPath.TrimEnd('/');
-        foreach (var key in _index.Keys.Where(k => SearchQueryEvaluator.IsUnder(k, oldRoot, includeSubdirectories: true)).ToList())
-        {
-            if (!_index.TryRemove(key, out var item)) continue;
-
-            var fullPath = newRoot + key[oldRoot.Length..];
-            _index[fullPath] = item with
-            {
-                FullPath = fullPath,
-                Name = Path.GetFileName(fullPath),
-                DirectoryPath = Path.GetDirectoryName(fullPath) ?? item.DirectoryPath,
-            };
-        }
+        await _index.MoveTreeAsync(oldPath, newPath).ConfigureAwait(false);
         Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
     }
 
@@ -885,16 +780,8 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
             if (item != null)
             {
-                if (UsesSuppliedIndex)
-                {
-                    await _searchIndex!.AddAsync(item.ToFastFileItem()).ConfigureAwait(false);
-                    Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
-                }
-                else
-                {
-                    _index[path] = item;
-                    Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
-                }
+                await _index.AddAsync(item.ToFastFileItem()).ConfigureAwait(false);
+                Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
             }
         }
         catch (Exception ex)

@@ -98,6 +98,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The USN record parser accepted version 3 records but read them at version 2 offsets, which do not
   apply to them. It now rejects them. Enumeration requests version 2 records, so none were seen in
   practice.
+- `RefreshIndexAsync` on the Unix engine without a supplied index removed entries by bare path
+  prefix, so refreshing `/src/app` also dropped everything under `/src/app-tests` and did not put it
+  back.
+- A query with overlapping `SearchLocations` — `C:\a` and `C:\a\b` — returned an entry once for
+  each location holding it, on the Windows in-memory index.
 - The Windows in-memory index, when given a store, persisted the first *n* items of a batch where
   *n* was the number it added — not the items it added, whenever the batch held an entry the index
   already had.
@@ -132,6 +137,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   much. Where every file has a
   directory of its own, an entry costs about 1,070 bytes. A path spelled with forward slashes
   (`C:/data/a.txt`) now finds, updates and removes its entry; it used to miss it.
+- **The Unix engine's own index holds a fifth less memory per entry and scans three to six times
+  faster.** Without a supplied index it kept `FileItem` objects in a dictionary and converted each
+  one back to a `FastFileItem` — re-interning four strings — for every candidate of every search.
+  It now keeps `FastFileItem` values in the same directory-grouped table as the Windows index, as
+  an `ISearchIndex`, so the engine has one code path whether or not it was given an index. Measured
+  end to end on Linux, indexing a real tree of 99-character paths, one process per measurement:
+  **796 → 626 bytes an entry at 101,010 entries and 817 → 642 at 303,030**; a full scan, best of
+  ten, **91–138 → 62–64 ms and 483–899 → 145–150 ms**, allocating a sixth as much.
 - **`MftSqlitePipeline` and `UsnSqliteSyncService` are `[Obsolete]`.** Both wrote wrong paths into
   the store: the pipeline stored every entry as `<drive>:\<name>`, never resolving its parent
   directories, and the sync service stored a change's bare file name as its full path with an empty

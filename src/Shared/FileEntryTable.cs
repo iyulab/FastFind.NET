@@ -1,12 +1,16 @@
 using System.Collections.Concurrent;
 using FastFind.Models;
 
-namespace FastFind.Windows.Implementation;
+namespace FastFind.Indexing;
 
 /// <summary>
 /// The in-memory index's storage: every entry, grouped by the directory that holds it.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Compiled into each platform package from one source file, so both hold the same definition
+/// without a public type or internals shared across packages that version separately.
+/// </para>
 /// <para>
 /// Entries are held as <see cref="FastFileItem"/> — the library's compact form — in a map from
 /// directory to a map from name to item. Both keys are the item's own
