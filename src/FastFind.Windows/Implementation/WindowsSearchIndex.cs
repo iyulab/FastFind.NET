@@ -974,21 +974,20 @@ internal class WindowsSearchIndex : ISearchIndex
 
         var normalizedPath = directoryPath.ToLowerInvariant().TrimEnd('\\', '/');
 
-        // Phase 3.1: Lock-free read - ConcurrentDictionary operations are thread-safe
-        List<FileItem> files = new List<FileItem>();
-        if (_directoryIndex.TryGetValue(normalizedPath, out var filePaths))
+        // Recursive answers come from the path trie, which holds every level. The directory index
+        // holds one level only, so reading it for a recursive query returned direct children and
+        // nothing deeper.
+        IEnumerable<string> keys = recursive
+            ? _pathTrieIndex.GetFileKeysUnderPath(directoryPath)
+            : _directoryIndex.TryGetValue(normalizedPath, out var filePaths) ? filePaths.ToArray() : [];
+
+        var files = new List<FileItem>();
+        foreach (var key in keys)
         {
-            // Take a snapshot of file paths for iteration
-            var pathSnapshot = filePaths.ToArray();
-            foreach (var filePath in pathSnapshot)
+            if (_fileIndex.TryGetValue(key, out var fileItem)
+                && SearchQueryEvaluator.IsUnder(fileItem.DirectoryPath, directoryPath, recursive))
             {
-                if (_fileIndex.TryGetValue(filePath, out var fileItem))
-                {
-                    if (recursive || fileItem.DirectoryPath.Equals(directoryPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        files.Add(fileItem);
-                    }
-                }
+                files.Add(fileItem);
             }
         }
 

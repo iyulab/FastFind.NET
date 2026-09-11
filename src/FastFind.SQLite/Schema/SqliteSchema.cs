@@ -179,9 +179,13 @@ internal static class SqliteSchema
     /// <summary>
     /// SQL for getting files in a directory recursively
     /// </summary>
+    // The directory itself, or anything beneath it at a separator. A bare "dir%" also matched a
+    // sibling sharing the prefix (App vs App.Tests), and an unescaped '_' matched any character.
     public const string GetByDirectoryRecursive = """
         SELECT * FROM files
-        WHERE directory_path LIKE @directory_pattern
+        WHERE directory_path = @directory_path
+           OR directory_path LIKE @directory_pattern ESCAPE '!'
+           OR directory_path LIKE @directory_alt_pattern ESCAPE '!'
         ORDER BY full_path
         """;
 

@@ -773,7 +773,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
                 case FileChangeType.Renamed:
                     if (change.OldPath != null)
-                        await RemoveIndexEntryAsync(change.OldPath).ConfigureAwait(false);
+                        await MoveIndexEntryAsync(change.OldPath, change.NewPath).ConfigureAwait(false);
                     await UpdateIndexEntryAsync(change.NewPath).ConfigureAwait(false);
                     break;
             }
@@ -787,20 +787,57 @@ internal class UnixSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// Drops a path from whichever index this engine is using.
+    /// Drops a path — and, for a directory, everything beneath it — from whichever index this
+    /// engine is using. A directory's deletion is reported once, for the directory.
     /// </summary>
     private async Task RemoveIndexEntryAsync(string path)
     {
         if (UsesSuppliedIndex)
         {
-            await _searchIndex!.RemoveAsync(path).ConfigureAwait(false);
-            Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
+            var index = _searchIndex!;
+            await index.RemoveTreeAsync(path).ConfigureAwait(false);
+            Interlocked.Exchange(ref _totalIndexedFiles, index.Count);
         }
         else
         {
-            _index.TryRemove(path, out _);
+            if (!_index.TryRemove(path, out var removed) || removed.IsDirectory)
+            {
+                foreach (var key in _index.Keys.Where(k => SearchQueryEvaluator.IsUnder(k, path, includeSubdirectories: true)).ToList())
+                    _index.TryRemove(key, out _);
+            }
             Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
         }
+    }
+
+    /// <summary>
+    /// Moves a path — and, for a directory, everything beneath it — to its new location in
+    /// whichever index this engine is using.
+    /// </summary>
+    private async Task MoveIndexEntryAsync(string oldPath, string newPath)
+    {
+        if (UsesSuppliedIndex)
+        {
+            var index = _searchIndex!;
+            await index.MoveTreeAsync(oldPath, newPath).ConfigureAwait(false);
+            Interlocked.Exchange(ref _totalIndexedFiles, index.Count);
+            return;
+        }
+
+        var oldRoot = oldPath.TrimEnd('/');
+        var newRoot = newPath.TrimEnd('/');
+        foreach (var key in _index.Keys.Where(k => SearchQueryEvaluator.IsUnder(k, oldRoot, includeSubdirectories: true)).ToList())
+        {
+            if (!_index.TryRemove(key, out var item)) continue;
+
+            var fullPath = newRoot + key[oldRoot.Length..];
+            _index[fullPath] = item with
+            {
+                FullPath = fullPath,
+                Name = Path.GetFileName(fullPath),
+                DirectoryPath = Path.GetDirectoryName(fullPath) ?? item.DirectoryPath,
+            };
+        }
+        Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
     }
 
     private async Task UpdateIndexEntryAsync(string path)

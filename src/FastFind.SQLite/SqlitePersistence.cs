@@ -853,8 +853,11 @@ public sealed class SqlitePersistence : IIndexPersistence
 
         if (recursive)
         {
+            var root = normalizedPath.TrimEnd('\\', '/');
             cmd.CommandText = SqliteSchema.GetByDirectoryRecursive;
-            cmd.Parameters.AddWithValue("@directory_pattern", normalizedPath.TrimEnd('\\', '/') + "%");
+            cmd.Parameters.AddWithValue("@directory_path", root);
+            cmd.Parameters.AddWithValue("@directory_pattern", EscapeLikeLiteral(root) + "\\%");
+            cmd.Parameters.AddWithValue("@directory_alt_pattern", EscapeLikeLiteral(root) + "/%");
         }
         else
         {

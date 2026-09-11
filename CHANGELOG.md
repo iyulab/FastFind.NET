@@ -43,6 +43,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Monitoring can be stopped and started again. The monitor was shared by the provider and could
     not restart: its cancellation source stayed cancelled and its channel stayed completed.
   - Version 3 journal records are skipped rather than read at version 2 offsets.
+- **Renaming or deleting a directory left everything beneath it in the index.** A file system
+  reports the change once, for the directory, and the engines applied it to that one entry: after
+  a rename every descendant kept a path that no longer exists and the contents never appeared at
+  the new location; after a deletion the descendants stayed searchable. Both engines now carry the
+  change down the tree, on every index — in-memory, store-backed, and the Unix engine's own. Also:
+  - The standard Windows provider reported a rename without its old path — an `EnqueueRename`
+    helper that carries it existed and was never called — so even a renamed *file* left its old
+    entry behind.
+  - `GetByDirectoryAsync(recursive: true)` on the in-memory index returned only direct children.
+  - The SQLite store's recursive directory query matched by bare prefix, so `C:\src\App` also
+    returned `C:\src\App.Tests`, and an `_` in a directory name matched any character.
+
+  Verified live on both Windows providers and on Linux: after renaming `proj` to `renamed` and
+  deleting `junk`, `leaf.cs` is found only at `renamed\src\deep\leaf.cs` and nothing under `junk`
+  remains.
 - **The Windows engine cut every indexing run short at 30 seconds, and said nothing.** It bounded
   the whole run with `WindowsSearchEngineOptions.FileOperationTimeout`, whose optimised default was
   30 or 60 seconds depending on memory — read from `GC.GetTotalMemory`, the managed heap in use,
@@ -86,6 +101,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `SearchIndexTreeExtensions.RemoveTreeAsync` and `MoveTreeAsync` apply a directory's deletion or
+  move to everything an `ISearchIndex` holds beneath it, keeping sizes, times and attributes. They
+  are what the engines use, and work on any index, including a custom one.
 - **`IndexingOptions.CollectFileMetadata`** — reads each entry's size and all three timestamps with
   one file system query while indexing, on the one provider whose enumeration lacks them (Windows
   MFT). It replaces `CollectFileSize`, which already paid for that query and kept only the size.

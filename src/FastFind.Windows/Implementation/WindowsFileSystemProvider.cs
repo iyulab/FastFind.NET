@@ -543,7 +543,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
                     watcher.Deleted += (s, e) => EnqueueChange(changeQueue, FileChangeType.Deleted, e.FullPath);
 
                 if (options.MonitorRename)
-                    watcher.Renamed += (s, e) => EnqueueChange(changeQueue, FileChangeType.Renamed, e.FullPath);
+                    watcher.Renamed += (s, e) => EnqueueRename(changeQueue, e.OldFullPath, e.FullPath);
 
                 watcher.EnableRaisingEvents = true;
                 watchers.Add(watcher);

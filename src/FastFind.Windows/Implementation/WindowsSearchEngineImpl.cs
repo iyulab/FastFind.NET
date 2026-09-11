@@ -843,19 +843,21 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 }
                 break;
 
+            // A directory's deletion or rename arrives as one event for the directory; the tree
+            // operations carry it to everything indexed beneath it.
             case FileChangeType.Deleted:
-                await _searchIndex.RemoveAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
+                await _searchIndex.RemoveTreeAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 break;
 
             case FileChangeType.Renamed:
                 if (!string.IsNullOrEmpty(change.OldPath))
                 {
-                    await _searchIndex.RemoveAsync(change.OldPath, cancellationToken).ConfigureAwait(false);
+                    await _searchIndex.MoveTreeAsync(change.OldPath, change.NewPath, cancellationToken).ConfigureAwait(false);
                 }
                 var renamedFileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (renamedFileItem != null)
                 {
-                    await _searchIndex.AddAsync(renamedFileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+                    await _searchIndex.UpdateAsync(renamedFileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
                 }
                 break;
         }
