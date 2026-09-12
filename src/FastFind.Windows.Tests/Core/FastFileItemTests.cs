@@ -62,10 +62,10 @@ public class FastFileItemTests
         var item = new FastFileItem(fullPath, name, directory, "", 0,
             DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, FileAttributes.Normal, 'C');
 
-        // The pool folds '/' to '\' on Windows, and always has; elsewhere nothing is rewritten.
-        var expected = OperatingSystem.IsWindows() ? fullPath.Replace('/', '\\') : fullPath;
-        item.FullPath.Should().Be(expected);
-        item.MatchesPath(expected).Should().BeTrue();
+        // Nothing rewrites the value, on any host — which is what this test's name claims and what
+        // it could not assert while the pool folded '/' to '\' on Windows.
+        item.FullPath.Should().Be(fullPath);
+        item.MatchesPath(fullPath).Should().BeTrue();
     }
 
     [Fact]

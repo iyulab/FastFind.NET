@@ -178,19 +178,26 @@ public static class StringPool
     /// Interns a file-system path.
     /// </summary>
     /// <remarks>
-    /// On Windows, forward slashes are folded to backslashes because both are accepted as
-    /// separators and folding improves deduplication. On other platforms a backslash is an
-    /// ordinary filename character, so the path is interned verbatim. Case is always preserved.
+    /// <para>
+    /// The path is interned <b>verbatim</b>: neither its case nor its separators are rewritten. A
+    /// pool stores values, and a value a caller cannot get back is a value it did not store.
+    /// </para>
+    /// <para>
+    /// This folded <c>/</c> to <c>\</c> on Windows until 2.4.0, for deduplication. It bought
+    /// nothing measurable — every Windows enumerator builds its items through
+    /// <see cref="FileInfo"/>/<see cref="DirectoryInfo"/>, which canonicalise separators before the
+    /// path ever reaches this method, so the fold only ever reached directly constructed items —
+    /// and it cost those items their spelling. Separator-insensitive <i>identity</i> on Windows
+    /// comes from the comparers (<c>FileEntryTable.PathKeyComparer</c>) and from
+    /// <see cref="PathExclusion"/>, which is where it belongs; see the path-normalization note in
+    /// the repository guide.
+    /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int InternPath(string path)
     {
         if (string.IsNullOrEmpty(path))
             return EmptyId;
-
-        // Allocates only when the path actually contains a foreign separator.
-        if (OperatingSystem.IsWindows() && path.Contains('/'))
-            path = path.Replace('/', '\\');
 
         return InternCounted(path, ref _pathCount);
     }

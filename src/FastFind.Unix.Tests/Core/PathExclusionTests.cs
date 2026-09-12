@@ -8,6 +8,12 @@ namespace FastFind.Unix.Tests.Core;
 /// Unix semantics of the single exclusion predicate: only <c>/</c> separates, comparison is
 /// case-sensitive, and a backslash is an ordinary file name character.
 /// </summary>
+/// <remarks>
+/// The predicate reads the <i>host</i>, so the three assertions that turn on the non-folding branch
+/// return early on Windows rather than failing there. The rest hold on either host because the two
+/// sets of semantics agree on them. CI runs this project on Linux and macOS only; the guards are for
+/// a developer running it on a Windows machine.
+/// </remarks>
 [Trait("Category", "Functional")]
 public class PathExclusionTests
 {
@@ -36,6 +42,10 @@ public class PathExclusionTests
     [Fact]
     public void Comparison_Should_Be_Case_Sensitive()
     {
+        // PathExclusion folds case and separators on a Windows host, by design. This assertion is
+        // about the branch that does not fold, so it means nothing where that branch is unreachable.
+        if (OperatingSystem.IsWindows()) return;
+
         Excluded("/data/logs/today.txt", "/data/LOGS").Should().BeFalse();
         Excluded("/srv/app/node_modules/x.js", "Node_Modules").Should().BeFalse();
     }
@@ -66,6 +76,10 @@ public class PathExclusionTests
     [Fact]
     public void A_Backslash_Should_Not_Separate_Segments()
     {
+        // PathExclusion folds case and separators on a Windows host, by design. This assertion is
+        // about the branch that does not fold, so it means nothing where that branch is unreachable.
+        if (OperatingSystem.IsWindows()) return;
+
         // "logs\today.txt" is one segment whose name contains a backslash, not two segments.
         Excluded(@"/data/logs\today.txt", "logs").Should().BeFalse();
         Excluded(@"/data/logs\today.txt", @"logs\today.txt").Should().BeTrue();
@@ -74,6 +88,10 @@ public class PathExclusionTests
     [Fact]
     public void A_Windows_Spelled_Entry_Should_Not_Match_A_Posix_Path()
     {
+        // PathExclusion folds case and separators on a Windows host, by design. This assertion is
+        // about the branch that does not fold, so it means nothing where that branch is unreachable.
+        if (OperatingSystem.IsWindows()) return;
+
         Excluded("/data/logs/today.txt", @"\data\logs").Should().BeFalse();
     }
 

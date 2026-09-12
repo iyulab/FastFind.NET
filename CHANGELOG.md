@@ -30,6 +30,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is now reported as what it is from the index's side: leaving is a deletion of the old path,
   arriving is a creation. The fold existed only in the change-journal provider, only for locations;
   it is now `FileChangeScope` in the core package and every monitor uses it.
+- **A path stored on Windows read back with separators it was never given.**
+  `StringPool.InternPath` rewrote `/` to `\` before interning, so an item built from
+  `C:/data/proj` reported `C:\data\proj`. It interns verbatim now, on every platform; identity that
+  ignores the difference still comes from the comparers and from `PathExclusion`. The rewrite was
+  inert for indexing — every Windows enumerator builds its items through `FileInfo`/`DirectoryInfo`,
+  which canonicalise separators before a path reaches the pool — so this changes what a directly
+  constructed `FastFileItem` reports, and nothing about an indexed one. Per-entry index retention is
+  unchanged at both corpus sizes (387.7 B at 100k, 385.0 B at 300k). A path held in a
+  `FastFind.SQLite` store is still folded on Windows, where it is the store's only source of
+  separator-insensitive identity.
 - **The Unix engine could not pass an exclusion list to its monitor**, because
   `StartMonitoringAsync` never filled the field. It now carries the list the index was built with.
 - **A Unix refresh re-indexed exactly what the index had excluded.** `RefreshIndexAsync` built its
