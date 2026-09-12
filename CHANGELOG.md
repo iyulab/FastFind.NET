@@ -49,6 +49,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The published performance figures are now sourced, and the ones that were not are withdrawn.**
+  `docs/BENCHMARKS.md` and the README carried numbers with no command in the repository that
+  reproduces them — SIMD at 1,877,459 ops/sec, enumeration at 31,073 files/sec and "30–60× faster
+  than the standard API", search at 1,680,631 ops/sec, 439 bytes per operation, and an industry
+  comparison resting on the enumeration figure. Two of them had already been measured and
+  contradicted: the SIMD matcher is **3.9× slower** than `string.Contains` compared like for like,
+  and string interning saves a few per cent rather than the 60–80% claimed for years. The README
+  also published one set of figures for all three platforms, though only Windows was ever measured.
+  Every figure that remains names the command and the date that produced it, the withdrawn ones are
+  listed with the reason, and the four failing enumeration assertions are published as failing
+  rather than having their targets moved.
+
 - **An exclusion matches whole path segments, never a substring.** On Windows the comparison was a
   case-insensitive substring of the full path, so `temp` excluded `C:\attempts` and
   `template.docx`, and `.git` excluded `.github`. An entry is now either a fully qualified path,

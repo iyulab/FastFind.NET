@@ -17,8 +17,9 @@ Ultra-high performance cross-platform file search library for .NET 10
 
 ## Key Features
 
-- **Cross-Platform SIMD**: Vector256/Vector128 auto-dispatch (AVX2, SSE2, NEON) — 1.87M ops/sec
-- **NTFS change-journal enumeration** (Windows, administrator): 31K+ files/sec NTFS enumeration, 30x faster than standard APIs
+- **Cross-Platform SIMD**: Vector256/Vector128 auto-dispatch (AVX2, SSE2, NEON)
+- **NTFS change-journal enumeration** (Windows, administrator): 136,000–177,000 records/sec measured
+  here; sizes and timestamps are opt-in, because a journal record carries neither
 - **Parallel BFS Enumeration** (Linux/macOS): Channel-based depth-aware parallel traversal
 - **Real-Time Monitoring**: USN Journal (Windows) / inotify (Linux) / FSEvents (macOS)
 - **Disk-Backed Index**: Keep the index in SQLite instead of memory — footprint stays flat as the corpus grows
@@ -104,12 +105,23 @@ one shape that is not supported.
 
 ## Performance
 
-| Metric | Windows | Linux | macOS |
-|--------|---------|-------|-------|
-| SIMD String Matching | 1.87M ops/sec | 1.87M ops/sec | 1.87M ops/sec |
-| File Enumeration | 31K files/sec (MFT) | Channel BFS parallel | Channel BFS parallel |
-| Search Operations | 1.68M ops/sec | 1.68M ops/sec | 1.68M ops/sec |
-| Memory per Op | 439 bytes | 439 bytes | 439 bytes |
+What an in-memory index retains per entry, measured on two corpus sizes with
+`dotnet run -c Release --project src/FastFind.Benchmarks -- --memory-retention`:
+
+| Index | 100,000 entries | 300,000 entries |
+|---|---|---|
+| Windows | 387.7 B | 385.0 B |
+| Unix | 371.2 B | 379.7 B |
+
+At one file per directory — a shape that gives interning nothing to share — both roughly double.
+
+The elevated Windows provider enumerates the NTFS change journal at **136,000–177,000 records/sec**
+here, against a 200,000 target the suite asserts and does not meet. Sizes and timestamps are opt-in
+(`CollectFileMetadata`) because a journal record carries neither.
+
+Every published figure, the command that reproduces it, and the claims that were withdrawn for
+having no reproducible source are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Figures are from one
+machine.
 
 ## Platform Support
 
