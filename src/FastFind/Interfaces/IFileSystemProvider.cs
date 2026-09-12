@@ -183,6 +183,12 @@ public class MonitoringOptions
     /// at or under it, anything else excludes a run of whole segments, and there are no wildcards.
     /// See <see cref="Models.PathExclusion"/>.
     /// </summary>
+    /// <remarks>
+    /// A rename that crosses the edge of this list is reported as what it is from the index's side —
+    /// out of an included path is a deletion of the path that was there, into one is a creation —
+    /// so an excluded destination does not leave a stale entry behind. See
+    /// <see cref="Models.FileChangeScope"/>.
+    /// </remarks>
     public IList<string> ExcludedPaths { get; set; } = new List<string>();
 }
 

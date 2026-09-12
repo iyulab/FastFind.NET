@@ -140,6 +140,13 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private DateTime _lastSearchTime;
     private bool _disposed;
 
+    /// <summary>
+    /// The options the index was last built with, kept so that monitoring and refreshing stay
+    /// inside the same boundary the indexing run drew. Without it a refresh re-enumerated with an
+    /// empty exclusion list and pulled back exactly what the index had been told to leave out.
+    /// </summary>
+    private IndexingOptions? _currentIndexingOptions;
+
     /// <inheritdoc/>
     public event EventHandler<IndexingProgressEventArgs>? IndexingProgressChanged;
 
@@ -191,6 +198,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
         }
 
         _isIndexing = true;
+        _currentIndexingOptions = options;
         _indexingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var linkedToken = _indexingCts.Token;
         var stopwatch = Stopwatch.StartNew();
@@ -594,12 +602,23 @@ internal class UnixSearchEngineImpl : ISearchEngine
             }
         }
 
-        // Re-enumerate the locations
+        // Re-enumerate the locations the way the index was built. Carrying the original options is
+        // the whole point: a refresh that made up its own would re-index what the index excluded.
+        // An engine that has never indexed has nothing to carry, so it falls back to the defaults
+        // rather than to a list this method invents.
+        var built = _currentIndexingOptions ?? new IndexingOptions();
         var options = new IndexingOptions
         {
-            IncludeHidden = true,
-            ExcludedPaths = new List<string>(),
-            ExcludedExtensions = new List<string>()
+            ExcludedPaths = built.ExcludedPaths,
+            ExcludedExtensions = built.ExcludedExtensions,
+            IncludeHidden = built.IncludeHidden,
+            IncludeSystem = built.IncludeSystem,
+            MaxFileSize = built.MaxFileSize,
+            MaxDepth = built.MaxDepth,
+            FollowSymlinks = built.FollowSymlinks,
+            CollectFileMetadata = built.CollectFileMetadata,
+            ParallelThreads = built.ParallelThreads,
+            BatchSize = built.BatchSize
         };
 
         long refreshed = 0;
@@ -652,13 +671,16 @@ internal class UnixSearchEngineImpl : ISearchEngine
         _monitoringCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _isMonitoring = true;
 
+        // Monitoring watches the same boundary the index was built inside: a change under a path
+        // the indexing run excluded must not put that path back.
         var options = new MonitoringOptions
         {
             IncludeSubdirectories = true,
             MonitorCreation = true,
             MonitorModification = true,
             MonitorDeletion = true,
-            MonitorRename = true
+            MonitorRename = true,
+            ExcludedPaths = _currentIndexingOptions?.ExcludedPaths ?? new List<string>()
         };
 
         _monitoringTask = Task.Run(async () =>

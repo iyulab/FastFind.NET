@@ -576,7 +576,9 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
 
             await foreach (var change in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                yield return change;
+                var scoped = FileChangeScope.RestrictToIncluded(change, options.ExcludedPaths);
+                if (scoped is not null)
+                    yield return scoped;
             }
         }
         finally

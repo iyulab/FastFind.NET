@@ -20,6 +20,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dispatched through it.
 - **On Linux and macOS an exclusion matched a directory that merely started with it**: `/data/logs`
   excluded `/data/logsx`. Exclusions are also tested against files now, not only directories.
+- **Change monitoring ignored `MonitoringOptions.ExcludedPaths` on three of the four monitors.** The
+  change-journal provider and both Unix providers never read the list, so a tree left out of the
+  index was pulled back into it the moment anything under it changed. All four now read it through
+  `PathExclusion`.
+- **A file renamed into an excluded directory left its old path in the index.** A monitor that
+  filters on a change's new path drops that event entirely, and the entry for the path the file no
+  longer has stays. A rename across the edge of the monitored locations — or of the exclusion list —
+  is now reported as what it is from the index's side: leaving is a deletion of the old path,
+  arriving is a creation. The fold existed only in the change-journal provider, only for locations;
+  it is now `FileChangeScope` in the core package and every monitor uses it.
+- **The Unix engine could not pass an exclusion list to its monitor**, because
+  `StartMonitoringAsync` never filled the field. It now carries the list the index was built with.
+- **A Unix refresh re-indexed exactly what the index had excluded.** `RefreshIndexAsync` built its
+  own indexing options with an empty exclusion list and hidden files forced on, because the engine
+  kept none of the options it had indexed with; it now retains and reuses them, as the Windows
+  engine already did.
 
 ### Changed
 

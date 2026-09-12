@@ -563,9 +563,10 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 
                 while (changeQueue.TryDequeue(out var change))
                 {
-                    if (ShouldIncludeChange(change.NewPath, options))
+                    var scoped = FileChangeScope.RestrictToIncluded(change, options.ExcludedPaths);
+                    if (scoped is not null)
                     {
-                        yield return change;
+                        yield return scoped;
                         lastChangeTime = currentTime;
                     }
                 }
@@ -780,9 +781,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     {
         queue.Enqueue(new FileChangeEventArgs(FileChangeType.Renamed, newPath, null, oldPath));
     }
-
-    private static bool ShouldIncludeChange(string path, MonitoringOptions options) =>
-        !PathExclusion.IsExcluded(path, options.ExcludedPaths);
 
     private void ThrowIfDisposed()
     {

@@ -340,7 +340,8 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     /// started again. Every change is placed on disk by asking Windows where its parent directory
     /// is now (<see cref="FileIdDirectoryPaths"/>); a change whose parent no longer exists is not
     /// reported. A rename is reported once, with both paths; one that crosses the edge of the
-    /// monitored locations is reported as the deletion or creation it is from inside them.
+    /// monitored locations — or of what <see cref="MonitoringOptions.ExcludedPaths"/> leaves out —
+    /// is reported as the deletion or creation it is from inside that boundary.
     /// </remarks>
     public async IAsyncEnumerable<FileChangeEventArgs> MonitorChangesAsync(
         IEnumerable<string> locations,
@@ -363,7 +364,10 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             if (record.IsDirectory && !options.MonitorDirectories)
                 continue;
 
-            var change = ScopeToLocations(translator.Translate(record), locationFilters);
+            var change = FileChangeScope.RestrictToIncluded(
+                ScopeToLocations(translator.Translate(record), locationFilters),
+                options.ExcludedPaths);
+
             if (change is not null && IsMonitored(change.ChangeType, options))
                 yield return change;
         }
@@ -371,25 +375,11 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
 
     /// <summary>
     /// Restricts a change to the monitored locations. A rename out of them is, from inside, a
-    /// deletion; a rename into them is a creation.
+    /// deletion; a rename into them is a creation — the fold itself lives in
+    /// <see cref="FileChangeScope"/>, which the exclusion list uses too.
     /// </summary>
-    internal static FileChangeEventArgs? ScopeToLocations(FileChangeEventArgs? change, string[] locationFilters)
-    {
-        if (change is null) return null;
-
-        var inside = IsPathInLocations(change.NewPath, locationFilters);
-        if (change.ChangeType != FileChangeType.Renamed || change.OldPath is null)
-            return inside ? change : null;
-
-        var wasInside = IsPathInLocations(change.OldPath, locationFilters);
-        return (wasInside, inside) switch
-        {
-            (true, true) => change,
-            (true, false) => new FileChangeEventArgs(FileChangeType.Deleted, change.OldPath),
-            (false, true) => new FileChangeEventArgs(FileChangeType.Created, change.NewPath),
-            _ => null,
-        };
-    }
+    internal static FileChangeEventArgs? ScopeToLocations(FileChangeEventArgs? change, string[] locationFilters) =>
+        FileChangeScope.Restrict(change, path => IsPathInLocations(path, locationFilters));
 
     private static bool IsMonitored(FileChangeType type, MonitoringOptions options) => type switch
     {
