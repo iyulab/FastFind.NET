@@ -109,8 +109,9 @@ public class StopStartLifecycleTests : IDisposable
         var options = new IndexingOptions
         {
             SpecificDirectories = [_testDir],
-            // Note: Windows engine uses WindowsSearchEngineOptions.EnableRealtimeMonitoring (default true)
-            // EnableMonitoring here is for Unix engine compatibility; Windows ignores it.
+            // Monitoring needs both WindowsSearchEngineOptions.EnableRealtimeMonitoring (default
+            // true) and this option, which the engine does read; leaving it at its default is what
+            // starts monitoring here.
         };
 
         // First cycle
