@@ -10,8 +10,8 @@
 
   <!-- Package Information -->
   <PropertyGroup>
-    <Version>2.3.0</Version>
-    <Description>Lightning-fast cross-platform file search library with MFT direct access, SQLite persistence, and USN Journal real-time sync</Description>
+    <Version>2.4.0</Version>
+    <Description>Cross-platform file search library for .NET: SIMD-accelerated matching, a compact in-memory index, optional SQLite persistence, and real-time change monitoring — on Windows via the NTFS change journal, on Linux and macOS via the platform watchers</Description>
     <PackageTags>file-search;indexing;fast;cross-platform;ntfs;mft;sqlite;usn-journal</PackageTags>
     <PackageProjectUrl>https://github.com/iyulab/FastFind.NET</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iyulab/FastFind.NET</RepositoryUrl>

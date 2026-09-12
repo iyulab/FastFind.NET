@@ -4,7 +4,7 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.4.0] - 2026-09-12
 
 ### Fixed
 
@@ -78,6 +78,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   defaults have always been honoured.
 - `PathExclusion` is public: a provider outside this library reads an exclusion list the same way
   the built-in ones do.
+- **The NuGet package description said "MFT direct access".** The Windows provider enumerates the
+  NTFS change journal (`FSCTL_ENUM_USN_DATA`); it does not read the Master File Table, which is why
+  sizes and timestamps are opt-in through `CollectFileMetadata`. The description now says what the
+  packages do.
 
 ## [2.3.0] - 2026-09-11
 
