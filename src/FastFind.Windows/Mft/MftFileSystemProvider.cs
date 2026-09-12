@@ -227,11 +227,8 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             return false;
 
         // Check excluded paths
-        foreach (var excludedPath in options.ExcludedPaths)
-        {
-            if (file.FullPath.Contains(excludedPath, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
+        if (PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
+            return false;
 
         // Check excluded extensions
         if (!string.IsNullOrEmpty(file.Extension) &&

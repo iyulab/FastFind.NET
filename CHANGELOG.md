@@ -6,6 +6,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An exclusion written with forward slashes was ignored while indexing on Windows.** Six places
+  compared `ExcludedPaths`, in three different ways, and none of them treated `/` and `\` as the same
+  separator — so `C:/proj/bin` excluded nothing, while the same spelling in a *search* query worked.
+  One predicate, `PathExclusion`, now answers for all of them: the standard Windows provider
+  (indexing, its second filter, and change monitoring), the change-journal provider, the in-memory
+  index's file-system fallback scan, both Unix providers, and `SearchQuery.ExcludedPaths` through
+  `SearchQueryEvaluator`.
+- **The asynchronous Windows enumerator never applied the exclusion list at all** — it checked
+  hidden, system and size only, so an excluded path reached the index whenever the provider
+  dispatched through it.
+- **On Linux and macOS an exclusion matched a directory that merely started with it**: `/data/logs`
+  excluded `/data/logsx`. Exclusions are also tested against files now, not only directories.
+
+### Changed
+
+- **An exclusion matches whole path segments, never a substring.** On Windows the comparison was a
+  case-insensitive substring of the full path, so `temp` excluded `C:\attempts` and
+  `template.docx`, and `.git` excluded `.github`. An entry is now either a fully qualified path,
+  which excludes what sits at or under it, or a name or relative path (`bin`, `src/bin`), which
+  excludes any run of whole segments that spells it. Files that a substring match used to drop are
+  indexed again.
+- **`SearchQuery.ExcludedPaths` accepts a bare name and rejects the excluded directory itself.** It
+  was tested against the item's directory with at-or-under semantics only, so `bin` excluded nothing
+  and the excluded directory's own entry was still returned.
+- **`IndexingOptions.ExcludedPaths` is empty by default.** It held glob patterns — `**/temp/**`,
+  `**/bin/**`, `**/node_modules/**` and five more — and nothing in the library has ever interpreted
+  `**`, on any platform, so they excluded nothing. They are removed rather than made to work:
+  activating them would have silently dropped `bin`, `obj`, `temp`, `cache` and `packages` from
+  every index that kept the defaults. No result changes. `ExcludedExtensions` is unaffected — those
+  defaults have always been honoured.
+- `PathExclusion` is public: a provider outside this library reads an exclusion list the same way
+  the built-in ones do.
+
 ## [2.3.0] - 2026-09-11
 
 ### Changed

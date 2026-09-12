@@ -177,6 +177,7 @@ public class StringPoolSpanTests
     #region Performance Tests
 
     [Fact]
+    [Trait("Category", "Performance")]
     public void InternFromSpan_CacheHit_Performance()
     {
         // Arrange - Pre-populate cache
@@ -268,7 +269,12 @@ public class StringPoolSpanTests
         ratio.Should().BeGreaterThan(0.3, "Span-based interning should not be drastically slower than string");
     }
 
+    // Asserts a rate over 500,000 interns against a static pool other collections are using
+    // concurrently, so it belongs in the performance category with its neighbours — in the
+    // functional run it measured 83 ops/sec against its 100,000 floor and took 100 minutes, while
+    // the same test alone finishes in well under a second.
     [Fact]
+    [Trait("Category", "Performance")]
     public void InternFromSpan_MftSimulation_MeasurePerformance()
     {
         // Simulate MFT parsing scenario with typical filenames

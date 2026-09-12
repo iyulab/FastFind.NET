@@ -568,9 +568,8 @@ internal class WindowsSearchIndex : ISearchIndex
                             continue;
                     }
 
-                    // Skip excluded paths
-                    if (query.ExcludedPaths.Any(excluded =>
-                        fullPath.Contains(excluded, StringComparison.OrdinalIgnoreCase)))
+                    // Skip excluded paths, by the same definition the evaluator applies
+                    if (PathExclusion.IsExcluded(fullPath, query.ExcludedPaths))
                         continue;
 
                     var fileItem = GetFileItemSafely(fullPath);
@@ -683,9 +682,8 @@ internal class WindowsSearchIndex : ISearchIndex
             if (excludePaths.Contains(fullPath))
                 continue;
 
-            // Skip excluded paths
-            if (query.ExcludedPaths.Any(excluded =>
-                fullPath.Contains(excluded, StringComparison.OrdinalIgnoreCase)))
+            // Skip excluded paths, by the same definition the evaluator applies
+            if (PathExclusion.IsExcluded(fullPath, query.ExcludedPaths))
                 continue;
 
             FileItem? fileItem = GetFileItemSafely(fullPath);

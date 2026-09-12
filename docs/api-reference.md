@@ -105,6 +105,24 @@ public class SearchQuery
 }
 ```
 
+### Exclusions
+
+`IndexingOptions.ExcludedPaths`, `MonitoringOptions.ExcludedPaths` and `SearchQuery.ExcludedPaths`
+are all read by one predicate, `PathExclusion`, so an exclusion means the same thing wherever it is
+given:
+
+```csharp
+PathExclusion.IsExcluded(@"C:\proj\bin\app.dll", [@"C:/proj/bin"]);  // true — separators fold on Windows
+PathExclusion.IsExcluded(@"C:\proj\bin\app.dll", ["bin"]);           // true — a whole segment
+PathExclusion.IsExcluded(@"C:\attempts\notes.txt", ["temp"]);        // false — never inside a segment
+PathExclusion.IsExcluded(@"C:\proj\bin\app.dll", ["**/bin/**"]);     // false — no wildcards
+```
+
+A fully qualified entry excludes what sits at or under it, and the excluded path's own entry with
+it. Anything else excludes any run of whole segments that spells it. Paths are compared as the host
+spells them — case-insensitively on Windows, where `/` and `\` are the same separator — and are
+never rewritten.
+
 ## Platform APIs
 
 ### Windows — NTFS change journal

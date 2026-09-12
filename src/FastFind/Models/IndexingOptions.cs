@@ -21,13 +21,21 @@ public class IndexingOptions
     public IList<string> SpecificDirectories { get; set; } = new List<string>();
 
     /// <summary>
-    /// Paths to exclude from indexing (supports wildcards)
+    /// Paths to leave out of the index. Empty by default — what is worth excluding is the
+    /// consuming application's policy, not this library's.
     /// </summary>
-    public IList<string> ExcludedPaths { get; set; } = new List<string>
-    {
-        "**/temp/**", "**/cache/**", "**/.git/**", "**/node_modules/**",
-        "**/bin/**", "**/obj/**", "**/.vs/**", "**/packages/**"
-    };
+    /// <remarks>
+    /// An entry is either a fully qualified path, which excludes what sits at or under it, or a
+    /// name or relative path, which excludes any run of whole segments that spells it. There are no
+    /// wildcards. See <see cref="PathExclusion"/> for the full definition.
+    /// <para>
+    /// This list held glob patterns (<c>**/bin/**</c> and friends) until 2.4.0. Nothing has ever
+    /// interpreted <c>**</c>, on any platform, so they excluded nothing; they are gone rather than
+    /// made to work, which would have silently dropped <c>bin</c>, <c>obj</c> and <c>packages</c>
+    /// from every index that kept the defaults.
+    /// </para>
+    /// </remarks>
+    public IList<string> ExcludedPaths { get; set; } = new List<string>();
 
     /// <summary>
     /// File extensions to exclude from indexing

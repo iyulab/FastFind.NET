@@ -284,13 +284,10 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         if (options.MaxFileSize.HasValue && file.Size > options.MaxFileSize.Value)
             return false;
 
-        // Check excluded paths - SIMD 최적화 문자열 검색 사용
-        var fullPathSpan = file.FullPath.AsSpan();
-        foreach (var excludedPath in options.ExcludedPaths)
-        {
-            if (SIMDStringMatcher.ContainsVectorized(fullPathSpan, excludedPath.AsSpan()))
-                return false;
-        }
+        // Check excluded paths. The full path is read only when there is an exclusion to test it
+        // against: composing it allocates, and most indexing runs exclude nothing.
+        if (options.ExcludedPaths.Count > 0 && PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
+            return false;
 
         // Check excluded extensions - 빠른 비교
         if (!string.IsNullOrEmpty(file.Extension))
@@ -734,11 +731,8 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
             return false;
 
         // Check excluded paths
-        foreach (var excludedPath in options.ExcludedPaths)
-        {
-            if (file.FullPath.Contains(excludedPath, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
+        if (PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
+            return false;
 
         // Check excluded extensions
         if (!string.IsNullOrEmpty(file.Extension) &&
@@ -787,16 +781,8 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         queue.Enqueue(new FileChangeEventArgs(FileChangeType.Renamed, newPath, null, oldPath));
     }
 
-    private static bool ShouldIncludeChange(string path, MonitoringOptions options)
-    {
-        foreach (var excludedPath in options.ExcludedPaths)
-        {
-            if (path.Contains(excludedPath, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        return true;
-    }
+    private static bool ShouldIncludeChange(string path, MonitoringOptions options) =>
+        !PathExclusion.IsExcluded(path, options.ExcludedPaths);
 
     private void ThrowIfDisposed()
     {

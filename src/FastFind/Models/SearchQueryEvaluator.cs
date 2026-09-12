@@ -171,9 +171,13 @@ public static class SearchQueryEvaluator
             if (!anyMatch) return false;
         }
 
-        foreach (var excluded in query.ExcludedPaths)
+        // Exclusions are tested against the whole path, so an excluded directory's own entry is
+        // excluded too, and a bare name matches any whole segment. PathExclusion is the definition.
+        if (query.ExcludedPaths.Count > 0 &&
+            item.WithFullPath(query.ExcludedPaths,
+                static (path, excluded) => PathExclusion.IsExcluded(path, excluded)))
         {
-            if (IsUnder(directory, excluded, includeSubdirectories: true)) return false;
+            return false;
         }
 
         return true;
@@ -192,15 +196,9 @@ public static class SearchQueryEvaluator
         if (string.IsNullOrEmpty(scopeRoot)) return true;
         if (string.IsNullOrEmpty(directoryPath)) return false;
 
-        var directory = TrimTrailingSeparator(FoldSeparators(directoryPath));
-        var root = TrimTrailingSeparator(FoldSeparators(scopeRoot));
-
-        if (directory.Equals(root, PathComparison)) return true;
-        if (!includeSubdirectories) return false;
-
-        return directory.Length > root.Length
-               && directory.StartsWith(root, PathComparison)
-               && IsSeparator(directory[root.Length]);
+        return includeSubdirectories
+            ? PathExclusion.IsAtOrUnder(directoryPath, scopeRoot)
+            : PathExclusion.SamePath(directoryPath, scopeRoot);
     }
 
     private static bool MatchesText(in FastFileItem item, SearchQuery query, Regex? textMatcher)
@@ -229,12 +227,4 @@ public static class SearchQueryEvaluator
     private static bool HasWildcard(string? text) =>
         !string.IsNullOrEmpty(text) && (text.Contains('*') || text.Contains('?'));
 
-    private static string TrimTrailingSeparator(string path) => path.TrimEnd('\\', '/');
-
-    // string.Replace returns the same instance when there is nothing to replace, so the common case
-    // — a Windows path that already uses backslashes — allocates nothing.
-    private static string FoldSeparators(string path) =>
-        OperatingSystem.IsWindows() ? path.Replace('/', '\\') : path;
-
-    private static bool IsSeparator(char c) => c is '\\' or '/';
 }

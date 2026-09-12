@@ -286,6 +286,12 @@ internal sealed class AsyncFileEnumerator : IAsyncDisposable
         if (options.MaxFileSize.HasValue && file.Size > options.MaxFileSize.Value)
             return false;
 
+        // This enumerator honoured hidden, system and size but never the exclusion list, so an
+        // excluded path reached the index through it whichever way the provider dispatched.
+        if (options.ExcludedPaths.Count > 0 &&
+            FastFind.Models.PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
+            return false;
+
         return true;
     }
 

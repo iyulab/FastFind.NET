@@ -178,7 +178,10 @@ public class MonitoringOptions
     public TimeSpan DebounceInterval { get; set; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// Paths to exclude from monitoring
+    /// Paths to leave out of change monitoring, read the same way as
+    /// <see cref="Models.IndexingOptions.ExcludedPaths"/>: a fully qualified path excludes what sits
+    /// at or under it, anything else excludes a run of whole segments, and there are no wildcards.
+    /// See <see cref="Models.PathExclusion"/>.
     /// </summary>
     public IList<string> ExcludedPaths { get; set; } = new List<string>();
 }

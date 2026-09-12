@@ -181,6 +181,48 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
     }
 
     [Fact]
+    public async Task EnumerateFilesAsync_ShouldExcludeABareNameAsAWholeSegment()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+        options.ExcludedPaths = new List<string> { "sub1" };
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        var files = items.Where(i => !i.IsDirectory).ToList();
+        files.Should().NotContain(i => i.Name == "file3.txt", "sub1 is excluded by name");
+        files.Should().NotContain(i => i.Name == "file4.log", "sub1a lies under it");
+        files.Should().Contain(i => i.Name == "file1.txt", "the root itself is not excluded");
+    }
+
+    [Fact]
+    public async Task EnumerateFilesAsync_ShouldNotExcludeADirectoryThatMerelyStartsWithTheEntry()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var provider = CreateProvider();
+        var options = CreateOptions();
+        // "sub" is a prefix of "sub1" and "sub2" but names neither: the comparison this replaces
+        // was a bare StartsWith, so it excluded both.
+        options.ExcludedPaths = new List<string> { Path.Combine(_fixture.RootPath, "sub") };
+
+        var items = new List<FileItem>();
+        await foreach (var item in provider.EnumerateFilesAsync(new[] { _fixture.RootPath }, options))
+        {
+            items.Add(item);
+        }
+
+        var files = items.Where(i => !i.IsDirectory).ToList();
+        files.Should().Contain(i => i.Name == "file3.txt");
+    }
+
+    [Fact]
     public async Task EnumerateFilesAsync_ShouldRespectMaxFileSize()
     {
         if (!OperatingSystem.IsLinux()) return;

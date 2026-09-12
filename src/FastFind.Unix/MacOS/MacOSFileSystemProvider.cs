@@ -288,7 +288,7 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                     var subDir = (DirectoryInfo)entry;
 
                     // Check excluded paths
-                    if (IsExcludedPath(subDir.FullName, options.ExcludedPaths))
+                    if (PathExclusion.IsExcluded(subDir.FullName, options.ExcludedPaths))
                         continue;
 
                     // Write directory item
@@ -313,6 +313,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                 }
                 else if (entry is FileInfo fileInfo)
                 {
+                    // Check excluded paths — a file can be named by an exclusion too
+                    if (PathExclusion.IsExcluded(fileInfo.FullName, options.ExcludedPaths))
+                        continue;
+
                     // Check extension exclusions
                     if (options.ExcludedExtensions.Count > 0 &&
                         !string.IsNullOrEmpty(fileInfo.Extension) &&
@@ -732,31 +736,6 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
         {
             return 0;
         }
-    }
-
-    private static bool IsExcludedPath(string path, IList<string> excludedPaths)
-    {
-        foreach (var excluded in excludedPaths)
-        {
-            if (string.IsNullOrEmpty(excluded))
-                continue;
-
-            // Exact path prefix match (most common usage: "/path/to/exclude")
-            if (path.StartsWith(excluded, StringComparison.Ordinal))
-                return true;
-
-            // Path segment match for bare names (e.g., "node_modules", ".git")
-            // Matches /path/to/node_modules or /path/to/node_modules/...
-            if (!excluded.Contains('/'))
-            {
-                var segment = "/" + excluded + "/";
-                var trailing = "/" + excluded;
-                if (path.Contains(segment, StringComparison.Ordinal) ||
-                    path.EndsWith(trailing, StringComparison.Ordinal))
-                    return true;
-            }
-        }
-        return false;
     }
 
     private static void TryWriteChange(ChannelWriter<FileChangeEventArgs> writer, FileChangeType changeType, string path)

@@ -286,6 +286,34 @@ public class SearchQueryEvaluatorTests
     }
 
     [Fact]
+    public void ExcludedPaths_Should_Reject_The_Excluded_Directorys_Own_Entry()
+    {
+        var directory = Item(@"C:\docs\sub");
+
+        var query = new SearchQuery { BasePath = @"C:\docs", ExcludedPaths = { @"C:\docs\sub" } };
+
+        Matches(directory, query).Should().BeFalse("an excluded path is excluded, not only its contents");
+    }
+
+    [Theory]
+    [InlineData(@"C:\proj\bin\app.dll", false)]
+    [InlineData(@"C:\proj\binaries\app.dll", true)]  // a name matches whole segments, not substrings
+    public void ExcludedPaths_Should_Accept_A_Bare_Name_As_A_Segment(string fullPath, bool expected)
+    {
+        var query = new SearchQuery { ExcludedPaths = { "bin" } };
+
+        Matches(Item(fullPath), query).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ExcludedPaths_Should_Fold_Separators_On_Windows()
+    {
+        var item = Item(@"C:\docs\sub\report.txt");
+
+        Matches(item, new SearchQuery { ExcludedPaths = { "C:/docs/sub" } }).Should().BeFalse();
+    }
+
+    [Fact]
     public void An_Unscoped_Query_Should_Match_Anywhere()
     {
         Matches(Item(@"C:\anywhere\at\all.txt"), new SearchQuery()).Should().BeTrue();

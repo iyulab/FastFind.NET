@@ -73,6 +73,14 @@ var options = new IndexingOptions
 };
 ```
 
+**How `ExcludedPaths` is read.** An entry is either a fully qualified path, which excludes what sits
+at or under it (`C:\proj\bin`, `/data/logs`), or a name or relative path, which excludes any run of
+whole segments that spells it (`bin`, `src/bin`). A name never matches inside a segment, so `temp`
+leaves `attempts` and `template.docx` alone. **There are no wildcards** — `**/bin/**` is a literal
+name no path contains. On Windows `/` and `\` are equivalent and comparison ignores case, so
+`C:/proj/bin` and `C:\proj\bin` name the same directory; elsewhere comparison is case-sensitive and
+a backslash is an ordinary file name character. The list is empty by default.
+
 ### SearchQuery
 
 ```csharp
