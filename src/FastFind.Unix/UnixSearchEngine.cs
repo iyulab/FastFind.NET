@@ -680,7 +680,10 @@ internal class UnixSearchEngineImpl : ISearchEngine
             MonitorModification = true,
             MonitorDeletion = true,
             MonitorRename = true,
-            ExcludedPaths = _currentIndexingOptions?.ExcludedPaths ?? new List<string>()
+            // Copied, not shared: the Windows engine copies here too, and a consumer that keeps
+            // mutating the list it passed to StartIndexingAsync should not be steering a running
+            // monitor from one platform and not the other.
+            ExcludedPaths = _currentIndexingOptions?.ExcludedPaths.ToList() ?? new List<string>()
         };
 
         _monitoringTask = Task.Run(async () =>
