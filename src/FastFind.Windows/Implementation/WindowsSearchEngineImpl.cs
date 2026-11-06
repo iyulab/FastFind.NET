@@ -1,4 +1,5 @@
 ﻿using FastFind.Interfaces;
+using FastFind.Indexing;
 using FastFind.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -82,10 +83,9 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     private bool _disposed = false;
 
     // Enhanced performance counters with atomic operations
-    private long _totalSearches = 0;
-    private long _totalSearchTime = 0;
+    // What the searches answered so far have measured: count, matches, and how long they took.
+    private readonly SearchTimingTally _searchTiming = new();
     private long _totalIndexedFiles = 0;
-    private long _averageSearchLatency = 0;
 
     public WindowsSearchEngineImpl(
         IFileSystemProvider fileSystemProvider,
@@ -378,10 +378,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 stopwatch.Stop();
 
                 // Update statistics with atomic operations
-                Interlocked.Increment(ref _totalSearches);
-                Interlocked.Add(ref _totalSearchTime, stopwatch.ElapsedMilliseconds);
-                Interlocked.Exchange(ref _averageSearchLatency,
-                    Interlocked.Read(ref _totalSearchTime) / Math.Max(1, Interlocked.Read(ref _totalSearches)));
+                _searchTiming.Record(stopwatch.Elapsed, totalMatches);
 
                 var searchTime = stopwatch.Elapsed;
                 var hasMoreResults = query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value;
@@ -527,19 +524,21 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         return await Task.Run(() =>
         {
-            var totalSearches = Interlocked.Read(ref _totalSearches);
-            var totalTime = Interlocked.Read(ref _totalSearchTime);
-            var averageTime = totalSearches > 0 ? TimeSpan.FromMilliseconds(totalTime / (double)totalSearches) : TimeSpan.Zero;
+            var timing = _searchTiming.Read();
 
-            // .NET 10: Enhanced statistics with performance metrics
             return new SearchStatistics
             {
-                TotalSearches = totalSearches,
-                AverageSearchTime = averageTime,
-                TotalSearchTime = TimeSpan.FromMilliseconds(totalTime),
-                IndexHits = totalSearches,
+                TotalSearches = timing.Searches,
+                TotalMatches = timing.Matches,
+                AverageSearchTime = timing.Average,
+                FastestSearchTime = timing.Fastest,
+                SlowestSearchTime = timing.Slowest,
+                TotalSearchTime = timing.Total,
+                // Not measured here: whether the index or a live scan answered each search is the index's
+                // knowledge. Every search is counted as an index search and none as a scan.
+                IndexHits = timing.Searches,
                 FileSystemScans = 0,
-                LastSearch = DateTime.Now
+                LastSearch = timing.LastSearchUtc
             };
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -551,9 +550,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
         await _searchIndex.ClearAsync(cancellationToken).ConfigureAwait(false);
 
-        Interlocked.Exchange(ref _totalSearches, 0);
-        Interlocked.Exchange(ref _totalSearchTime, 0);
-        Interlocked.Exchange(ref _averageSearchLatency, 0);
+        _searchTiming.Reset();
         Interlocked.Exchange(ref _totalIndexedFiles, 0);
 
         _searchStats.Clear();

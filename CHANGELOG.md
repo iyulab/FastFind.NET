@@ -41,6 +41,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Both now report the passes that have run and how long the last one took.
 - **A pass stopped before it had begun left no trace.** It was started on a token that was already cancelled, so the
   Windows engine never ran it and never released what it held. It now runs, ends as `Cancelled`, and cleans up.
+- **Search statistics were not measurements.** The Unix engine reported a 10 ms average, a 1 ms fastest and a
+  100 ms slowest search as constants - before any search had run, and whatever the searches had taken. The Windows
+  engine summed whole milliseconds, so a search faster than a millisecond (the usual case when a query finds its answer
+  early) added nothing, never counted matches, and returned the time of the question as the time of the last search.
+  Both engines now keep the same tally - count, matches, total, fastest, slowest, in ticks - report zero when nothing has
+  been measured, and `SearchStatistics.LastSearch` is the time of the last search in UTC on both (the Windows engine
+  reported local time).
 - **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
   one attribute a file carries when it has no other, which is what a file with its archive bit cleared
   reports; the walk built its list of attributes to skip starting from it.

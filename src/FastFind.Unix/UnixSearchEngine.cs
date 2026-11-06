@@ -1,4 +1,5 @@
 using FastFind.Interfaces;
+using FastFind.Indexing;
 using FastFind.Models;
 using FastFind.Unix.Linux;
 using FastFind.Unix.MacOS;
@@ -134,8 +135,8 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private volatile bool _isIndexing;
     private volatile bool _isMonitoring;
     private long _totalIndexedFiles;
-    private long _totalSearches;
-    private long _totalMatches;
+    // What the searches answered so far have measured: count, matches, and how long they took.
+    private readonly SearchTimingTally _searchTiming = new();
     private TimeSpan _lastIndexingTime;
 
     // How the last pass that ended did end, for GetIndexingStatisticsAsync. One reference, replaced whole,
@@ -164,7 +165,6 @@ internal class UnixSearchEngineImpl : ISearchEngine
         _lastRun = new RunSummary(outcome, failed);
         Interlocked.Increment(ref _indexingOperations);
     }
-    private DateTime _lastSearchTime;
     private bool _disposed;
 
     /// <summary>
@@ -399,9 +399,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
             stopwatch.Stop();
 
             var totalMatches = results.Count;
-            Interlocked.Increment(ref _totalSearches);
-            Interlocked.Add(ref _totalMatches, totalMatches);
-            _lastSearchTime = DateTime.UtcNow;
+            _searchTiming.Record(stopwatch.Elapsed, totalMatches);
 
             // Apply MaxResults limit
             var limitedResults = query.MaxResults.HasValue
@@ -527,19 +525,21 @@ internal class UnixSearchEngineImpl : ISearchEngine
     {
         ThrowIfDisposed();
 
+        var timing = _searchTiming.Read();
+
         var stats = new SearchStatistics
         {
-            TotalSearches = Interlocked.Read(ref _totalSearches),
-            TotalMatches = Interlocked.Read(ref _totalMatches),
-            AverageSearchTime = TimeSpan.FromMilliseconds(10),
-            FastestSearchTime = TimeSpan.FromMilliseconds(1),
-            SlowestSearchTime = TimeSpan.FromMilliseconds(100),
-            TotalSearchTime = TimeSpan.Zero,
+            TotalSearches = timing.Searches,
+            TotalMatches = timing.Matches,
+            AverageSearchTime = timing.Average,
+            FastestSearchTime = timing.Fastest,
+            SlowestSearchTime = timing.Slowest,
+            TotalSearchTime = timing.Total,
             CacheHits = 0,
             CacheMisses = 0,
-            IndexHits = Interlocked.Read(ref _totalSearches),
+            IndexHits = timing.Searches,
             FileSystemScans = 0,
-            LastSearch = _lastSearchTime
+            LastSearch = timing.LastSearchUtc
         };
 
         return Task.FromResult(stats);
@@ -553,8 +553,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
         await _index.ClearAsync(cancellationToken).ConfigureAwait(false);
 
         Interlocked.Exchange(ref _totalIndexedFiles, 0);
-        Interlocked.Exchange(ref _totalSearches, 0);
-        Interlocked.Exchange(ref _totalMatches, 0);
+        _searchTiming.Reset();
     }
 
     /// <inheritdoc/>
