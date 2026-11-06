@@ -65,12 +65,19 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         };
         var channel = Channel.CreateBounded<FileItem>(channelOptions);
 
-        // 생산자 작업을 별도 태스크로 실행
+        // The producer belongs to this pass, not to the caller's token: a consumer that stops reading
+        // (a file cap, a stop request, disposal) must be able to end it. Linked to the caller's token so
+        // that cancelling from outside still ends it too.
+        using var passCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var passToken = passCancellation.Token;
+
+        // 생산자 작업을 별도 태스크로 실행. Not started with a token: the body must always run so that
+        // it always completes the channel.
         var producerTask = Task.Run(async () =>
         {
             try
             {
-                await ProduceFileItemsUltraFastAsync(locationArray, options, channel.Writer, cancellationToken).ConfigureAwait(false);
+                await ProduceFileItemsUltraFastAsync(locationArray, options, channel.Writer, passToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -85,7 +92,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
                 // 반드시 채널 완료 처리
                 try { channel.Writer.Complete(); } catch { }
             }
-        }, cancellationToken);
+        }, CancellationToken.None);
 
         try
         {
@@ -97,14 +104,19 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         }
         finally
         {
-            // 정리 작업 - 타임아웃으로 무한 대기 방지
+            // The pass is over, however the consumer left it. Cancel the producer and wait for it to
+            // finish — not for a second and then walk away, which left it parked on the full channel,
+            // holding its directories, while the next pass began beside it. Its work is cooperative
+            // (the walk checks the token on every entry, the channel writes take it), so this ends
+            // promptly; it does not swallow a producer that never ends.
+            passCancellation.Cancel();
             try
             {
-                await producerTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+                await producerTask.ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // 타임아웃이나 기타 예외 무시
+                _logger.LogDebug(ex, "Producer ended with an error while the pass was closing");
             }
         }
     }
@@ -184,32 +196,11 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         if (cancellationToken.IsCancellationRequested || !Directory.Exists(location))
             yield break;
 
-        var enumerationOptions = new System.IO.EnumerationOptions
-        {
-            IgnoreInaccessible = true,
-            RecurseSubdirectories = !options.MaxDepth.HasValue || options.MaxDepth.Value > 1,
-            ReturnSpecialDirectories = false,
-            AttributesToSkip = GetAttributesToSkip(options),
-            MaxRecursionDepth = options.MaxDepth ?? int.MaxValue
-        };
+        // One directory open at a time, excluded directories not entered: see DirectoryWalk.
+        var walk = new DirectoryWalk(options);
 
-        IEnumerable<string> entries;
-        try
+        foreach (var filePath in walk.Enumerate(location, cancellationToken))
         {
-            entries = Directory.EnumerateFileSystemEntries(location, "*", enumerationOptions);
-        }
-        catch
-        {
-            yield break;
-        }
-
-        var processedCount = 0;
-        foreach (var filePath in entries)
-        {
-            // 간단한 취소 체크 (5000개마다)
-            if (++processedCount % 5000 == 0 && cancellationToken.IsCancellationRequested)
-                yield break;
-
             var fileItem = CreateFileItemSync(filePath);
             if (fileItem != null && ShouldIncludeFile(fileItem, options))
             {
@@ -616,19 +607,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
             return false;
 
         return true;
-    }
-
-    private static FileAttributes GetAttributesToSkip(IndexingOptions options)
-    {
-        var attributesToSkip = FileAttributes.Normal;
-
-        if (!options.IncludeHidden)
-            attributesToSkip |= FileAttributes.Hidden;
-
-        if (!options.IncludeSystem)
-            attributesToSkip |= FileAttributes.System;
-
-        return attributesToSkip;
     }
 
     private static NotifyFilters GetNotifyFilters(MonitoringOptions options)
