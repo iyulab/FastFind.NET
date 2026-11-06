@@ -115,6 +115,12 @@ What an in-memory index retains per entry, measured on two corpus sizes with
 
 At one file per directory — a shape that gives interning nothing to share — both roughly double.
 
+Query latency, measured on the in-memory index at 100,000, 300,000 and 1,000,000 entries: a query that finds
+its first 100 matches early answers in well under a millisecond at every size; one that has to read the whole
+corpus — a rare word, or one nothing has — takes about 16–21 ms at 100,000 entries and 177–213 ms at 1,000,000,
+growing with the corpus. The command, the other query shapes, the Unix engine's figures and the run-to-run spread are
+in [docs/BENCHMARKS.md](docs/BENCHMARKS.md#query-latency).
+
 The elevated Windows provider enumerates the NTFS change journal at **136,000–177,000 records/sec**
 here, against a 200,000 target the suite asserts and does not meet. Sizes and timestamps are opt-in
 (`CollectFileMetadata`) because a journal record carries neither.

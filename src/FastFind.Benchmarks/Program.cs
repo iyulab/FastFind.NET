@@ -18,6 +18,10 @@ public class Program
         // StringPool is static. Handled before BenchmarkDotNet sees the arguments.
         if (Infrastructure.MemoryRetentionMeasurement.TryHandle(args)) return;
 
+        // Query latency is likewise measured by its own harness: it needs an index built once at several
+        // sizes and a handful of queries timed against each, in a process of its own per configuration.
+        if (Infrastructure.QueryLatencyMeasurement.TryHandle(args)) return;
+
         // Ensure Windows factory is registered
         if (OperatingSystem.IsWindows())
         {
