@@ -4,7 +4,13 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.5.0] - 2026-11-06
+
+**When upgrading, these change what you get back:** a `MaxDepth` of 1 on Windows lists one more level; the Windows
+directory walk no longer enters junctions and symbolic links (it entered all of them); the Linux and macOS providers now
+*list* symbolic links (they left them out); a search issued while the index is still filling no longer returns what
+`ExcludedPaths` and the other indexing options exclude; `SearchStatistics.LastSearch` is UTC on both engines; the shipped
+dependencies' lower bounds rise to 10.0.14. Each is described below.
 
 ### Fixed
 
@@ -34,8 +40,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   decided it was finished by polling — an empty queue was checked ten times, 10 ms apart — so it could not take
   less than about 100 ms even with no directory to look at, and it could be abandoned while another worker was still
   listing a directory. It now ends when the last directory it was handed has been listed. A query for a word nothing
-  has went from 154 ms to 6.7 ms over a 27,000-entry folder, and from 323 ms to 177 ms over a million-entry index
-  (see `docs/BENCHMARKS.md`).
+  has went from 154 ms to 7–11 ms over a 27,000-entry folder; the cost removed is about 130 ms at every size, which is
+  inside the machine's own run-to-run spread over a million-entry index (see `docs/BENCHMARKS.md`).
 - **`IndexingStatistics.LastIndexingTime`, `AverageIndexingSpeed` and `IndexingOperations` were never filled by the
   Windows engine** (always zero), and the Unix engine reported `IndexingOperations = 1` before anything had been indexed.
   Both now report the passes that have run and how long the last one took.
@@ -73,7 +79,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   was no way to step into the library's source. Each package now includes its documentation file, and a
   `.snupkg` with Source Link pointing at the commit it was built from is published beside it, so a
   debugger can fetch the matching source.
-
+- **Query latency is measured and published.** `dotnet run -c Release --project src/FastFind.Benchmarks --
+  --query-latency` builds a deterministic corpus at 100,000, 300,000 and 1,000,000 entries and times seven query shapes
+  against both in-memory indexes; with `--tree <folder>` it indexes a real folder with the engine and times the same
+  operation. The figures, and what they say, are in `docs/BENCHMARKS.md` (an early-exit query: about a millisecond or less
+  at every size; a query that must read the whole corpus: time proportional to it, with a wide run-to-run spread).
 - **`IndexingStatistics` says how the last indexing pass ended and which locations it could not read.**
   `LastRunOutcome` (`IndexingRunOutcome`: `None`, `Completed`, `CompletedWithGaps`, `CapReached`, `TimedOut`,
   `Cancelled`, `Failed`) and `FailedLocations`. A pass that lost a drive, or was given a directory that is not there,
