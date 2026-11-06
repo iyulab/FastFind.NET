@@ -134,6 +134,11 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         }
 
         _currentIndexingOptions = options;
+
+        // A search that arrives before the index has anything to say is answered from the disk; tell
+        // the index what it is being built with, so that answer follows the same rules.
+        if (_searchIndex is WindowsSearchIndex windowsIndex)
+            windowsIndex.Admission = options;
         _fileMetadataUnavailable = !_fileSystemProvider.ProvidesFileMetadata(options);
 
         // Create a fresh per-run CTS so Stop/Start cycles don't inherit a cancelled token

@@ -76,6 +76,23 @@ internal class WindowsSearchIndex : ISearchIndex
         _isReady = true;
     }
 
+    private volatile IndexingOptions? _admission;
+
+    /// <summary>
+    /// The options the index is being built with, or <c>null</c> when it is not being built by an engine.
+    /// </summary>
+    /// <remarks>
+    /// While the index is small, or does not cover what a query asks about, a search is answered by
+    /// walking the disk instead. That walk is standing in for the index, so it admits what the index
+    /// would admit — <see cref="IndexingAdmission"/> — and not the whole of the file system. Without
+    /// this, an exclusion list appeared to do nothing for as long as indexing took.
+    /// </remarks>
+    internal IndexingOptions? Admission
+    {
+        get => _admission;
+        set => _admission = value;
+    }
+
     /// <inheritdoc/>
     public long Count => _entries.Count;
 
@@ -369,7 +386,7 @@ internal class WindowsSearchIndex : ISearchIndex
                 RecurseSubdirectories = false,
                 IgnoreInaccessible = true,
                 BufferSize = 8192,
-                AttributesToSkip = query.IncludeHidden ? FileAttributes.None : FileAttributes.Hidden
+                AttributesToSkip = FallbackAttributesToSkip(query)
             };
 
             foreach (var searchPath in searchPaths)
@@ -543,12 +560,13 @@ internal class WindowsSearchIndex : ISearchIndex
     {
         try
         {
+            var admission = _admission;
             var options = new EnumerationOptions
             {
                 RecurseSubdirectories = false, // We handle recursion manually for parallel processing
                 IgnoreInaccessible = true,
                 BufferSize = 8192,
-                AttributesToSkip = query.IncludeHidden ? FileAttributes.None : FileAttributes.Hidden
+                AttributesToSkip = FallbackAttributesToSkip(query)
             };
 
             // Get all entries in this directory
@@ -572,18 +590,27 @@ internal class WindowsSearchIndex : ISearchIndex
                     if (PathExclusion.IsExcluded(fullPath, query.ExcludedPaths))
                         continue;
 
+                    // ...and what the index itself would leave out, directories included: nothing
+                    // beneath an excluded directory is looked at
+                    if (admission is not null && PathExclusion.IsExcluded(fullPath, admission.ExcludedPaths))
+                        continue;
+
                     var fileItem = GetFileItemSafely(fullPath);
                     if (fileItem == null)
                         continue;
 
-                    // If it's a directory, add to queue for processing
-                    if (fileItem.IsDirectory && query.IncludeSubdirectories)
+                    // If it's a directory, add to queue for processing. A junction or symbolic link
+                    // is an entry, not a way into the tree: following one back to an ancestor would
+                    // scan it again beneath itself for ever.
+                    if (fileItem.IsDirectory && query.IncludeSubdirectories &&
+                        (fileItem.Attributes & FileAttributes.ReparsePoint) == 0)
                     {
                         directoryQueue.Enqueue(fullPath);
                     }
 
-                    // Check if it matches our search criteria
-                    if (MatchesQuery(fileItem, query, regex))
+                    // Check if it matches our search criteria, and what the index would admit
+                    if (MatchesQuery(fileItem, query, regex) &&
+                        (admission is null || IndexingAdmission.Admits(fileItem, admission)))
                     {
                         lock (excludePaths)
                         {
@@ -649,6 +676,23 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <summary>
+    /// The attributes a live scan leaves out: what the query leaves out, and what the index would.
+    /// </summary>
+    private FileAttributes FallbackAttributesToSkip(SearchQuery query)
+    {
+        var admission = _admission;
+        var skip = FileAttributes.None;
+
+        if (!query.IncludeHidden || admission is { IncludeHidden: false })
+            skip |= FileAttributes.Hidden;
+
+        if (admission is { IncludeSystem: false })
+            skip |= FileAttributes.System;
+
+        return skip;
+    }
+
+    /// <summary>
     /// Scans a directory for files matching the query
     /// </summary>
     private async IAsyncEnumerable<FileItem> ScanDirectoryAsync(
@@ -660,6 +704,7 @@ internal class WindowsSearchIndex : ISearchIndex
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var processedCount = 0;
+        var admission = _admission;
 
         IEnumerable<string> enumerable;
 
@@ -686,9 +731,14 @@ internal class WindowsSearchIndex : ISearchIndex
             if (PathExclusion.IsExcluded(fullPath, query.ExcludedPaths))
                 continue;
 
+            // ...and what the index itself would leave out
+            if (admission is not null && PathExclusion.IsExcluded(fullPath, admission.ExcludedPaths))
+                continue;
+
             FileItem? fileItem = GetFileItemSafely(fullPath);
 
-            if (fileItem != null && MatchesQuery(fileItem, query, regex))
+            if (fileItem != null && MatchesQuery(fileItem, query, regex) &&
+                (admission is null || IndexingAdmission.Admits(fileItem, admission)))
             {
                 excludePaths.Add(fullPath); // Prevent future duplicates
                 yield return fileItem;

@@ -21,6 +21,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   token linked to the pass, and ending the pass cancels it and waits for it. The same pass-bound
   lifetime applies to the change-journal provider's per-drive producers. Walking that same folder
   went from about 210–267 s to about 19–22 s; small trees are unchanged.
+- **A search that arrived while the index was still small returned items that `IndexingOptions` excludes.**
+  While an index holds fewer than ten items — which on the change-journal path is the whole enumeration of
+  the volume — a search is answered by walking the disk, and that walk read only the query's own
+  exclusions. So `ExcludedPaths` (and `ExcludedExtensions`, `IncludeHidden`, `IncludeSystem`,
+  `MaxFileSize`) appeared to do nothing for as long as indexing took, and indexing a small folder as an
+  administrator took tens of seconds. The walk now admits what the index would admit, through the same
+  definition the providers use. It also no longer enters a junction or symbolic link, which could send
+  it round a tree for ever.
 - **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
   one attribute a file carries when it has no other, which is what a file with its archive bit cleared
   reports; the walk built its list of attributes to skip starting from it.
