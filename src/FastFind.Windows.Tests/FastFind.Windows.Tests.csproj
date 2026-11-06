@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <IsTestProject>true</IsTestProject>
     <!-- Suppress platform compatibility warnings - this is a Windows-only test project -->
     <SupportedOSPlatformVersion>10.0</SupportedOSPlatformVersion>

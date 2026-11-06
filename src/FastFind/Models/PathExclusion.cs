@@ -70,10 +70,10 @@ public static class PathExclusion
     }
 
     /// <summary>
-    /// Whether <paramref name="path"/> is the path <paramref name="root"/> names, or sits beneath it.
+    /// Whether <paramref name="path"/> is the path <paramref name="scopeRoot"/> names, or sits beneath it.
     /// </summary>
     /// <remarks>
-    /// An empty <paramref name="root"/> is the file system root itself, so every rooted path is
+    /// An empty <paramref name="scopeRoot"/> is the file system root itself, so every rooted path is
     /// under it. Both are compared as the host spells paths; neither is rewritten.
     /// </remarks>
     internal static bool IsAtOrUnder(ReadOnlySpan<char> path, ReadOnlySpan<char> scopeRoot)

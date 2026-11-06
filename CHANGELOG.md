@@ -40,6 +40,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   long to continue. A link is now reported like any other entry and not entered unless `FollowSymlinks`
   is set; when it is, a chain of links is crossed only so far.
 
+### Added
+
+- **The packages carry their XML documentation and a symbol package.** Until now a package held the
+  assembly and nothing else, so the remarks that describe what each provider does and does not do (what
+  the change-journal provider reads, how an exclusion is matched) never reached IntelliSense, and there
+  was no way to step into the library's source. Each package now includes its documentation file, and a
+  `.snupkg` with Source Link pointing at the commit it was built from is published beside it, so a
+  debugger can fetch the matching source.
+
+### Changed
+
+- **Lower bounds of the shipped dependencies rise to the current patch release**
+  (`Microsoft.Extensions.*`, `Microsoft.Data.Sqlite`, `System.Management`: 10.0.12 → 10.0.14).
+
 ## [2.4.0] - 2026-09-12
 
 ### Fixed

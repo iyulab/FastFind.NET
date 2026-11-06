@@ -8,6 +8,23 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!-- What a consumer gets beside the assembly: IntelliSense documentation, and symbols that step into
+       the source at the commit that was built. Test and benchmark projects switch the first off. -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: "missing XML comment" on every public member. The public surface is documented where it has something to say. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <!-- Paths in the symbols are made deterministic only on CI, so a local build still debugs against local paths. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
   <!-- Package Information -->
   <PropertyGroup>
     <Version>2.4.0</Version>

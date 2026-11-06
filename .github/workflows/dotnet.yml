@@ -309,6 +309,18 @@ jobs:
 
         echo "✅ NuGet deployment completed for ${{ matrix.project.name }} v${{ needs.decide.outputs.version }}"
 
+    # The symbol package goes in its own step, after the package. nuget.org takes symbols only for a
+    # package it already holds, and a failure here must not turn red a job whose irreversible part (the
+    # package) has already happened, nor leave create-release, which needs this job, unrun.
+    - name: Push ${{ matrix.project.name }} symbols to NuGet
+      if: needs.decide.outputs.should_deploy == 'true'
+      continue-on-error: true
+      run: |
+        dotnet nuget push ./nupkg/*.snupkg \
+          --source https://api.nuget.org/v3/index.json \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --skip-duplicate
+
     # Release 에 attach 하기 위한 중간 산출물 — create-release 가 끝나면 즉시 삭제된다.
     - name: Upload packages
       uses: actions/upload-artifact@v7

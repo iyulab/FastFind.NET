@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <Platforms>AnyCPU;x64</Platforms>
     <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TieredCompilation>false</TieredCompilation>
