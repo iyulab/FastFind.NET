@@ -4,6 +4,34 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **An indexing pass on the directory-walk provider held one open handle per pending directory, and
+  a pass that stopped early left its producer running.** The walk handed one recursive
+  `Directory.EnumerateFileSystemEntries` to a producer task; that enumerator opens every
+  sub-directory it discovers and keeps the handle until the directory is listed, so open handles
+  followed the width of the tree (54,650 above baseline walking a Windows folder of 372,000 entries).
+  The producer was started with the caller's token alone, so a pass that stopped at `MaxFileCount`
+  or on a stop request waited one second for it and left it parked on its full channel with every
+  handle still open until a garbage collection happened to finalise the enumerator; a scheduled
+  re-index then began a second walk beside it. The walk now lists one directory at a time, breadth-first
+  as before, and does not enter a directory that `ExcludedPaths` excludes. The producer runs under a
+  token linked to the pass, and ending the pass cancels it and waits for it. The same pass-bound
+  lifetime applies to the change-journal provider's per-drive producers. Walking that same folder
+  went from about 210–267 s to about 19–22 s; small trees are unchanged.
+- **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
+  one attribute a file carries when it has no other, which is what a file with its archive bit cleared
+  reports; the walk built its list of attributes to skip starting from it.
+- **`IndexingOptions.MaxDepth` listed one level more than it named for a depth of 2 or more** (a depth
+  of 2 listed three levels). A depth of *n* now lists *n* levels, the first being the location's own
+  entries. If you set `MaxDepth` to 2 or more on Windows, expect one level fewer than before.
+- **`IndexingOptions.FollowSymlinks` was ignored by the Windows directory walk**, which followed every
+  junction and symbolic link and, given a link back to an ancestor, descended until the path was too
+  long to continue. A link is now reported like any other entry and not entered unless `FollowSymlinks`
+  is set; when it is, a chain of links is crossed only so far.
+
 ## [2.4.0] - 2026-09-12
 
 ### Fixed
