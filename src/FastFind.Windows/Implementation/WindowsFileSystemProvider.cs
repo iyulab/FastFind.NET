@@ -22,7 +22,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     private readonly ILogger<WindowsFileSystemProvider> _logger;
     private readonly ConcurrentDictionary<string, FileSystemWatcher> _watchers = new();
     private readonly SemaphoreSlim _enumerationSemaphore;
-    private readonly AsyncFileEnumerator _asyncEnumerator;
     private readonly AsyncFileIOProvider _asyncIOProvider;
     private bool _disposed = false;
 
@@ -31,8 +30,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         _logger = logger;
         var maxConcurrentOperations = Environment.ProcessorCount * 2;
         _enumerationSemaphore = new SemaphoreSlim(maxConcurrentOperations, maxConcurrentOperations);
-        _asyncEnumerator = new AsyncFileEnumerator(logger as ILogger<AsyncFileEnumerator> ??
-            NullLoggerFactory.Instance.CreateLogger<AsyncFileEnumerator>());
         _asyncIOProvider = new AsyncFileIOProvider(logger as ILogger<AsyncFileIOProvider> ??
             NullLoggerFactory.Instance.CreateLogger<AsyncFileIOProvider>());
     }
@@ -179,128 +176,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         {
             _logger.LogError(ex, "Producer error");
         }
-    }
-
-    // 동기 파일 아이템 생성 - 최고 성능, FastFileItem 사용
-    private static FastFileItem? CreateFastFileItemSync(string filePath)
-    {
-        try
-        {
-            // 한 번의 호출로 파일/디렉토리 구분
-            var attributes = File.GetAttributes(filePath);
-            var isDirectory = (attributes & FileAttributes.Directory) != 0;
-
-            if (isDirectory)
-            {
-                var dirInfo = new DirectoryInfo(filePath);
-                return new FastFileItem(
-                    dirInfo.FullName,
-                    dirInfo.Name,
-                    dirInfo.Parent?.FullName ?? string.Empty,
-                    string.Empty,
-                    0,
-                    dirInfo.CreationTime,
-                    dirInfo.LastWriteTime,
-                    dirInfo.LastAccessTime,
-                    attributes,
-                    dirInfo.FullName.Length > 0 ? dirInfo.FullName[0] : '\0'
-                );
-            }
-            else
-            {
-                var fileInfo = new FileInfo(filePath);
-                return new FastFileItem(
-                    fileInfo.FullName,
-                    fileInfo.Name,
-                    fileInfo.DirectoryName ?? string.Empty,
-                    fileInfo.Extension,
-                    fileInfo.Length,
-                    fileInfo.CreationTime,
-                    fileInfo.LastWriteTime,
-                    fileInfo.LastAccessTime,
-                    attributes,
-                    fileInfo.FullName.Length > 0 ? fileInfo.FullName[0] : '\0'
-                );
-            }
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    // 완전 동기 열거 - 최고 성능, TaskCanceledException 불가능
-    private IEnumerable<FastFileItem> EnumerateFastLocationSync(string location, IndexingOptions options, CancellationToken cancellationToken)
-    {
-        if (cancellationToken.IsCancellationRequested || !Directory.Exists(location))
-            yield break;
-
-        var enumerationOptions = new System.IO.EnumerationOptions
-        {
-            IgnoreInaccessible = true,
-            RecurseSubdirectories = !options.MaxDepth.HasValue || options.MaxDepth.Value > 1,
-            ReturnSpecialDirectories = false,
-            AttributesToSkip = GetAttributesToSkip(options),
-            MaxRecursionDepth = options.MaxDepth ?? int.MaxValue
-        };
-
-        IEnumerable<string> entries;
-        try
-        {
-            entries = Directory.EnumerateFileSystemEntries(location, "*", enumerationOptions);
-        }
-        catch
-        {
-            yield break;
-        }
-
-        var processedCount = 0;
-        foreach (var filePath in entries)
-        {
-            // 간단한 취소 체크 (10000개마다로 최적화)
-            if (++processedCount % 10000 == 0 && cancellationToken.IsCancellationRequested)
-                yield break;
-
-            var fileItem = CreateFastFileItemSync(filePath);
-            if (fileItem.HasValue && ShouldIncludeFastFile(fileItem.Value, options))
-            {
-                yield return fileItem.Value;
-            }
-        }
-    }
-
-    // FastFileItem용 필터링 (성능 최적화)
-    private static bool ShouldIncludeFastFile(FastFileItem file, IndexingOptions options)
-    {
-        // Check hidden files - 비트 연산으로 최적화
-        if (!options.IncludeHidden && file.IsHidden)
-            return false;
-
-        // Check system files - 비트 연산으로 최적화
-        if (!options.IncludeSystem && file.IsSystem)
-            return false;
-
-        // Check file size
-        if (options.MaxFileSize.HasValue && file.Size > options.MaxFileSize.Value)
-            return false;
-
-        // Check excluded paths. The full path is read only when there is an exclusion to test it
-        // against: composing it allocates, and most indexing runs exclude nothing.
-        if (options.ExcludedPaths.Count > 0 && PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
-            return false;
-
-        // Check excluded extensions - 빠른 비교
-        if (!string.IsNullOrEmpty(file.Extension))
-        {
-            var extensionSpan = file.Extension.AsSpan();
-            foreach (var excludedExt in options.ExcludedExtensions)
-            {
-                if (extensionSpan.Equals(excludedExt.AsSpan(), StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-        }
-
-        return true;
     }
 
     // 동기 방식으로 직접 열거 (비동기 오버헤드 제거)
@@ -814,9 +689,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 
         try
         {
-            // AsyncFileEnumerator.DisposeAsync() is synchronous in practice
-            // (only Cancel + Dispose calls, no I/O), safe to block here
-            _asyncEnumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _asyncIOProvider.Dispose();
         }
         catch (Exception ex)
@@ -867,7 +739,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
             // Dispose async components
             try
             {
-                await _asyncEnumerator.DisposeAsync().ConfigureAwait(false);
                 _asyncIOProvider.Dispose();
             }
             catch (Exception ex)
