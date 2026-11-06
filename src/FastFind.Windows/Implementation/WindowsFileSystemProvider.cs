@@ -1,4 +1,5 @@
 ﻿using FastFind.Interfaces;
+using FastFind.Indexing;
 using FastFind.Models;
 using FastFind.Extensions;
 using Microsoft.Extensions.Logging;
@@ -202,7 +203,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         foreach (var filePath in walk.Enumerate(location, cancellationToken))
         {
             var fileItem = CreateFileItemSync(filePath);
-            if (fileItem != null && ShouldIncludeFile(fileItem, options))
+            if (fileItem != null && IndexingAdmission.Admits(fileItem, options))
             {
                 yield return fileItem;
             }
@@ -581,32 +582,6 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
             System.IO.DriveType.Ram => FastFind.Interfaces.DriveType.Ram,
             _ => FastFind.Interfaces.DriveType.Unknown
         };
-    }
-
-    private static bool ShouldIncludeFile(FileItem file, IndexingOptions options)
-    {
-        // Check hidden files
-        if (!options.IncludeHidden && file.IsHidden)
-            return false;
-
-        // Check system files
-        if (!options.IncludeSystem && file.IsSystem)
-            return false;
-
-        // Check file size
-        if (options.MaxFileSize.HasValue && file.Size > options.MaxFileSize.Value)
-            return false;
-
-        // Check excluded paths
-        if (PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
-            return false;
-
-        // Check excluded extensions
-        if (!string.IsNullOrEmpty(file.Extension) &&
-            options.ExcludedExtensions.Contains(file.Extension, StringComparer.OrdinalIgnoreCase))
-            return false;
-
-        return true;
     }
 
     private static NotifyFilters GetNotifyFilters(MonitoringOptions options)

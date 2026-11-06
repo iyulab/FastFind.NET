@@ -1,4 +1,5 @@
 using FastFind.Interfaces;
+using FastFind.Indexing;
 using FastFind.Models;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
@@ -173,7 +174,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
                 continue;
 
             var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileMetadata);
-            if (ShouldIncludeFile(fileItem, options))
+            if (IndexingAdmission.Admits(fileItem, options))
             {
                 await writer.WriteAsync(fileItem, cancellationToken);
             }
@@ -246,32 +247,6 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             Attributes = record.Attributes,
             DriveLetter = fullPath.Length > 0 ? fullPath[0] : '\0'
         };
-    }
-
-    private static bool ShouldIncludeFile(FileItem file, IndexingOptions options)
-    {
-        // Check hidden files
-        if (!options.IncludeHidden && file.IsHidden)
-            return false;
-
-        // Check system files
-        if (!options.IncludeSystem && file.IsSystem)
-            return false;
-
-        // Check file size
-        if (options.MaxFileSize.HasValue && file.Size > options.MaxFileSize.Value)
-            return false;
-
-        // Check excluded paths
-        if (PathExclusion.IsExcluded(file.FullPath, options.ExcludedPaths))
-            return false;
-
-        // Check excluded extensions
-        if (!string.IsNullOrEmpty(file.Extension) &&
-            options.ExcludedExtensions.Contains(file.Extension, StringComparer.OrdinalIgnoreCase))
-            return false;
-
-        return true;
     }
 
     /// <inheritdoc/>
