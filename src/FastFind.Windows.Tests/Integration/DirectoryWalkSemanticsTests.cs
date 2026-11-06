@@ -88,14 +88,15 @@ public class DirectoryWalkSemanticsTests : IDisposable
     }
 
     [Theory]
-    [InlineData(1, new[] { "f0.txt", "L1" })]
-    [InlineData(2, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2" })]
-    [InlineData(3, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2", @"L1\L2\f2.txt", @"L1\L2\L3" })]
-    public void MaxDepth_Should_Count_The_Directory_Levels_It_Names(int maxDepth, string[] expected)
+    [InlineData(1, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2" })]
+    [InlineData(2, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2", @"L1\L2\f2.txt", @"L1\L2\L3" })]
+    [InlineData(3, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2", @"L1\L2\f2.txt", @"L1\L2\L3", @"L1\L2\L3\f3.txt", @"L1\L2\L3\L4" })]
+    public void MaxDepth_Should_Mean_The_Same_Thing_As_It_Does_On_Unix(int maxDepth, string[] expected)
     {
-        // Depth 1 is the entries of the location itself. Depth 2 and 3 used to report one level more
-        // than they named, because the value was handed to a setting that counts recursion steps below
-        // the root.
+        // The location is depth 0. A directory deeper than MaxDepth is not entered, so a MaxDepth of n lists
+        // the location's own entries and n levels beneath them. The recursive enumerator this walk replaced
+        // gave that for 2 and above and only the location's own entries for 1; the Unix providers have
+        // always given it, and ProviderConformanceTests holds the two to the same answer.
         Walk(Options(o => o.MaxDepth = maxDepth)).Should().Equal(expected);
     }
 

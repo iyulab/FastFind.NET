@@ -43,11 +43,12 @@ internal sealed class DirectoryWalk(IndexingOptions options)
             AttributesToSkip = AttributesToSkip(_options),
         };
 
-        // How many levels below the root may be listed: depth 1 is the root's own entries, so a depth of
-        // n lists n - 1 levels beneath it. null = unbounded. (The recursive enumerator this replaced was
-        // handed the depth as its recursion limit, which counts steps below the root, so depth 2 and 3
-        // reported one level more than they named.)
-        int? levelsBelowRoot = _options.MaxDepth is { } maxDepth ? Math.Max(maxDepth - 1, 0) : null;
+        // How many levels below the root may be listed. The root is at depth 0 and a directory deeper than
+        // MaxDepth is not entered, so a MaxDepth of n lists the root's own entries and n levels beneath
+        // them - the meaning the Unix providers have always given it. null = unbounded. (The recursive
+        // enumerator this replaced gave n levels beneath the root for n of 2 or more, as here, but only the
+        // root's own entries for n of 1, because a depth of 1 switched recursion off altogether.)
+        int? levelsBelowRoot = _options.MaxDepth;
 
         var excluded = _options.ExcludedPaths;
         var followLinks = _options.FollowSymlinks;
