@@ -454,6 +454,13 @@ internal class WindowsSearchIndex : ISearchIndex
     /// <summary>
     /// Parallel path scanning with dynamic work distribution
     /// </summary>
+    /// <remarks>
+    /// The scan is over when no directory is queued <i>and</i> none is being listed — a count of the
+    /// directories queued or in hand, which reaches zero exactly once. The workers used to decide it by
+    /// polling: an empty queue was checked ten times, 10 ms apart, so a scan with nothing to do still
+    /// took about 100 ms, and one whose last directory took longer than that to list could be abandoned
+    /// by workers that saw an empty queue while it was still queueing children.
+    /// </remarks>
     private async Task ScanPathsInParallel(
         List<string> searchPaths,
         SearchQuery query,
@@ -464,22 +471,39 @@ internal class WindowsSearchIndex : ISearchIndex
         SemaphoreSlim semaphore,
         CancellationToken cancellationToken)
     {
-        var directoryQueue = new ConcurrentQueue<string>();
+        var work = Channel.CreateUnbounded<string>();
+        var outstanding = 0;
+
+        void Enqueue(string directory)
+        {
+            Interlocked.Increment(ref outstanding);
+            if (!work.Writer.TryWrite(directory))
+                Interlocked.Decrement(ref outstanding);
+        }
+
+        // Called once per directory taken, after its children have been queued.
+        void Finished()
+        {
+            if (Interlocked.Decrement(ref outstanding) == 0)
+                work.Writer.TryComplete();
+        }
 
         // Initialize with root paths
         foreach (var path in searchPaths)
         {
             if (Directory.Exists(path))
-            {
-                directoryQueue.Enqueue(path);
-            }
+                Enqueue(path);
         }
+
+        // Nothing to look at: say so now.
+        if (Volatile.Read(ref outstanding) == 0)
+            return;
 
         // Parallel worker tasks
         var workers = new Task[CalculateOptimalConcurrency()];
         for (int i = 0; i < workers.Length; i++)
         {
-            workers[i] = ProcessDirectoriesWorker(directoryQueue, query, excludePaths, regex,
+            workers[i] = ProcessDirectoriesWorker(work.Reader, Enqueue, Finished, query, excludePaths, regex,
                 processedPaths, writer, semaphore, cancellationToken);
         }
 
@@ -490,7 +514,9 @@ internal class WindowsSearchIndex : ISearchIndex
     /// Individual worker thread for processing directories
     /// </summary>
     private async Task ProcessDirectoriesWorker(
-        ConcurrentQueue<string> directoryQueue,
+        ChannelReader<string> directories,
+        Action<string> enqueueDirectory,
+        Action finished,
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
@@ -500,48 +526,36 @@ internal class WindowsSearchIndex : ISearchIndex
         CancellationToken cancellationToken)
     {
         var processedCount = 0;
-        var emptyQueueCount = 0;
-        const int maxEmptyQueueChecks = 10;
 
-        while (!cancellationToken.IsCancellationRequested)
+        // Ends when the last outstanding directory has been listed and the channel is completed.
+        await foreach (var currentDirectory in directories.ReadAllAsync(cancellationToken))
         {
-            if (!directoryQueue.TryDequeue(out var currentDirectory))
-            {
-                emptyQueueCount++;
-
-                // If we've found no work for a while, exit to avoid hanging
-                if (emptyQueueCount >= maxEmptyQueueChecks)
-                {
-                    _logger.LogDebug("Worker exiting after {EmptyChecks} empty queue checks, processed {Count} directories",
-                        emptyQueueCount, processedCount);
-                    break;
-                }
-
-                await Task.Delay(10, cancellationToken);
-                continue;
-            }
-
-            emptyQueueCount = 0; // Reset counter when we find work
-
-            // Skip if already processed
-            if (!processedPaths.Add(currentDirectory))
-                continue;
-
-            await semaphore.WaitAsync(cancellationToken);
             try
             {
-                await ProcessSingleDirectoryParallel(currentDirectory, directoryQueue, query, excludePaths,
-                    regex, writer, cancellationToken);
+                // Skip if already processed
+                if (!processedPaths.Add(currentDirectory))
+                    continue;
 
-                processedCount++;
+                await semaphore.WaitAsync(cancellationToken);
+                try
+                {
+                    await ProcessSingleDirectoryParallel(currentDirectory, enqueueDirectory, query, excludePaths,
+                        regex, writer, cancellationToken);
 
-                // Yield control periodically
-                if (processedCount % 10 == 0)
-                    await Task.Yield();
+                    processedCount++;
+
+                    // Yield control periodically
+                    if (processedCount % 10 == 0)
+                        await Task.Yield();
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
             }
             finally
             {
-                semaphore.Release();
+                finished();
             }
         }
     }
@@ -551,7 +565,7 @@ internal class WindowsSearchIndex : ISearchIndex
     /// </summary>
     private async Task ProcessSingleDirectoryParallel(
         string directoryPath,
-        ConcurrentQueue<string> directoryQueue,
+        Action<string> enqueueDirectory,
         SearchQuery query,
         HashSet<string> excludePaths,
         System.Text.RegularExpressions.Regex? regex,
@@ -605,7 +619,7 @@ internal class WindowsSearchIndex : ISearchIndex
                     if (fileItem.IsDirectory && query.IncludeSubdirectories &&
                         (fileItem.Attributes & FileAttributes.ReparsePoint) == 0)
                     {
-                        directoryQueue.Enqueue(fullPath);
+                        enqueueDirectory(fullPath);
                     }
 
                     // Check if it matches our search criteria, and what the index would admit

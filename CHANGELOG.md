@@ -29,6 +29,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   administrator took tens of seconds. The walk now admits what the index would admit, through the same
   definition the providers use. It also no longer enters a junction or symbolic link, which could send
   it round a tree for ever.
+- **A query that found fewer than five matches paid about 130 ms for a disk scan that had nothing to scan.**
+  When an index finds few matches it walks the disk to check that it is not incomplete. That walk's workers
+  decided it was finished by polling — an empty queue was checked ten times, 10 ms apart — so it could not take
+  less than about 100 ms even with no directory to look at, and it could be abandoned while another worker was still
+  listing a directory. It now ends when the last directory it was handed has been listed. A query for a word nothing
+  has went from 154 ms to 6.7 ms over a 27,000-entry folder, and from 323 ms to 177 ms over a million-entry index
+  (see `docs/BENCHMARKS.md`).
 - **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
   one attribute a file carries when it has no other, which is what a file with its archive bit cleared
   reports; the walk built its list of attributes to skip starting from it.
