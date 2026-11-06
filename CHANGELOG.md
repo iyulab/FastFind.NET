@@ -56,6 +56,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `.snupkg` with Source Link pointing at the commit it was built from is published beside it, so a
   debugger can fetch the matching source.
 
+- **`IndexStoreCorruptedException`.** Opening a store whose file is not a database, or is cut short or damaged,
+  now raises this exception (an `IOException`, carrying `StorePath`, with the driver's exception inside) instead of
+  the driver's own `SqliteException` - error 26 "file is not a database" or error 11 "database disk image is
+  malformed" - which a caller could only catch by referencing `Microsoft.Data.Sqlite`, and whose message said
+  nothing of what to do next. The message names the file and says to delete it and index again, since an index is
+  derived from the file system. The library does not delete it for you. A zero-byte file still opens as an empty
+  store, and a failure that says nothing about the file's contents (an unopenable path, a lock) is left as the driver
+  reports it. Damage found *after* the store is open is not covered yet.
+
 ### Changed
 
 - **Lower bounds of the shipped dependencies rise to the current patch release**

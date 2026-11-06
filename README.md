@@ -97,6 +97,10 @@ comfortably fits.
 
 The engine does not dispose a store you created; you keep ownership.
 
+If the file at that path is not a usable index - not a database, or damaged - `InitializeAsync` throws
+`IndexStoreCorruptedException`, naming the file. An index is derived from the file system, so the remedy is to delete the
+file and index again; the library never deletes it for you.
+
 A store is safe to use from several threads or tasks at once — searching while indexing needs no
 coordination from the caller, because each operation takes its own pooled connection. See
 [the concurrency notes](docs/api-reference.md#concurrent-use) for what a transaction covers and the

@@ -68,8 +68,32 @@ public sealed class SqlitePersistence : IIndexPersistence
         return new SqlitePersistence(PersistenceConfiguration.CreateSQLiteHighPerformance(databasePath), logger);
     }
 
+    // SQLite result codes that mean the file itself is not a usable database: SQLITE_CORRUPT and
+    // SQLITE_NOTADB. Anything else - a path that cannot be opened, a lock, a full disk - says nothing
+    // about the file's contents and is left as the driver reports it.
+    private const int SqliteCorrupt = 11;
+    private const int SqliteNotADatabase = 26;
+
+    private static bool IsDamage(SqliteException exception) =>
+        exception.SqliteErrorCode is SqliteCorrupt or SqliteNotADatabase;
+
     /// <inheritdoc/>
+    /// <exception cref="IndexStoreCorruptedException">
+    /// The file at the store's path is not a database, or is damaged.
+    /// </exception>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await InitializeCoreAsync(cancellationToken);
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw new IndexStoreCorruptedException(_config.StoragePath, ex);
+        }
+    }
+
+    private async Task InitializeCoreAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
 
@@ -151,6 +175,11 @@ public sealed class SqlitePersistence : IIndexPersistence
             await cmd.ExecuteNonQueryAsync(cancellationToken);
 
             return connection;
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            await connection.DisposeAsync();
+            throw new IndexStoreCorruptedException(_config.StoragePath, ex);
         }
         catch
         {
