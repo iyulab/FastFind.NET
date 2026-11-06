@@ -86,12 +86,19 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             SingleWriter = false
         });
 
+        // The producers belong to this pass, not to the caller's token: a consumer that stops reading
+        // (a file cap, a stop request, disposal) must be able to end them, or each parks on the full
+        // channel holding its volume handle and its read buffers until the process exits.
+        using var passCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var passToken = passCancellation.Token;
+
         // Start producer tasks for each drive in parallel
         var producerTasks = driveLetters.Select(async driveLetter =>
         {
+            Interlocked.Increment(ref _activeProducers);
             try
             {
-                await EnumerateDriveToChannelAsync(driveLetter, locations, options, channel.Writer, cancellationToken);
+                await EnumerateDriveToChannelAsync(driveLetter, locations, options, channel.Writer, passToken);
             }
             catch (OperationCanceledException)
             {
@@ -101,20 +108,49 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             {
                 _logger?.LogError(ex, "Error enumerating drive {Drive}", driveLetter);
             }
+            finally
+            {
+                Interlocked.Decrement(ref _activeProducers);
+            }
         }).ToArray();
 
-        // Complete the channel when all producers are done
-        _ = Task.WhenAll(producerTasks).ContinueWith(_ =>
+        // Complete the channel when all producers are done. Not tied to a token: it must always run.
+        var producersDone = Task.WhenAll(producerTasks).ContinueWith(_ =>
         {
             try { channel.Writer.Complete(); } catch { }
-        }, cancellationToken);
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
 
-        // Yield results from channel
-        await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken))
+        try
         {
-            yield return item;
+            // Yield results from channel
+            await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return item;
+            }
+        }
+        finally
+        {
+            // The pass is over, however the consumer left it: end the producers and wait for them, so
+            // that nothing of this pass is still reading the volume when the call returns.
+            passCancellation.Cancel();
+            try
+            {
+                await producersDone.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "A producer ended with an error while the pass was closing");
+            }
         }
     }
+
+    private int _activeProducers;
+
+    /// <summary>
+    /// The number of drive producers still running. Zero once every pass has been disposed or has
+    /// run to the end — the property a stopped pass is held to.
+    /// </summary>
+    internal int ActiveProducers => Volatile.Read(ref _activeProducers);
 
     private async Task EnumerateDriveToChannelAsync(
         char driveLetter,
