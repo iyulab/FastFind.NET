@@ -137,6 +137,33 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private long _totalSearches;
     private long _totalMatches;
     private TimeSpan _lastIndexingTime;
+
+    // How the last pass that ended did end, for GetIndexingStatisticsAsync. One reference, replaced whole,
+    // so a reader never sees an outcome from one pass beside the failures of another.
+    private sealed record RunSummary(IndexingRunOutcome Outcome, IReadOnlyList<string> FailedLocations);
+
+    private volatile RunSummary? _lastRun;
+    private long _indexingOperations;
+
+    private void RecordRun(IndexingRunOutcome outcome, bool completedNormally)
+    {
+        IReadOnlyList<string> failed = Array.Empty<string>();
+        if (completedNormally)
+        {
+            try { failed = _provider.EnumerationFailures.ToArray(); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Could not read the provider's enumeration failures"); }
+        }
+
+        if (outcome == IndexingRunOutcome.Completed && failed.Count > 0)
+            outcome = IndexingRunOutcome.CompletedWithGaps;
+
+        if (failed.Count > 0)
+            _logger.LogWarning("Indexing could not read {Count} location(s): {Locations}. The index lacks what was in them.",
+                failed.Count, string.Join(", ", failed));
+
+        _lastRun = new RunSummary(outcome, failed);
+        Interlocked.Increment(ref _indexingOperations);
+    }
     private DateTime _lastSearchTime;
     private bool _disposed;
 
@@ -272,8 +299,15 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 pending.Clear();
             }
 
+            // A provider that sees cancellation ends its enumeration quietly; that is a pass that was stopped,
+            // not one that read everything.
+            if (!capReached)
+                linkedToken.ThrowIfCancellationRequested();
+
             stopwatch.Stop();
             _lastIndexingTime = stopwatch.Elapsed;
+
+            RecordRun(capReached ? IndexingRunOutcome.CapReached : IndexingRunOutcome.Completed, completedNormally: true);
 
             if (capReached)
             {
@@ -311,10 +345,14 @@ internal class UnixSearchEngineImpl : ISearchEngine
         catch (OperationCanceledException)
         {
             _logger.LogDebug("Indexing stopped (cancellation requested)");
+            _lastIndexingTime = stopwatch.Elapsed;
+            RecordRun(IndexingRunOutcome.Cancelled, completedNormally: false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during indexing");
+            _lastIndexingTime = stopwatch.Elapsed;
+            RecordRun(IndexingRunOutcome.Failed, completedNormally: false);
             throw;
         }
         finally
@@ -476,7 +514,9 @@ internal class UnixSearchEngineImpl : ISearchEngine
             IndexDiskUsage = 0,
             CompressionRatio = 0,
             LastUpdateTime = DateTime.UtcNow,
-            IndexingOperations = 1
+            IndexingOperations = Interlocked.Read(ref _indexingOperations),
+            LastRunOutcome = _lastRun?.Outcome ?? IndexingRunOutcome.None,
+            FailedLocations = _lastRun?.FailedLocations ?? Array.Empty<string>(),
         };
 
         return stats;

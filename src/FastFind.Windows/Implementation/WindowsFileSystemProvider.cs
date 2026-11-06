@@ -23,6 +23,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     private readonly ILogger<WindowsFileSystemProvider> _logger;
     private readonly ConcurrentDictionary<string, FileSystemWatcher> _watchers = new();
     private readonly SemaphoreSlim _enumerationSemaphore;
+    private readonly ConcurrentBag<string> _enumerationFailures = new();
     private readonly AsyncFileIOProvider _asyncIOProvider;
     private bool _disposed = false;
 
@@ -42,6 +43,9 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     public bool IsAvailable => OperatingSystem.IsWindows();
 
     /// <inheritdoc/>
+    public IReadOnlyCollection<string> EnumerationFailures => _enumerationFailures.Distinct().ToArray();
+
+    /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> EnumerateFilesAsync(
         IEnumerable<string> locations,
         IndexingOptions options,
@@ -55,6 +59,9 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         var locationArray = locations.ToArray();
         if (locationArray.Length == 0)
             yield break;
+
+        // The list is of this enumeration's failures, not an accumulation across passes.
+        _enumerationFailures.Clear();
 
         // .NET 10 최적화된 고성능 아키텍처 - 백프레셔 지원
         var channelOptions = new BoundedChannelOptions(1000) // 적절한 버퍼 크기
@@ -178,6 +185,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "Error processing location: {Location}", location);
+                    _enumerationFailures.Add(location);
                 }
             });
         }
@@ -194,8 +202,14 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     // 동기 방식으로 직접 열거 (비동기 오버헤드 제거)
     private IEnumerable<FileItem> EnumerateLocationSync(string location, IndexingOptions options, CancellationToken cancellationToken)
     {
-        if (cancellationToken.IsCancellationRequested || !Directory.Exists(location))
+        if (cancellationToken.IsCancellationRequested)
             yield break;
+
+        if (!Directory.Exists(location))
+        {
+            _enumerationFailures.Add(location);
+            yield break;
+        }
 
         // One directory open at a time, excluded directories not entered: see DirectoryWalk.
         var walk = new DirectoryWalk(options);

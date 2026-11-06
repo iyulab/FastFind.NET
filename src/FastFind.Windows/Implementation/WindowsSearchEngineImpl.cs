@@ -41,6 +41,38 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
     private IndexingOptions? _currentIndexingOptions;
 
+    // How the last pass that ended did end, for GetIndexingStatisticsAsync. One reference, replaced whole,
+    // so a reader never sees an outcome from one pass beside the failures of another.
+    private sealed record RunSummary(
+        IndexingRunOutcome Outcome, IReadOnlyList<string> FailedLocations, TimeSpan Duration, long Items);
+
+    private volatile RunSummary? _lastRun;
+    private long _indexingOperations;
+
+    /// <summary>
+    /// Records how a pass ended. <paramref name="completedNormally"/> is whether the provider's
+    /// enumeration ran to the end, so the locations it could not read are meaningful.
+    /// </summary>
+    private void RecordRun(IndexingRunOutcome outcome, long items, TimeSpan duration, bool completedNormally)
+    {
+        IReadOnlyList<string> failed = Array.Empty<string>();
+        if (completedNormally)
+        {
+            try { failed = _fileSystemProvider.EnumerationFailures.ToArray(); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Could not read the provider's enumeration failures"); }
+        }
+
+        if (outcome == IndexingRunOutcome.Completed && failed.Count > 0)
+            outcome = IndexingRunOutcome.CompletedWithGaps;
+
+        if (failed.Count > 0)
+            _logger.LogWarning("Indexing could not read {Count} location(s): {Locations}. The index lacks what was in them.",
+                failed.Count, string.Join(", ", failed));
+
+        _lastRun = new RunSummary(outcome, failed, duration, items);
+        Interlocked.Increment(ref _indexingOperations);
+    }
+
     // Set when the last indexing run's items lack real sizes and timestamps, so size and date
     // bounds cannot be answered. Such a query is refused rather than answered with an empty set.
     private volatile bool _fileMetadataUnavailable;
@@ -181,7 +213,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 indexingCts.Dispose();
                 combinedCts.Dispose();
             }
-        }, combinedCts.Token);
+        }, CancellationToken.None); // always runs: a pass stopped before it began must still end as one, and release its sources
 
         if (_options.EnableRealtimeMonitoring && options.EnableMonitoring)
         {
@@ -471,13 +503,20 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         ThrowIfDisposed();
         var indexStats = await _searchIndex.GetStatisticsAsync(cancellationToken).ConfigureAwait(false);
 
+        var run = _lastRun;
+
         // Convert IndexStatistics to IndexingStatistics
         return new IndexingStatistics
         {
             TotalFiles = indexStats.TotalFiles,
             TotalDirectories = indexStats.TotalDirectories,
             IndexMemoryUsage = indexStats.MemoryUsageBytes,
-            LastUpdateTime = indexStats.LastUpdated ?? DateTime.MinValue
+            LastUpdateTime = indexStats.LastUpdated ?? DateTime.MinValue,
+            LastRunOutcome = run?.Outcome ?? IndexingRunOutcome.None,
+            FailedLocations = run?.FailedLocations ?? Array.Empty<string>(),
+            LastIndexingTime = run?.Duration ?? TimeSpan.Zero,
+            AverageIndexingSpeed = run is { Duration.TotalSeconds: > 0 } ? run.Items / run.Duration.TotalSeconds : 0,
+            IndexingOperations = Interlocked.Read(ref _indexingOperations),
         };
     }
 
@@ -695,7 +734,16 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 Interlocked.Exchange(ref _totalIndexedFiles, processedFiles);
             }
 
+            // A provider that sees cancellation ends its enumeration quietly; that is a pass that was stopped,
+            // not one that read everything.
+            if (!capReached)
+                cancellationToken.ThrowIfCancellationRequested();
+
             stopwatch.Stop();
+
+            RecordRun(
+                capReached ? IndexingRunOutcome.CapReached : IndexingRunOutcome.Completed,
+                processedFiles, stopwatch.Elapsed, completedNormally: true);
 
             if (capReached)
             {
@@ -732,6 +780,8 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 "the index is incomplete. Raise or remove WindowsSearchEngineOptions.IndexingTimeout.";
             _logger.LogWarning("{Message}", message);
 
+            RecordRun(IndexingRunOutcome.TimedOut, processedFiles, stopwatch.Elapsed, completedNormally: false);
+
             IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
                 "Timeout", processedFiles, processedFiles, stopwatch.Elapsed,
                 message, IndexingPhase.Failed));
@@ -739,10 +789,14 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         catch (OperationCanceledException)
         {
             _logger.LogDebug("Indexing stopped: {ProcessedFiles} files processed (cancellation requested)", processedFiles);
+
+            RecordRun(IndexingRunOutcome.Cancelled, processedFiles, stopwatch.Elapsed, completedNormally: false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Indexing failed after processing {ProcessedFiles} files", processedFiles);
+
+            RecordRun(IndexingRunOutcome.Failed, processedFiles, stopwatch.Elapsed, completedNormally: false);
 
             IndexingProgressChanged?.Invoke(this, new IndexingProgressEventArgs(
                 "Error", processedFiles, processedFiles, stopwatch.Elapsed,

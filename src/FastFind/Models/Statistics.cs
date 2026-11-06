@@ -56,6 +56,21 @@ public record IndexingStatistics
     public long IndexingOperations { get; init; }
 
     /// <summary>
+    /// How the most recent indexing pass ended. <see cref="IndexingRunOutcome.None"/> until one has run.
+    /// </summary>
+    /// <remarks>
+    /// Anything other than <see cref="IndexingRunOutcome.Completed"/> means the index may be missing entries
+    /// the caller expects; <see cref="FailedLocations"/> names the locations that could not be read.
+    /// </remarks>
+    public IndexingRunOutcome LastRunOutcome { get; init; }
+
+    /// <summary>
+    /// The locations (a directory, or a drive such as <c>C:\</c>) that the most recent pass could not read,
+    /// so that what was in them is missing from the index. Empty when every location was read.
+    /// </summary>
+    public IReadOnlyList<string> FailedLocations { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Location-specific statistics
     /// </summary>
     public Dictionary<string, LocationStatistics> LocationStats { get; init; } = new();

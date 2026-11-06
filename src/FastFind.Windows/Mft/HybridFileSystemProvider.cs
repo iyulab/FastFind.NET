@@ -107,6 +107,9 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     public bool ProvidesFileMetadata(IndexingOptions options) => _activeProvider.ProvidesFileMetadata(options);
 
     /// <inheritdoc/>
+    public IReadOnlyCollection<string> EnumerationFailures => _activeProvider.EnumerationFailures;
+
+    /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> EnumerateFilesAsync(
         IEnumerable<string> locations,
         IndexingOptions options,

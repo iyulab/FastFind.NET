@@ -36,6 +36,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   listing a directory. It now ends when the last directory it was handed has been listed. A query for a word nothing
   has went from 154 ms to 6.7 ms over a 27,000-entry folder, and from 323 ms to 177 ms over a million-entry index
   (see `docs/BENCHMARKS.md`).
+- **`IndexingStatistics.LastIndexingTime`, `AverageIndexingSpeed` and `IndexingOperations` were never filled by the
+  Windows engine** (always zero), and the Unix engine reported `IndexingOperations = 1` before anything had been indexed.
+  Both now report the passes that have run and how long the last one took.
+- **A pass stopped before it had begun left no trace.** It was started on a token that was already cancelled, so the
+  Windows engine never ran it and never released what it held. It now runs, ends as `Cancelled`, and cleans up.
 - **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
   one attribute a file carries when it has no other, which is what a file with its archive bit cleared
   reports; the walk built its list of attributes to skip starting from it.
@@ -62,6 +67,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `.snupkg` with Source Link pointing at the commit it was built from is published beside it, so a
   debugger can fetch the matching source.
 
+- **`IndexingStatistics` says how the last indexing pass ended and which locations it could not read.**
+  `LastRunOutcome` (`IndexingRunOutcome`: `None`, `Completed`, `CompletedWithGaps`, `CapReached`, `TimedOut`,
+  `Cancelled`, `Failed`) and `FailedLocations`. A pass that lost a drive, or was given a directory that is not there,
+  used to end exactly like one that read everything - the progress event said "completed", the statistics said nothing, and
+  the index was simply short. Providers report what they could not read through the new
+  `IFileSystemProvider.EnumerationFailures` (a default interface member, so existing providers compile unchanged and
+  report nothing). Entries a provider skips because the account may not see them are not failures.
 - **`IndexStoreCorruptedException`.** Opening a store whose file is not a database, or is cut short or damaged,
   now raises this exception (an `IOException`, carrying `StorePath`, with the driver's exception inside) instead of
   the driver's own `SqliteException` - error 26 "file is not a database" or error 11 "database disk image is

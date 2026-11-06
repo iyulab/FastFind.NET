@@ -42,6 +42,19 @@ public interface IFileSystemProvider : IDisposable
     bool ProvidesFileMetadata(IndexingOptions options) => true;
 
     /// <summary>
+    /// The locations, from the most recent <see cref="EnumerateFilesAsync"/> call, that could not be read
+    /// at all — a directory that does not exist or fails to list, a drive the provider cannot open — so
+    /// that what was in them is missing from what was enumerated.
+    /// </summary>
+    /// <remarks>
+    /// Individual entries a provider skips because the account may not see them (an access-denied
+    /// sub-directory, a file that vanished mid-walk) are not failures and are not reported. The list is
+    /// reset when an enumeration starts and complete when it ends. The default is empty, so a provider that
+    /// does not report is read as one with nothing to report.
+    /// </remarks>
+    IReadOnlyCollection<string> EnumerationFailures => Array.Empty<string>();
+
+    /// <summary>
     /// Gets file information for a specific path
     /// </summary>
     /// <param name="filePath">Path to get information for</param>

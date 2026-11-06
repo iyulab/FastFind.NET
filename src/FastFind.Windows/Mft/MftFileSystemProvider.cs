@@ -44,6 +44,15 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     /// <inheritdoc/>
     public bool IsAvailable => OperatingSystem.IsWindows() && MftReader.IsAvailable();
 
+    private readonly System.Collections.Concurrent.ConcurrentBag<string> _enumerationFailures = new();
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A location that does not exist, one on a drive this provider cannot read (not mounted, not NTFS), or a
+    /// drive whose enumeration raised an error — reported as the drive root, <c>C:\</c>.
+    /// </remarks>
+    public IReadOnlyCollection<string> EnumerationFailures => _enumerationFailures.Distinct().ToArray();
+
     /// <inheritdoc/>
     /// <remarks>
     /// Only with <see cref="IndexingOptions.CollectFileMetadata"/>: the journal enumeration this
@@ -63,14 +72,30 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     {
         ThrowIfDisposed();
 
+        // The list is of this enumeration's failures, not an accumulation across passes.
+        _enumerationFailures.Clear();
+        var requested = locations.ToArray();
+
         if (!IsAvailable)
         {
             _logger?.LogWarning("MFT access not available, falling back to empty enumeration");
+            foreach (var location in requested) _enumerationFailures.Add(location);
             yield break;
         }
 
         // Determine which drives to scan based on locations
-        var driveLetters = GetDriveLettersFromLocations(locations);
+        var driveLetters = GetDriveLettersFromLocations(requested);
+
+        // A location that is not there, or sits on a drive this provider is not going to read, is a gap in
+        // what was asked for: the volume scan below would simply never produce anything for it.
+        foreach (var location in requested)
+        {
+            var root = Path.GetPathRoot(location);
+            var drive = string.IsNullOrEmpty(root) ? '\0' : char.ToUpperInvariant(root[0]);
+            if (!Directory.Exists(location) || !driveLetters.Contains(drive))
+                _enumerationFailures.Add(location);
+        }
+
         if (driveLetters.Length == 0)
         {
             _logger?.LogWarning("No valid NTFS drives found in specified locations");
@@ -108,6 +133,7 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Error enumerating drive {Drive}", driveLetter);
+                _enumerationFailures.Add($"{driveLetter}:\\");
             }
             finally
             {

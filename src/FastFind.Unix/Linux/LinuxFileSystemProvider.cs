@@ -31,6 +31,11 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
     /// <inheritdoc/>
     public bool IsAvailable => OperatingSystem.IsLinux();
 
+    private readonly ConcurrentBag<string> _enumerationFailures = new();
+
+    /// <inheritdoc/>
+    public IReadOnlyCollection<string> EnumerationFailures => _enumerationFailures.Distinct().ToArray();
+
     /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> EnumerateFilesAsync(
         IEnumerable<string> locations,
@@ -108,6 +113,9 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
         ChannelWriter<FileItem> writer,
         CancellationToken cancellationToken)
     {
+        // The list is of this enumeration's failures, not an accumulation across passes.
+        _enumerationFailures.Clear();
+
         var maxParallelism = Math.Max(1, options.ParallelThreads);
         var workChannel = Channel.CreateUnbounded<(string Path, int Depth)>(
             new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
@@ -122,6 +130,11 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
                 Interlocked.Increment(ref pendingWork[0]);
                 await workChannel.Writer.WriteAsync((location, 0), cancellationToken)
                     .ConfigureAwait(false);
+            }
+            else
+            {
+                // Asked for and not there: the index will lack it, and the caller should be able to tell.
+                _enumerationFailures.Add(location);
             }
         }
 
