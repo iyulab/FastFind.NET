@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using FastFind.Models;
 using FastFind.Windows.Mft;
+using FastFind.Windows.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -12,8 +13,9 @@ namespace FastFind.Windows.Tests.Mft;
 /// The change-journal provider leaves out what the exclusion list names, over a real volume.
 /// </summary>
 /// <remarks>
-/// Skipped where journal enumeration is unavailable — it needs administrator rights on NTFS — which
-/// is every CI runner this project uses. It is the negative control for the exclusion comparison on
+/// Reported as skipped, with the reason, where journal enumeration is unavailable — it needs
+/// administrator rights on NTFS — which is every CI runner this project uses. (It used to return
+/// early instead, which reports a pass for a run that checked nothing.) It is the negative control for the exclusion comparison on
 /// this provider: it was a case-insensitive substring of the full path, so an exclusion spelled with
 /// forward slashes excluded nothing.
 /// </remarks>
@@ -68,15 +70,9 @@ public class MftExclusionTests : IDisposable
         return names;
     }
 
-    [Fact]
+    [ElevatedFact]
     public async Task An_Exclusion_Written_With_Forward_Slashes_Should_Be_Honoured()
     {
-        if (!MftFileSystemProvider.IsMftAccessAvailable)
-        {
-            _output.WriteLine("Skipped: journal enumeration needs administrator rights on NTFS.");
-            return;
-        }
-
         var baseline = await EnumerateAsync();
         baseline.Should().Contain("excluded.dll", "the probe tree has to be visible before excluding any of it");
         baseline.Should().Contain("kept.txt");
