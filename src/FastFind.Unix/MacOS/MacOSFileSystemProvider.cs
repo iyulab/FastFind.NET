@@ -277,9 +277,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                 // .NET on macOS. Filtering is handled in UnixSearchEngine.SearchIndex
                 // for cross-platform API consistency.
 
-                // Skip symlinks unless following
-                if (!options.FollowSymlinks && entry.LinkTarget != null)
-                    continue;
+                // A symlink is an entry like any other: it is listed, so it can be found by name. What it
+                // points at is not entered unless following was asked for (below); the target is indexed where
+                // it really is. (It used to be skipped altogether, which hid the name as well as the way in.)
+                var isLink = entry.LinkTarget != null;
 
                 bool isDirectory = entry is DirectoryInfo;
 
@@ -294,6 +295,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                     // Write directory item
                     var dirItem = CreateFileItem(subDir);
                     await output.WriteAsync(dirItem, cancellationToken).ConfigureAwait(false);
+
+                    // Listed, not entered
+                    if (isLink && !options.FollowSymlinks)
+                        continue;
 
                     // Dispatch or inline traversal based on depth
                     if (depth <= 2)
