@@ -43,20 +43,23 @@ internal sealed class DirectoryWalk(IndexingOptions options)
             AttributesToSkip = AttributesToSkip(_options),
         };
 
-        // How many levels below the root may be listed. null = unbounded. This reproduces what the
-        // recursive enumerator did with the same setting; see the depth notes in the tests.
-        int? levelsBelowRoot = _options.MaxDepth is { } maxDepth ? (maxDepth > 1 ? maxDepth : 0) : null;
+        // How many levels below the root may be listed: depth 1 is the root's own entries, so a depth of
+        // n lists n - 1 levels beneath it. null = unbounded. (The recursive enumerator this replaced was
+        // handed the depth as its recursion limit, which counts steps below the root, so depth 2 and 3
+        // reported one level more than they named.)
+        int? levelsBelowRoot = _options.MaxDepth is { } maxDepth ? Math.Max(maxDepth - 1, 0) : null;
 
         var excluded = _options.ExcludedPaths;
-        var pending = new Queue<(string Path, int Level)>();
-        pending.Enqueue((root, 0));
+        var followLinks = _options.FollowSymlinks;
+        var pending = new Queue<(string Path, int Level, int LinkHops)>();
+        pending.Enqueue((root, 0, 0));
 
         while (pending.Count > 0)
         {
             if (cancellationToken.IsCancellationRequested)
                 yield break;
 
-            var (directory, level) = pending.Dequeue();
+            var (directory, level, linkHops) = pending.Dequeue();
             var descend = levelsBelowRoot is null || level < levelsBelowRoot;
 
             IEnumerator<Entry> enumerator;
@@ -65,7 +68,8 @@ internal sealed class DirectoryWalk(IndexingOptions options)
                 // Opening the enumerator is what opens the directory.
                 enumerator = new FileSystemEnumerable<Entry>(
                     directory,
-                    static (ref FileSystemEntry entry) => new Entry(entry.ToFullPath(), entry.IsDirectory),
+                    static (ref FileSystemEntry entry) => new Entry(
+                        entry.ToFullPath(), entry.IsDirectory, (entry.Attributes & FileAttributes.ReparsePoint) != 0),
                     enumerationOptions).GetEnumerator();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -93,11 +97,19 @@ internal sealed class DirectoryWalk(IndexingOptions options)
                     var entry = enumerator.Current;
                     yield return entry.Path;
 
-                    if (entry.IsDirectory && descend &&
-                        !(excluded.Count > 0 && PathExclusion.IsExcluded(entry.Path, excluded)))
-                    {
-                        pending.Enqueue((entry.Path, level + 1));
-                    }
+                    if (!entry.IsDirectory || !descend)
+                        continue;
+
+                    if (excluded.Count > 0 && PathExclusion.IsExcluded(entry.Path, excluded))
+                        continue;
+
+                    // A junction or symbolic link is an entry like any other, but what it points at is
+                    // listed where it really is. Followed only on request, and then only so far: a link
+                    // back to an ancestor would otherwise walk the tree again beneath itself for ever.
+                    if (entry.IsReparsePoint && (!followLinks || linkHops >= MaxLinkHops))
+                        continue;
+
+                    pending.Enqueue((entry.Path, level + 1, entry.IsReparsePoint ? linkHops + 1 : linkHops));
                 }
             }
         }
@@ -119,5 +131,8 @@ internal sealed class DirectoryWalk(IndexingOptions options)
         return skip;
     }
 
-    private readonly record struct Entry(string Path, bool IsDirectory);
+    /// <summary>How many links in a row a followed walk may cross before it stops descending.</summary>
+    private const int MaxLinkHops = 8;
+
+    private readonly record struct Entry(string Path, bool IsDirectory, bool IsReparsePoint);
 }

@@ -80,6 +80,72 @@ public class DirectoryWalkSemanticsTests : IDisposable
     }
 
     [Fact]
+    public void No_Depth_Limit_Should_Report_Every_Level()
+    {
+        Walk(Options()).Should().Equal(
+            "f0.txt", "L1", @"L1\f1.txt", @"L1\L2", @"L1\L2\f2.txt", @"L1\L2\L3", @"L1\L2\L3\f3.txt",
+            @"L1\L2\L3\L4", @"L1\L2\L3\L4\f4.txt");
+    }
+
+    [Theory]
+    [InlineData(1, new[] { "f0.txt", "L1" })]
+    [InlineData(2, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2" })]
+    [InlineData(3, new[] { "f0.txt", "L1", @"L1\f1.txt", @"L1\L2", @"L1\L2\f2.txt", @"L1\L2\L3" })]
+    public void MaxDepth_Should_Count_The_Directory_Levels_It_Names(int maxDepth, string[] expected)
+    {
+        // Depth 1 is the entries of the location itself. Depth 2 and 3 used to report one level more
+        // than they named, because the value was handed to a setting that counts recursion steps below
+        // the root.
+        Walk(Options(o => o.MaxDepth = maxDepth)).Should().Equal(expected);
+    }
+
+    [Fact]
+    public void A_Junction_Should_Be_Listed_But_Not_Followed_By_Default()
+    {
+        // L1\loop -> the root: following it would walk the tree again, beneath itself, without end.
+        var link = Junction(Path.Combine(_root, "L1", "loop"), _root);
+
+        var entries = Walk(Options());
+
+        entries.Should().Contain(@"L1\loop", "the link is an entry like any other");
+        entries.Should().NotContain(e => e.StartsWith(@"L1\loop\", StringComparison.OrdinalIgnoreCase),
+            "nothing beneath it is reported unless links are to be followed");
+        entries.Should().Contain(@"L1\L2\L3\L4\f4.txt", "the rest of the tree is untouched");
+        Directory.Exists(link).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_Followed_Junction_Should_Report_What_It_Points_At()
+    {
+        var target = Path.Combine(Path.GetTempPath(), "fastfind-walksem-target-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "remote.txt"), "x");
+        try
+        {
+            Junction(Path.Combine(_root, "linked"), target);
+
+            Walk(Options(o => o.FollowSymlinks = true)).Should().Contain(@"linked\remote.txt");
+            Walk(Options(o => o.FollowSymlinks = false)).Should().NotContain(@"linked\remote.txt");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.Combine(_root, "linked")); } catch { }
+            try { Directory.Delete(target, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void A_Followed_Junction_That_Loops_Should_Still_Come_To_An_End()
+    {
+        Junction(Path.Combine(_root, "L1", "loop"), _root);
+
+        var entries = Walk(Options(o => o.FollowSymlinks = true));
+
+        entries.Should().Contain(@"L1\L2\L3\L4\f4.txt");
+        entries.Count.Should().BeLessThan(10_000, "following a cycle is bounded, not unlimited");
+    }
+
+    [Fact]
     public void A_File_Whose_Only_Attribute_Is_Normal_Should_Be_Reported()
     {
         // A file with its archive bit cleared (a backup tool, a restore, some file systems) carries
