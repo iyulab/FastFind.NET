@@ -69,9 +69,10 @@ public class IndexingOptions
     /// Maximum directory depth to traverse (null for no limit)
     /// </summary>
     /// <remarks>
-    /// Depth 1 is the entries of an indexed location itself, depth 2 adds the entries of its
-    /// sub-directories, and so on. Honoured by the Windows directory-walk provider; the change-journal
-    /// and Unix providers do not read it.
+    /// The location itself is depth 0, and a directory deeper than <c>MaxDepth</c> is not entered: a value
+    /// of 1 lists the location's own entries and those of its immediate sub-directories, 2 one level
+    /// further, and so on. Honoured by the directory-walk provider on Windows and by both Unix providers;
+    /// the change-journal provider does not read it.
     /// </remarks>
     public int? MaxDepth { get; set; }
 
@@ -86,9 +87,11 @@ public class IndexingOptions
     /// Whether to follow symbolic links and junctions
     /// </summary>
     /// <remarks>
-    /// When false (the default) a link is reported as an entry and what it points at is not entered; the
-    /// target is indexed where it really is. When true a link is entered, but a chain of links is
-    /// crossed only so far, so a link back to an ancestor ends rather than repeating for ever.
+    /// When false (the default) a link is reported as an entry, so it can be found by its own name, and
+    /// what it points at is not entered; the target is indexed where it really is. When true a link is
+    /// entered. The Windows walk then crosses a chain of links only so far, so a link back to an ancestor
+    /// ends rather than repeating for ever; the Unix providers do not bound it, so a cycle of links is the
+    /// caller's to avoid.
     /// </remarks>
     public bool FollowSymlinks { get; set; } = false;
 

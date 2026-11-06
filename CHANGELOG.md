@@ -39,13 +39,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Files whose only attribute is `Normal` were never indexed by the directory walk.** `Normal` is the
   one attribute a file carries when it has no other, which is what a file with its archive bit cleared
   reports; the walk built its list of attributes to skip starting from it.
-- **`IndexingOptions.MaxDepth` listed one level more than it named for a depth of 2 or more** (a depth
-  of 2 listed three levels). A depth of *n* now lists *n* levels, the first being the location's own
-  entries. If you set `MaxDepth` to 2 or more on Windows, expect one level fewer than before.
+- **`IndexingOptions.MaxDepth` did not mean the same on every provider, or for every value.** A depth of 1 on the Windows directory walk listed only the
+  location's own entries, because a depth of 1 switched recursion off; every larger depth, and every depth
+  on the Linux and macOS providers, listed the location's entries and that many levels beneath them. A
+  depth of *n* now means that everywhere. Only a depth of exactly 1 on Windows changes: it gains the second
+  level it was missing.
 - **`IndexingOptions.FollowSymlinks` was ignored by the Windows directory walk**, which followed every
   junction and symbolic link and, given a link back to an ancestor, descended until the path was too
   long to continue. A link is now reported like any other entry and not entered unless `FollowSymlinks`
   is set; when it is, a chain of links is crossed only so far.
+- **The Linux and macOS providers left a symbolic link out of the index altogether** unless
+  `FollowSymlinks` was set, so a file reachable under a second name (`python3` pointing at
+  `python3.12`) could not be found by the name it is used under. A link is now listed, as on Windows, and
+  not entered unless links are followed.
 
 ### Added
 
