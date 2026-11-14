@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+**These change what you get back:** `SearchResult.TotalMatches` is now the same thing on both engines — the number of
+matches found before the search stopped. When `HasMoreResults` is false it is the exact count; when it is true it is a
+lower bound, at least `MaxResults + 1`. The Windows engine used to report at most `MaxResults` and say "more" when the
+matches equalled the cap; the Unix engine reported every match. `HasMoreResults` is now exact on both: true only when at
+least one match lay beyond the cap. Code that read `TotalMatches` as "all matches" on the Unix engine, or compared it
+with `MaxResults` on the Windows one, needs the new reading.
+
+- **A capped query on the Unix engine no longer collects every match.** It stops one match past `MaxResults`; a query
+  for 100 results over a million entries used to build a list of up to 99,706.
+
 ### Fixed
 
 - **A rename reported with a new path beneath its old one grew every indexed path under it, once per report.**

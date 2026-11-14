@@ -11,8 +11,14 @@ public record SearchResult
     public required SearchQuery Query { get; init; }
 
     /// <summary>
-    /// Total number of files that match the search criteria
+    /// The number of matches found before the search stopped.
     /// </summary>
+    /// <remarks>
+    /// When <see cref="HasMoreResults"/> is <see langword="false"/> this is the exact number of matches. When it is
+    /// <see langword="true"/>, the search stopped one match past <see cref="SearchQuery.MaxResults"/> — that match
+    /// is what proves there is more — so this is a lower bound, at least <c>MaxResults + 1</c>, and not the size of the
+    /// whole result set. It is the same on every engine.
+    /// </remarks>
     public long TotalMatches { get; init; }
 
     /// <summary>
@@ -31,7 +37,8 @@ public record SearchResult
     public bool IsComplete { get; init; } = true;
 
     /// <summary>
-    /// Whether there are more results available beyond the returned set
+    /// Whether there are more results available beyond the returned set: exact, <see langword="true"/> only when
+    /// at least one match lay beyond <see cref="SearchQuery.MaxResults"/>.
     /// </summary>
     public bool HasMoreResults { get; init; }
 

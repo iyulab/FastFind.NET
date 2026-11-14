@@ -357,12 +357,16 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             {
                 // .NET 10: Enhanced async enumeration with ConfigureAwait
                 // SearchAsync now returns FastFileItem, convert to FileItem for internal storage
-                await foreach (var fastFileItem in _searchIndex.SearchAsync(query, cancellationToken).ConfigureAwait(false))
+                // One match past MaxResults is asked for and counted, and not returned: it proves there is more.
+                await foreach (var fastFileItem in _searchIndex.SearchAsync(ResultCap.Probe(query), cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    resultList.Add(fastFileItem.ToFileItem());
                     totalMatches++;
+                    if (ResultCap.IsPastCap(query, totalMatches))
+                        break;
+
+                    resultList.Add(fastFileItem.ToFileItem());
 
                     // Update progress with adaptive frequency
                     if (totalMatches % GetProgressUpdateFrequency(totalMatches) == 0)
@@ -371,9 +375,6 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                             query, totalMatches, _searchIndex.Count, stopwatch.Elapsed, false, SearchPhase.SearchingIndex));
                     }
 
-                    // Apply result limit
-                    if (query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value)
-                        break;
                 }
 
                 stopwatch.Stop();
@@ -382,7 +383,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 _searchTiming.Record(stopwatch.Elapsed, totalMatches);
 
                 var searchTime = stopwatch.Elapsed;
-                var hasMoreResults = query.MaxResults.HasValue && totalMatches >= query.MaxResults.Value;
+                var hasMoreResults = ResultCap.IsPastCap(query, totalMatches);
 
                 // .NET 10: Enhanced metrics collection
                 var metrics = new SearchMetrics

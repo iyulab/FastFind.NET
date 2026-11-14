@@ -23,6 +23,7 @@
   <ItemGroup>
     <Compile Include="..\Shared\FileEntryTable.cs" Link="Shared\FileEntryTable.cs" />
     <Compile Include="..\Shared\IndexingAdmission.cs" Link="Shared\IndexingAdmission.cs" />
+    <Compile Include="..\Shared\ResultCap.cs" Link="Shared\ResultCap.cs" />
     <Compile Include="..\Shared\SearchTimingTally.cs" Link="Shared\SearchTimingTally.cs" />
   </ItemGroup>
 

@@ -407,7 +407,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 ? results.Take(query.MaxResults.Value).ToList()
                 : results;
 
-            var hasMore = query.MaxResults.HasValue && totalMatches > query.MaxResults.Value;
+            var hasMore = ResultCap.IsPastCap(query, totalMatches);
 
             var asyncFiles = ToAsyncEnumerable(limitedResults);
 
@@ -444,9 +444,12 @@ internal class UnixSearchEngineImpl : ISearchEngine
     {
         var results = new List<FastFileItem>();
 
-        await foreach (var item in _index.SearchAsync(query, cancellationToken).ConfigureAwait(false))
+        // One match past MaxResults proves there is more; nothing is collected beyond it (the index used to be
+        // drained, so a query for 100 results over a million entries built a list of up to 99,706).
+        await foreach (var item in _index.SearchAsync(ResultCap.Probe(query), cancellationToken).ConfigureAwait(false))
         {
             results.Add(item);
+            if (ResultCap.IsPastCap(query, results.Count)) break;
         }
 
         return results;

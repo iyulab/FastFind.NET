@@ -159,10 +159,13 @@ Matches the index produced, in row order — 100,000: 5, 0, 3,088, 9,984, 135, 1
   roughly **20–50 ms at 100,000 entries, 50–190 ms at 300,000, and 170–320 ms at 1,000,000** on the Windows index, about
   0.2–0.3 µs an entry. For a text query nothing narrows the candidates before the text is compared; an extension or a
   directory does, which is why those rows are fast.
-- The two engines do not do the same work for the same query. The Windows index stops at the requested number of
-  results. The Unix engine collects **every** match and truncates afterwards — 30,807 matches for a query that asked for
-  100, at 1,000,000 entries — which is why its common-word query costs 200–370 ms where the Windows one costs under
-  two milliseconds, and why `TotalMatches` means "all matches" on one engine and "at most the cap" on the other.
+- **The two engines now do the same work for a capped query; the Unix figures here predate that.** The Windows index
+  stops at the requested number of results; the Unix engine used to collect **every** match and truncate afterwards —
+  30,807 matches for a query that asked for 100, at 1,000,000 entries — which is why its common-word query measured
+  200–370 ms where the Windows one measured under two milliseconds. Both engines now ask for one match past the cap and
+  stop there, so `HasMoreResults` is exact and `TotalMatches` is the number found before the search stopped (the exact
+  count when nothing lies beyond the cap). **The Unix query-latency rows in this document were measured before that
+  change and have not been re-measured; read them as the cost of draining the index, not as the cost of a capped query.**
 - **Queries that stop at their cap are unpredictable.** Which 100 matches come first depends on the order the index
   enumerates its entries, which changes with each process: the rare-directory row above spans 0.1 to 66 ms at one size.
   Do not read a single figure for those rows.
