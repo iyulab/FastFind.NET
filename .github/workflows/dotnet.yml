@@ -27,7 +27,7 @@ env:
   
 jobs:
   # 🧭 배포 여부 결정 — 이 워크플로에서 단 한 번만 판정한다.
-  # pack-and-publish 는 매트릭스 잡이라 job output 이 어느 leg 의 값인지 보장되지 않는다.
+  # 배포 잡이 여럿(pack, publish, create-release)이라 판정을 한 곳에 두고 output 으로 나눠 쓴다.
   # 판정을 독립 잡으로 분리해야 create-release 가 신뢰할 수 있는 output 을 참조할 수 있다.
   decide:
     runs-on: ubuntu-latest
@@ -233,8 +233,9 @@ jobs:
         dotnet build src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release
         dotnet test src/FastFind.Unix.Tests/FastFind.Unix.Tests.csproj --configuration Release --no-build
 
-  # 📦 빌드 및 배포 (테스트는 로컬에서만 수행)
-  pack-and-publish:
+  # 📦 빌드 및 pack — 게시는 하지 않는다. 게시는 아래 publish 잡이 조직의 중앙 게시 워크플로에 맡긴다.
+  # 한 잡이 네 프로젝트를 모두 pack 해 아티팩트 `nuget-packages` 하나로 올린다 (중앙 워크플로가 그 이름을 읽는다).
+  pack:
     runs-on: ubuntu-latest
     # 배포는 되돌릴 수 없다 — NuGet 패키지는 unlist 만 되고 삭제되지 않는다.
     # 따라서 pack 은 빌드·테스트 잡을 통과한 뒤에만 실행한다.
@@ -244,18 +245,7 @@ jobs:
     if: >
       !failure() && !cancelled() &&
       (needs.decide.outputs.should_deploy == 'true' || github.event_name == 'workflow_dispatch')
-    strategy:
-      matrix:
-        project: 
-          - path: 'src/FastFind/FastFind.csproj'
-            name: 'FastFind.Core'
-          - path: 'src/FastFind.Windows/FastFind.Windows.csproj'
-            name: 'FastFind.Windows'
-          - path: 'src/FastFind.SQLite/FastFind.SQLite.csproj'
-            name: 'FastFind.SQLite'
-          - path: 'src/FastFind.Unix/FastFind.Unix.csproj'
-            name: 'FastFind.Unix'
-    
+
     steps:
     - uses: actions/checkout@v7
       with:
@@ -265,7 +255,7 @@ jobs:
       uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
-    
+
     - name: Cache NuGet packages
       uses: actions/cache@v6
       with:
@@ -273,64 +263,53 @@ jobs:
         key: ${{ runner.os }}-nuget-${{ hashFiles('src/Directory.Packages.props', '**/*.csproj') }}
         restore-keys: |
           ${{ runner.os }}-nuget-
-    
+
     - name: Restore dependencies
       run: dotnet restore ${{ env.SOLUTION_PATH }}
-    
-    - name: Build ${{ matrix.project.name }}
-      run: dotnet build ${{ matrix.project.path }} --configuration Release --no-restore
-    
-    - name: Pack ${{ matrix.project.name }}
-      run: dotnet pack ${{ matrix.project.path }} --configuration Release --no-build --output nupkg
-    
+
+    - name: Pack
+      run: |
+        set -euo pipefail
+        for project in src/FastFind/FastFind.csproj src/FastFind.Windows/FastFind.Windows.csproj src/FastFind.SQLite/FastFind.SQLite.csproj src/FastFind.Unix/FastFind.Unix.csproj; do
+          echo "📦 Packing ${project}"
+          dotnet build "${project}" --configuration Release --no-restore
+          dotnet pack "${project}" --configuration Release --no-build --output nupkg
+        done
+
     - name: List generated packages
       run: ls -la nupkg/
-    
+
     - name: Validate package
       run: |
         for package in nupkg/*.nupkg; do
           echo "Validating package: $package"
           dotnet nuget verify "$package" || echo "Package verification failed for $package"
         done
-    
-    - name: Push ${{ matrix.project.name }} to NuGet
-      if: needs.decide.outputs.should_deploy == 'true'
-      run: |
-        echo "🚀 Deploying ${{ matrix.project.name }} v${{ needs.decide.outputs.version }} to NuGet"
-        echo "📦 Packages in nupkg/:"
-        ls -la nupkg/
 
-        echo "📤 Pushing to NuGet..."
-        dotnet nuget push ./nupkg/*.nupkg \
-          --source https://api.nuget.org/v3/index.json \
-          --api-key ${{ secrets.NUGET_API_KEY }} \
-          --skip-duplicate \
-          --no-symbols
-
-        echo "✅ NuGet deployment completed for ${{ matrix.project.name }} v${{ needs.decide.outputs.version }}"
-
-    # The symbol package goes in its own step, after the package. nuget.org takes symbols only for a
-    # package it already holds, and a failure here must not turn red a job whose irreversible part (the
-    # package) has already happened, nor leave create-release, which needs this job, unrun.
-    - name: Push ${{ matrix.project.name }} symbols to NuGet
-      if: needs.decide.outputs.should_deploy == 'true'
-      continue-on-error: true
-      run: |
-        dotnet nuget push ./nupkg/*.snupkg \
-          --source https://api.nuget.org/v3/index.json \
-          --api-key ${{ secrets.NUGET_API_KEY }} \
-          --skip-duplicate
-
-    # Release 에 attach 하기 위한 중간 산출물 — create-release 가 끝나면 즉시 삭제된다.
+    # The central publisher reads this artifact by name; only .nupkg and .snupkg files go in it, and it lives a day
+    # (create-release downloads it too and deletes it when it is done).
     - name: Upload packages
       uses: actions/upload-artifact@v7
       with:
-        name: nuget-packages-${{ matrix.project.name }}
-        path: nupkg/*.nupkg
+        name: nuget-packages
+        path: |
+          nupkg/*.nupkg
+          nupkg/*.snupkg
         retention-days: 1
 
+  # 🚀 게시 — 이 리포는 NuGet 키를 갖지 않는다. 중앙 워크플로(iyulab/nuget-publish)가 신뢰 게시(OIDC)로
+  # 푸시하고 결과를 기다려 돌려준다. 호출은 pull_request 에서 돌지 않는다(중앙에서 거부됨).
+  publish:
+    needs: [decide, pack]
+    if: >
+      !failure() && !cancelled() && github.event_name != 'pull_request' &&
+      needs.decide.outputs.should_deploy == 'true'
+    uses: iyulab/nuget-publish/.github/workflows/request.yml@2166748abf716fb58855228f65fc6b8f78c2780f # main
+    permissions: {}
+    secrets: inherit
+
   create-release:
-    needs: [decide, pack-and-publish]
+    needs: [decide, publish]
     runs-on: ubuntu-latest
     if: needs.decide.outputs.should_deploy == 'true' && github.ref == 'refs/heads/main'
     # contents: 태그와 릴리스 생성. actions: 아래 delete-artifact 가 artifact 를 지운다.
@@ -343,9 +322,10 @@ jobs:
       with:
         fetch-depth: 0  # Full history for changelog generation
 
-    - name: Download all artifacts
+    - name: Download packages
       uses: actions/download-artifact@v8
       with:
+        name: nuget-packages
         path: artifacts/
 
     - name: Get version info
@@ -414,5 +394,5 @@ jobs:
       uses: geekyeggo/delete-artifact@v6
       if: always()
       with:
-        name: nuget-packages-*
+        name: nuget-packages
         failOnError: false
