@@ -186,6 +186,10 @@ query is cheap:
 
 Over a million-entry index the same ~130 ms is inside the machine's own spread (173–320 ms), so it is not claimed there.
 
+That walk is no longer started because a query found few matches, or because the index is small: it runs only for a
+location the index has nothing under (a scope not indexed yet, an index that is still empty). The figures above stay
+as the cost of the walk when it does run; they are not re-measured for the new rule.
+
 **Over a real tree** (the engine as this host configures it — the change-journal provider, elevated — then queried through
 `SearchAsync`; median, lowest – highest over three runs):
 

@@ -93,6 +93,11 @@ internal class WindowsSearchIndex : ISearchIndex
         set => _admission = value;
     }
 
+    private long _filesystemScans;
+
+    /// <summary>How many searches this index has also answered from the file system (see <c>ShouldPerformFilesystemFallback</c>).</summary>
+    internal long FilesystemScans => Interlocked.Read(ref _filesystemScans);
+
     /// <inheritdoc/>
     public long Count => _entries.Count;
 
@@ -267,8 +272,9 @@ internal class WindowsSearchIndex : ISearchIndex
         }
 
         // Phase 2: Fill gaps with live filesystem search (for incomplete indexing)
-        if (ShouldPerformFilesystemFallback(query, matchCount))
+        if (ShouldPerformFilesystemFallback(query))
         {
+            Interlocked.Increment(ref _filesystemScans);
             _logger.LogDebug("Hybrid search: Performing filesystem fallback, current matches: {Count}", matchCount);
 
             await foreach (var fsResult in SearchFilesystemAsync(query, returnedPaths, regex, cancellationToken))
@@ -292,59 +298,33 @@ internal class WindowsSearchIndex : ISearchIndex
     }
 
     /// <summary>
-    /// Determines if filesystem fallback search should be performed.
-    /// Optimized to avoid unnecessary filesystem scans when index has adequate coverage.
+    /// Whether a query should also be answered from the file system: only for a location the index does not cover.
     /// </summary>
-    private bool ShouldPerformFilesystemFallback(SearchQuery query, int indexedMatches)
+    /// <remarks>
+    /// How few items the index holds, or how few matches it found, is no reason to scan the disk: a query then
+    /// returned what the index held plus what a second mechanism found, with its own rules, and the same query
+    /// answered differently depending on how many matches there happened to be. The scan is for a location the
+    /// index has nothing under — a scope not indexed yet, or an index that is still empty — and nowhere else.
+    /// A covered location that is still being indexed returns what the index holds so far.
+    /// </remarks>
+    private bool ShouldPerformFilesystemFallback(SearchQuery query)
     {
-        // Always perform fallback if index is very small (suggests no or incomplete indexing)
-        if (Count < 10)
+        // An empty index covers nothing: every location is one it does not cover.
+        if (Count == 0)
         {
-            if (Count == 0)
-            {
-                _logger.LogWarning(
-                    "Search index is empty. Did you call StartIndexingAsync() before searching? " +
-                    "Falling back to filesystem scanning which may be slower.");
-            }
-            else
-            {
-                _logger.LogDebug(
-                    "Search index contains only {Count} items. Consider running StartIndexingAsync() for better performance.",
-                    Count);
-            }
+            _logger.LogWarning(
+                "Search index is empty. Did you call StartIndexingAsync() before searching? " +
+                "Falling back to filesystem scanning which may be slower.");
             return true;
         }
 
-        // For BasePath queries: check if the path is covered by the index
         if (!string.IsNullOrEmpty(query.BasePath))
-        {
-            if (IsPathCoveredByIndex(query.BasePath))
-            {
-                _logger.LogDebug("BasePath {Path} is covered by index, skipping filesystem fallback", query.BasePath);
-                return false;  // Index has this path - no need for filesystem scan
-            }
-            // Path not in index, need filesystem fallback
-            return true;
-        }
+            return !IsPathCoveredByIndex(query.BasePath);
 
-        // For SearchLocations queries: check if all locations are covered
         if (query.SearchLocations.Count > 0)
-        {
-            var allCovered = query.SearchLocations.All(loc => IsPathCoveredByIndex(loc));
-            if (allCovered)
-            {
-                _logger.LogDebug("All SearchLocations are covered by index, skipping filesystem fallback");
-                return false;  // All locations indexed - no need for filesystem scan
-            }
-            // Some locations not in index, need filesystem fallback
-            return true;
-        }
+            return !query.SearchLocations.All(loc => IsPathCoveredByIndex(loc));
 
-        // Perform fallback if we found very few results from index
-        if (indexedMatches < 5)
-            return true;
-
-        // For broad searches with good index coverage, trust the index
+        // Unscoped: the whole index is the answer.
         return false;
     }
 

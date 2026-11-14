@@ -527,6 +527,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         return await Task.Run(() =>
         {
             var timing = _searchTiming.Read();
+            var scans = _searchIndex is WindowsSearchIndex windowsIndex ? windowsIndex.FilesystemScans : 0;
 
             return new SearchStatistics
             {
@@ -536,10 +537,10 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 FastestSearchTime = timing.Fastest,
                 SlowestSearchTime = timing.Slowest,
                 TotalSearchTime = timing.Total,
-                // Not measured here: whether the index or a live scan answered each search is the index's
-                // knowledge. Every search is counted as an index search and none as a scan.
-                IndexHits = timing.Searches,
-                FileSystemScans = 0,
+                // Which searches the file system also answered is the index's knowledge: it counts the scans it ran.
+                // A search it scanned for is not an index hit.
+                IndexHits = Math.Max(0, timing.Searches - scans),
+                FileSystemScans = scans,
                 LastSearch = timing.LastSearchUtc
             };
         }, cancellationToken).ConfigureAwait(false);

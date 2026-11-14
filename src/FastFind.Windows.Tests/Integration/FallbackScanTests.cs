@@ -9,8 +9,8 @@ using Xunit;
 namespace FastFind.Windows.Tests.Integration;
 
 /// <summary>
-/// The live scan an index falls back to when a query finds fewer than five matches: how long it takes to
-/// notice there is nothing more to scan, and that it scans all there is.
+/// The live scan an index falls back to for a location it does not cover: how long it takes to notice there is
+/// nothing more to scan, and that it scans all there is.
 /// </summary>
 /// <remarks>
 /// Its workers used to decide the scan was over by polling: with an empty queue each slept 10 ms, ten
@@ -66,11 +66,11 @@ public class FallbackScanTests : IDisposable
     [Fact]
     public async Task A_Fallback_With_Nowhere_To_Look_Should_Not_Spend_Time_Waiting_To_Be_Sure()
     {
-        // An index of 30 items whose directories do not exist on disk: a query that matches nothing falls
-        // back, finds nothing to scan, and should say so at once.
+        // An index of 30 items whose directories do not exist on disk, and a query scoped to a location it does
+        // not cover: the scan finds nothing to scan, and should say so at once.
         var directories = Enumerable.Range(0, 10).Select(i => $@"X:\fastfind-does-not-exist\d{i}").ToList();
         var index = IndexOf(directories);
-        var query = new SearchQuery { SearchText = "zzzznomatch", SearchFileNameOnly = true, MaxResults = 100 };
+        var query = new SearchQuery { BasePath = @"X:\fastfind-does-not-exist-either", SearchText = "zzzznomatch", SearchFileNameOnly = true, MaxResults = 100 };
 
         await SearchAsync(index, query); // warm-up: JIT, first-use costs
 
@@ -109,8 +109,9 @@ public class FallbackScanTests : IDisposable
         }
         Grow(_root, 5);
 
-        // Fewer than ten indexed items: the query falls back to scanning the disk beneath the base path.
-        var index = IndexOf([_root], filesPerDirectory: 3); // fewer than ten items: every query falls back
+        // The index holds items elsewhere and nothing under the base path: a location it does not cover, which is
+        // what sends a query to the disk.
+        var index = IndexOf([Path.Combine(Path.GetTempPath(), "fastfind-fallbackscan-elsewhere")], filesPerDirectory: 3);
         var query = new SearchQuery { BasePath = _root, SearchText = "needle", SearchFileNameOnly = true, IncludeSubdirectories = true, MaxResults = 100_000 };
 
         var found = await SearchAsync(index, query);

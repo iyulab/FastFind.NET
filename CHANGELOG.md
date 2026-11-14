@@ -15,6 +15,13 @@ matches equalled the cap; the Unix engine reported every match. `HasMoreResults`
 least one match lay beyond the cap. Code that read `TotalMatches` as "all matches" on the Unix engine, or compared it
 with `MaxResults` on the Windows one, needs the new reading.
 
+- **A query is no longer also answered from the file system because the index is small (Windows).** The index
+  scanned the disk whenever it held fewer than ten items or a query found fewer than five matches, so the same query
+  returned a different set depending on how many matches there happened to be, from a second mechanism with its own
+  rules. The scan now runs only for a location the index does not cover — a `BasePath` or `SearchLocations` entry with
+  nothing indexed under it, or an index that is empty. A covered location that is still being indexed returns what the
+  index holds so far. `SearchStatistics.IndexHits` and `FileSystemScans` now count what happened (they reported every
+  search as an index search and no scans): a search the file system also answered counts as a scan, not an index hit.
 - **A capped query on the Unix engine no longer collects every match.** It stops one match past `MaxResults`; a query
   for 100 results over a million entries used to build a list of up to 99,706.
 
