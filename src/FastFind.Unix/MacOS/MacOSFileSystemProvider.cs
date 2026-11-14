@@ -1,3 +1,4 @@
+using FastFind.Indexing;
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Unix.Common;
@@ -281,14 +282,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
 
             try
             {
-                // Skip hidden entries unless requested (dotfiles on macOS)
-                if (!options.IncludeHidden && entry.Name.StartsWith('.'))
-                    continue;
-
-                // Note: IncludeSystem is not filtered here because macOS does not
-                // have a "system file" concept. FileAttributes.System is never set by
-                // .NET on macOS. Filtering is handled in UnixSearchEngine.SearchIndex
-                // for cross-platform API consistency.
+                // What an index admits (hidden, excluded paths and extensions, size) is IndexingAdmission, applied
+                // below to the item itself: the same definition the engine uses for a change the monitor reports.
+                // "Hidden" is the item's Hidden attribute, which .NET sets for a dot-name on every Unix and, on
+                // macOS, for the BSD hidden flag as well.
 
                 // A symlink is an entry like any other: it is listed, so it can be found by name. What it
                 // points at is not entered unless following was asked for (below); the target is indexed where
@@ -301,12 +298,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                 {
                     var subDir = (DirectoryInfo)entry;
 
-                    // Check excluded paths
-                    if (PathExclusion.IsExcluded(subDir.FullName, options.ExcludedPaths))
+                    var dirItem = CreateFileItem(subDir);
+                    if (!IndexingAdmission.Admits(dirItem, options))
                         continue;
 
-                    // Write directory item
-                    var dirItem = CreateFileItem(subDir);
                     await output.WriteAsync(dirItem, cancellationToken).ConfigureAwait(false);
 
                     // Listed, not entered
@@ -331,31 +326,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                 }
                 else if (entry is FileInfo fileInfo)
                 {
-                    // Check excluded paths — a file can be named by an exclusion too
-                    if (PathExclusion.IsExcluded(fileInfo.FullName, options.ExcludedPaths))
-                        continue;
-
-                    // Check extension exclusions
-                    if (options.ExcludedExtensions.Count > 0 &&
-                        !string.IsNullOrEmpty(fileInfo.Extension) &&
-                        options.ExcludedExtensions.Contains(fileInfo.Extension, StringComparer.OrdinalIgnoreCase))
-                        continue;
-
-                    // Check max file size
-                    if (options.MaxFileSize.HasValue)
-                    {
-                        try
-                        {
-                            if (fileInfo.Length > options.MaxFileSize.Value)
-                                continue;
-                        }
-                        catch
-                        {
-                            // Cannot read length; skip check
-                        }
-                    }
-
                     var item = CreateFileItem(fileInfo);
+                    if (!IndexingAdmission.Admits(item, options))
+                        continue;
+
                     await output.WriteAsync(item, cancellationToken).ConfigureAwait(false);
                 }
             }

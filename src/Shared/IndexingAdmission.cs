@@ -1,3 +1,4 @@
+using FastFind.Interfaces;
 using FastFind.Models;
 
 namespace FastFind.Indexing;
@@ -50,4 +51,48 @@ internal static class IndexingAdmission
 
         return true;
     }
+
+    /// <summary>
+    /// Puts an item a monitor reported into <paramref name="index"/> when an indexing pass with
+    /// <paramref name="options"/> would have admitted it.
+    /// </summary>
+    /// <remarks>
+    /// A change the monitor reports used to skip all of the above and the file-count cap, so files the
+    /// options refuse were added, and an index capped to bound memory grew with every file created after
+    /// the pass. The cap is a ceiling the index keeps: an item it already holds may still change, a new
+    /// one is added only below it, and a deletion makes room. An entry that is no longer admissible (it
+    /// became hidden, was renamed to an excluded extension) is removed: the pass would not have indexed it.
+    /// </remarks>
+    public static async Task<MonitoredOutcome> IndexMonitoredAsync(
+        ISearchIndex index, FileItem item, IndexingOptions options, CancellationToken cancellationToken = default)
+    {
+        if (!Admits(item, options))
+        {
+            await index.RemoveAsync(item.FullPath, cancellationToken).ConfigureAwait(false);
+            return MonitoredOutcome.NotAdmitted;
+        }
+
+        if (options.MaxFileCount is { } cap
+            && index.Count >= cap
+            && !await index.ContainsAsync(item.FullPath, cancellationToken).ConfigureAwait(false))
+        {
+            return MonitoredOutcome.CapReached;
+        }
+
+        await index.UpdateAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+        return MonitoredOutcome.Indexed;
+    }
+}
+
+/// <summary>What became of an item a monitor reported.</summary>
+internal enum MonitoredOutcome
+{
+    /// <summary>It is in the index (added, or an existing entry updated).</summary>
+    Indexed,
+
+    /// <summary>The indexing options refuse it; no entry for it remains.</summary>
+    NotAdmitted,
+
+    /// <summary>The index holds <see cref="IndexingOptions.MaxFileCount"/> items and this one is new.</summary>
+    CapReached,
 }

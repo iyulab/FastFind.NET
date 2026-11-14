@@ -30,6 +30,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   It holds at most 100,000 events; past that an event is dropped and counted, and a warning says how many.
   A watcher error (for example an internal buffer overflow) is now logged as a warning too, since the index
   has missed changes it will not hear about again.
+- **`IncludeHidden = false` skipped only dot-names on macOS (Unix).** A folder carrying the BSD hidden flag
+  (`~/Library`) is hidden to .NET (`FileAttributes.Hidden`) but has no leading dot, so the walk entered it and
+  reached other applications' data, which macOS guards with a permission prompt naming the walking process.
+  The Linux and macOS enumerators now ask the one definition of what an index admits (the same one the
+  Windows providers use) about the item itself, so the Hidden attribute decides on both, together with
+  excluded paths, excluded extensions and `MaxFileSize`. On Linux nothing changes: .NET reports a dot-name as
+  hidden.
+- **A change the monitor reported skipped the indexing options (Unix).** The Linux and macOS engine indexed a
+  created or modified file with no check, so excluded extensions, hidden files and `MaxFileCount` held only
+  during the pass. It now goes through the same admission and cap as the Windows engine, and an entry that
+  stops being admissible leaves the index.
 - **A change the engine could not apply was logged at `Debug`.** It is now a `Warning` naming the change type
   and path, so a consumer at its default log level can see that the index may disagree with the file system.
 

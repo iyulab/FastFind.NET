@@ -135,6 +135,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private volatile bool _isIndexing;
     private volatile bool _isMonitoring;
     private long _totalIndexedFiles;
+    private int _monitoringCapLogged;
     // What the searches answered so far have measured: count, matches, and how long they took.
     private readonly SearchTimingTally _searchTiming = new();
     private TimeSpan _lastIndexingTime;
@@ -856,13 +857,34 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
             if (item != null)
             {
-                await _index.AddAsync(item.ToFastFileItem()).ConfigureAwait(false);
+                // The same admission and cap as an item the pass read; without options (before any pass) there is
+                // nothing to apply. A new item at the cap is refused, one the index holds may still change.
+                var options = _currentIndexingOptions;
+                if (options is null)
+                {
+                    await _index.UpdateAsync(item.ToFastFileItem()).ConfigureAwait(false);
+                }
+                else
+                {
+                    var outcome = await IndexingAdmission.IndexMonitoredAsync(_index, item, options).ConfigureAwait(false);
+                    if (outcome != MonitoredOutcome.CapReached)
+                    {
+                        Interlocked.Exchange(ref _monitoringCapLogged, 0);
+                    }
+                    else if (Interlocked.Exchange(ref _monitoringCapLogged, 1) == 0)
+                    {
+                        _logger.LogWarning(
+                            "The index holds MaxFileCount ({MaxFileCount}) items; files created after the pass are not added until some are removed.",
+                            options.MaxFileCount);
+                    }
+                }
+
                 Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Error updating index entry: {Path}", path);
+            _logger.LogWarning(ex, "Updating the index entry for {Path} failed; the index may disagree with the file system", path);
         }
     }
 

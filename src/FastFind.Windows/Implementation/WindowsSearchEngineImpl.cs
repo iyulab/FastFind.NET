@@ -936,45 +936,32 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     }
 
     /// <summary>
-    /// Puts an item a monitor reported into the index if the indexing pass would have admitted it.
+    /// Puts an item a monitor reported into the index if the indexing pass would have admitted it
+    /// (<see cref="IndexingAdmission.IndexMonitoredAsync"/>), and says once when the cap refuses it.
     /// </summary>
-    /// <remarks>
-    /// The pass applies <see cref="IndexingAdmission"/> and <see cref="IndexingOptions.MaxFileCount"/> to every
-    /// item it reads. A monitored change used to skip both, so files the options refuse were added, and an
-    /// index capped to bound memory grew with every file created after the pass. The cap is a ceiling the
-    /// index keeps: an item it already holds may still change, a new one is added only below it, and a
-    /// deletion makes room.
-    /// </remarks>
     private async Task IndexIfAdmittedAsync(FileItem item, CancellationToken cancellationToken)
     {
         var options = _currentIndexingOptions;
-        if (options is not null)
+        if (options is null)
         {
-            if (!IndexingAdmission.Admits(item, options))
-            {
-                // Not admitted now (it became hidden, was renamed to an excluded extension, ...): the pass
-                // would not have indexed it, so an entry the index holds for it is stale.
-                await _searchIndex.RemoveAsync(item.FullPath, cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            if (options.MaxFileCount is { } cap
-                && _searchIndex.Count >= cap
-                && !await _searchIndex.ContainsAsync(item.FullPath, cancellationToken).ConfigureAwait(false))
-            {
-                if (Interlocked.Exchange(ref _monitoringCapLogged, 1) == 0)
-                {
-                    _logger.LogWarning(
-                        "The index holds MaxFileCount ({MaxFileCount}) items; files created after the pass are not added until some are removed.",
-                        cap);
-                }
-                return;
-            }
-
-            Interlocked.Exchange(ref _monitoringCapLogged, 0);
+            await _searchIndex.UpdateAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+            return;
         }
 
-        await _searchIndex.UpdateAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+        var outcome = await IndexingAdmission.IndexMonitoredAsync(_searchIndex, item, options, cancellationToken).ConfigureAwait(false);
+        if (outcome == MonitoredOutcome.CapReached)
+        {
+            if (Interlocked.Exchange(ref _monitoringCapLogged, 1) == 0)
+            {
+                _logger.LogWarning(
+                    "The index holds MaxFileCount ({MaxFileCount}) items; files created after the pass are not added until some are removed.",
+                    options.MaxFileCount);
+            }
+        }
+        else
+        {
+            Interlocked.Exchange(ref _monitoringCapLogged, 0);
+        }
     }
 
     /// <summary>
