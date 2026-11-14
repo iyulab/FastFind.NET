@@ -776,7 +776,9 @@ internal class UnixSearchEngineImpl : ISearchEngine
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Error handling file change: {Path}", change.NewPath);
+            // Warning, not Debug: the change is dropped, which a consumer at its default log level could not otherwise see.
+            _logger.LogWarning(ex, "A {ChangeType} change was dropped, the index may disagree with the file system for {Path}",
+                change.ChangeType, change.NewPath);
         }
     }
 
@@ -795,7 +797,17 @@ internal class UnixSearchEngineImpl : ISearchEngine
     /// </summary>
     private async Task MoveIndexEntryAsync(string oldPath, string newPath)
     {
-        await _index.MoveTreeAsync(oldPath, newPath).ConfigureAwait(false);
+        // A pair whose new path is beneath its old one is not a move; the index follows the file system.
+        var applied = await _index.ApplyRenameAsync(
+            oldPath, newPath,
+            static (path, _) => Task.FromResult(File.Exists(path) || Directory.Exists(path))).ConfigureAwait(false);
+        if (!applied)
+        {
+            _logger.LogWarning(
+                "A reported rename is not a move ('{OldPath}' → '{NewPath}'); the index follows the file system instead",
+                oldPath, newPath);
+        }
+
         Interlocked.Exchange(ref _totalIndexedFiles, _index.Count);
     }
 

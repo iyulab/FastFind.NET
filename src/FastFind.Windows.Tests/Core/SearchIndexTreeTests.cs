@@ -139,6 +139,87 @@ public sealed class SearchIndexTreeTests : IAsyncLifetime
         (await index.ContainsAsync(@"C:\src\App.Tests\ProgramTests.cs")).Should().BeTrue();
     }
 
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public async Task Moving_A_Directory_Beneath_Itself_Should_Be_Refused_And_Leave_The_Index_Unchanged(string backend)
+    {
+        var index = await IndexAsync(backend);
+        var before = await Paths(index.GetByDirectoryAsync(@"C:\src\App", recursive: true));
+
+        var act = () => index.MoveTreeAsync(@"C:\src\App", @"C:\src\App\Models");
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        (await Paths(index.GetByDirectoryAsync(@"C:\src\App", recursive: true))).Should().BeEquivalentTo(before);
+    }
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public async Task A_Rename_Pair_Reported_Over_And_Over_Should_Not_Grow_Any_Path(string backend)
+    {
+        // The field defect: the same impossible pair applied each time re-rooted every descendant, so
+        // each path gained a block per event. Through ApplyRenameAsync the index must not change at all.
+        var index = await IndexAsync(backend);
+        var before = await Paths(index.GetByDirectoryAsync(@"C:\src", recursive: true));
+
+        for (var i = 0; i < 5; i++)
+        {
+            var applied = await index.ApplyRenameAsync(
+                @"C:\src\App", @"C:\src\App\Models", (_, _) => Task.FromResult(true));
+            applied.Should().BeFalse();
+        }
+
+        (await Paths(index.GetByDirectoryAsync(@"C:\src", recursive: true))).Should().BeEquivalentTo(before);
+        var longest = (await Paths(index.GetByDirectoryAsync(@"C:\src", recursive: true))).Max(p => p.Length);
+        longest.Should().Be(before.Max(p => p.Length));
+    }
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public async Task A_Pair_That_Is_Not_A_Move_Should_Drop_The_Old_Tree_Only_When_The_Old_Path_Is_Gone(string backend)
+    {
+        var index = await IndexAsync(backend);
+
+        // Old path still on disk: the index keeps what it has.
+        await index.ApplyRenameAsync(@"C:\src\App", @"C:\src\App\Models", (_, _) => Task.FromResult(true));
+        (await index.ContainsAsync(@"C:\src\App\Models\Item.cs")).Should().BeTrue();
+
+        // Old path gone: the stale tree is removed, and nothing is re-rooted.
+        var applied = await index.ApplyRenameAsync(@"C:\src\App", @"C:\src\App\Models", (_, _) => Task.FromResult(false));
+
+        applied.Should().BeFalse();
+        (await index.ContainsAsync(@"C:\src\App")).Should().BeFalse();
+        (await index.ContainsAsync(@"C:\src\App\Models\Item.cs")).Should().BeFalse();
+        (await index.ContainsAsync(@"C:\src\App\Models\Models\Item.cs")).Should().BeFalse();
+        (await index.ContainsAsync(@"C:\src\App.Tests\ProgramTests.cs")).Should().BeTrue();
+    }
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public async Task A_Case_Only_Rename_Should_Still_Be_Applied_As_A_Move(string backend)
+    {
+        var index = await IndexAsync(backend);
+
+        var applied = await index.ApplyRenameAsync(@"C:\src\App", @"C:\src\app", (_, _) => Task.FromResult(true));
+
+        applied.Should().BeTrue();
+        var leaf = await index.GetAsync(@"C:\src\app\Models\Deep\Leaf.cs");
+        leaf!.Value.DirectoryPath.Should().Be(@"C:\src\app\Models\Deep");
+    }
+
+    [Theory]
+    [InlineData(@"C:\src\App", @"C:\src\App\Models", false)]
+    [InlineData(@"C:\src\App", @"C:/src/App/Models/Deep", false)]      // '/' is a separator on Windows
+    [InlineData(@"C:\src\App", @"c:\SRC\app\models", false)]          // case folds on Windows
+    [InlineData(@"C:\src\App", @"C:\src\App.Tests", true)]            // a sibling sharing the prefix
+    [InlineData(@"C:\src\App", @"C:\src\App", true)]                  // the same path
+    [InlineData(@"C:\src\App", @"C:\src\app\", true)]                 // case and trailing separator only
+    [InlineData(@"C:\src\App\Models", @"C:\src\App", true)]           // up, not down
+    [InlineData(@"C:\src\App", @"C:\archive\OldApp", true)]
+    public void IsMove_Should_Refuse_Only_A_New_Path_Strictly_Beneath_The_Old_One(string oldPath, string newPath, bool expected)
+    {
+        SearchIndexTreeExtensions.IsMove(oldPath, newPath).Should().Be(expected);
+    }
+
     private static async Task<List<string>> Paths(IAsyncEnumerable<FastFileItem> items)
     {
         var paths = new List<string>();

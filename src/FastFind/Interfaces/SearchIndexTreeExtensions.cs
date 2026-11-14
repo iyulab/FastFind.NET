@@ -40,15 +40,77 @@ public static class SearchIndexTreeExtensions
     }
 
     /// <summary>
+    /// Whether a reported rename can be a move at all: a directory cannot be moved beneath itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>A pair whose new path lies strictly beneath its old one is not a move — it is a pair the
+    /// reporter got wrong (two concurrent renames read as one, for instance). Applying it anyway does
+    /// not fail: every descendant is re-rooted under the new path and the next such report does it
+    /// again, so each path grows by one block per event, every grown path is a string nothing frees,
+    /// and the process runs out of memory.</para>
+    /// <para>The same path, or the same path spelled in another case or with another trailing
+    /// separator, <em>is</em> a move: it is how a case-only rename reaches the index.</para>
+    /// </remarks>
+    public static bool IsMove(string oldPath, string newPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(oldPath);
+        ArgumentException.ThrowIfNullOrEmpty(newPath);
+
+        return PathExclusion.SamePath(newPath, oldPath) || !PathExclusion.IsAtOrUnder(newPath, oldPath);
+    }
+
+    /// <summary>
+    /// Applies a rename a monitor reported, trusting the file system rather than the pair when the pair
+    /// cannot be a move (<see cref="IsMove"/>).
+    /// </summary>
+    /// <param name="index">The index to apply the rename to.</param>
+    /// <param name="oldPath">The path the monitor reported as the old one.</param>
+    /// <param name="newPath">The path the monitor reported as the new one.</param>
+    /// <param name="exists">Whether a path exists on the file system now.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>
+    /// <see langword="true"/> when the pair was applied as a move; <see langword="false"/> when it was
+    /// not a move and was reconciled instead. In that case the old tree is dropped only if
+    /// <paramref name="oldPath"/> is gone from the file system, and nothing is moved. Reading the new
+    /// path back into the index stays with the caller, which does it for a move as well.
+    /// </returns>
+    public static async Task<bool> ApplyRenameAsync(
+        this ISearchIndex index,
+        string oldPath,
+        string newPath,
+        Func<string, CancellationToken, Task<bool>> exists,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(exists);
+
+        if (IsMove(oldPath, newPath))
+        {
+            await index.MoveTreeAsync(oldPath, newPath, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        if (!await exists(oldPath, cancellationToken).ConfigureAwait(false))
+            await index.RemoveTreeAsync(oldPath, cancellationToken).ConfigureAwait(false);
+
+        return false;
+    }
+
+    /// <summary>
     /// Moves an entry and, when it is a directory, everything the index holds beneath it, from
     /// <paramref name="oldPath"/> to <paramref name="newPath"/>. Sizes, times and attributes are kept.
     /// </summary>
     /// <returns>The number of descendants moved, not counting the entry itself.</returns>
+    /// <exception cref="ArgumentException"><paramref name="newPath"/> lies beneath <paramref name="oldPath"/>
+    /// (<see cref="IsMove"/>): that is not a move, and applying it would grow every path under the old one.</exception>
     public static async Task<int> MoveTreeAsync(this ISearchIndex index, string oldPath, string newPath, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrEmpty(oldPath);
         ArgumentException.ThrowIfNullOrEmpty(newPath);
+
+        if (!IsMove(oldPath, newPath))
+            throw new ArgumentException($"A directory cannot be moved beneath itself: '{oldPath}' → '{newPath}'.", nameof(newPath));
 
         var root = await index.GetAsync(oldPath, cancellationToken).ConfigureAwait(false);
         var descendants = root is { IsDirectory: false }

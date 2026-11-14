@@ -4,6 +4,22 @@ All notable changes to FastFind.NET are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A rename reported with a new path beneath its old one grew every indexed path under it, once per report.**
+  `MoveTreeAsync` re-rooted each descendant under the new path, so applying the same pair again made every
+  path one block longer; the grown paths were new strings that the string pool never frees, and a long-running
+  process with monitoring on ran out of memory. A directory cannot be moved beneath itself, so such a pair is
+  not a move. `SearchIndexTreeExtensions.IsMove` says so, `MoveTreeAsync` now throws `ArgumentException` for
+  one, and the new `ApplyRenameAsync` applies a monitor's rename the way both engines now do: a real move is
+  moved, anything else leaves the index as it is — unless the old path is gone from the file system, in which
+  case its subtree is removed — and the engine logs a warning. A rename that changes only the case of a path
+  is still a move.
+- **A change the engine could not apply was logged at `Debug`.** It is now a `Warning` naming the change type
+  and path, so a consumer at its default log level can see that the index may disagree with the file system.
+
 ## [2.5.0] - 2026-11-06
 
 **When upgrading, these change what you get back:** a `MaxDepth` of 1 on Windows lists one more level; the Windows

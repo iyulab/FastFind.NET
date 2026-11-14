@@ -833,7 +833,10 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error processing file change: {Path}", change.NewPath);
+                // Warning, not Debug: the change is dropped and the index no longer follows the file system
+                // for this path, which a consumer at its default log level could not otherwise see.
+                _logger.LogWarning(ex, "A {ChangeType} change was dropped, the index may disagree with the file system for {Path}",
+                    change.ChangeType, change.NewPath);
             }
         }
     }
@@ -908,7 +911,16 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             case FileChangeType.Renamed:
                 if (!string.IsNullOrEmpty(change.OldPath))
                 {
-                    await _searchIndex.MoveTreeAsync(change.OldPath, change.NewPath, cancellationToken).ConfigureAwait(false);
+                    // A pair whose new path is beneath its old one is not a move (a directory cannot move
+                    // into itself); applying it would re-root every descendant once more per event.
+                    var applied = await _searchIndex.ApplyRenameAsync(
+                        change.OldPath, change.NewPath, _fileSystemProvider.ExistsAsync, cancellationToken).ConfigureAwait(false);
+                    if (!applied)
+                    {
+                        _logger.LogWarning(
+                            "A reported rename is not a move ('{OldPath}' → '{NewPath}'); the index follows the file system instead",
+                            change.OldPath, change.NewPath);
+                    }
                 }
                 var renamedFileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (renamedFileItem != null)
