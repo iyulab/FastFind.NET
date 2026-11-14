@@ -61,7 +61,7 @@ public interface ISearchIndex : IAsyncDisposable, IDisposable
     Task<bool> UpdateAsync(FastFileItem item, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Searches the index with the specified query using SIMD-accelerated matching
+    /// Searches the index with the specified query
     /// </summary>
     /// <param name="query">Search query</param>
     /// <param name="cancellationToken">Cancellation token</param>

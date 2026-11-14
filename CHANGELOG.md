@@ -17,6 +17,11 @@ overlapping ranges in most cells and no gain that three runs can separate from n
 s, U+03F4): a name containing U+212A is no longer matched by a query for `k`, as `OrdinalIgnoreCase` has always read it.
 `SIMDStringMatcher` itself is unchanged and still public; `MatchesWildcard` still uses it.
 
+**Text that described SIMD as the search path's engine now says what the code does.** The package description, the README, the
+documentation comments on `ISearchIndex.SearchAsync`, `IndexConfiguration.UseSIMD` and `WindowsSearchEngineOptions.EnableSIMDAcceleration`,
+and the feature list `FastFinder` reports no longer claim SIMD acceleration of search. `UseSIMD` and `EnableSIMDAcceleration` were never
+read by the library; they now say so (they remain, so code that sets them still compiles).
+
 ## [2.6.0] - 2026-11-14
 
 ### Changed

@@ -6,7 +6,8 @@ namespace FastFind.Models;
 public record IndexConfiguration
 {
     /// <summary>
-    /// Whether to use SIMD-accelerated string matching
+    /// Not read by the library: a text query is always answered with the runtime's ordinal-ignore-case
+    /// search, whatever this says. Kept so that code which sets it still compiles.
     /// </summary>
     public bool UseSIMD { get; init; } = true;
 

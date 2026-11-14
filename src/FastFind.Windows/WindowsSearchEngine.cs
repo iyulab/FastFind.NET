@@ -505,7 +505,8 @@ public class WindowsSearchEngineOptions
     public bool UseAdvancedStringOptimizations { get; set; } = true;
 
     /// <summary>
-    /// Whether to enable SIMD acceleration for string operations
+    /// Not read by the library: a text query is always answered with the runtime's ordinal-ignore-case
+    /// search, whatever this says. Kept so that code which sets it still compiles.
     /// </summary>
     public bool EnableSIMDAcceleration { get; set; } = true;
 

@@ -10,14 +10,15 @@ Ultra-high performance cross-platform file search library for .NET 10
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| **FastFind.Core** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Core interfaces, SIMD string matching, StringPool |
+| **FastFind.Core** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Core.svg)](https://www.nuget.org/packages/FastFind.Core) | Core interfaces, the query evaluator, StringPool |
 | **FastFind.Windows** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Windows.svg)](https://www.nuget.org/packages/FastFind.Windows) | NTFS change-journal enumeration and monitoring |
 | **FastFind.Unix** | [![NuGet](https://img.shields.io/nuget/v/FastFind.Unix.svg)](https://www.nuget.org/packages/FastFind.Unix) | Linux/macOS parallel enumeration, file monitoring |
 | **FastFind.SQLite** | [![NuGet](https://img.shields.io/nuget/v/FastFind.SQLite.svg)](https://www.nuget.org/packages/FastFind.SQLite) | Disk-backed persistent index |
 
 ## Key Features
 
-- **Cross-Platform SIMD**: Vector256/Vector128 auto-dispatch (AVX2, SSE2, NEON)
+- **One definition of a query**: `SearchQueryEvaluator` decides what matches, so every backend returns the same set; a
+  case-insensitive text query is the runtime's ordinal-ignore-case search
 - **NTFS change-journal enumeration** (Windows, administrator): 136,000–177,000 records/sec measured
   here; sizes and timestamps are opt-in, because a journal record carries neither
 - **Parallel BFS Enumeration** (Linux/macOS): Channel-based depth-aware parallel traversal

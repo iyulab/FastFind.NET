@@ -671,7 +671,6 @@ public record SystemValidationResult
 
             if (IsCompatibleRuntime)
             {
-                features.Add("SIMD Acceleration");
                 features.Add("Memory Optimization");
             }
 

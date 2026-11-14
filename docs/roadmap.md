@@ -11,9 +11,10 @@ Direction, not a release checklist. **What shipped in each version is in
 | Linux (Ubuntu, RHEL, Alpine) | Preview | `FastFind.Unix` |
 | macOS (Ventura+) | Preview | `FastFind.Unix` |
 
-The core is `FastFind.Core`: a 61-byte `FastFileItem`, SIMD string matching that dispatches across
-Vector256/Vector128/scalar, and `SearchQueryEvaluator` as the single definition of what a query
-matches — so every backend returns the same set. `FastFind.SQLite` is an optional store that answers
+The core is `FastFind.Core`: a 61-byte `FastFileItem` and `SearchQueryEvaluator` as the single
+definition of what a query matches — so every backend returns the same set. A text query is answered
+with the runtime's ordinal-ignore-case search; the public `SIMDStringMatcher` remains (it serves
+`FastFileItem.MatchesWildcard`) and measures slower than that call (`docs/BENCHMARKS.md`). `FastFind.SQLite` is an optional store that answers
 queries from disk, so an engine's memory does not grow with the corpus.
 
 Windows enumerates NTFS volumes through the change journal and tracks changes through the same
