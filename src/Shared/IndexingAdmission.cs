@@ -24,6 +24,29 @@ namespace FastFind.Indexing;
 internal static class IndexingAdmission
 {
     /// <summary>
+    /// The attributes that make a directory one an indexing pass does not enter: with hidden files off a hidden
+    /// directory is skipped <em>with everything beneath it</em> (<c>.git</c>, <c>AppData</c>, a macOS
+    /// <c>~/Library</c>), and likewise a system directory with system files off. Every provider applies this
+    /// to a directory, not only to each entry's own attributes, so the same folder indexes to the same entries
+    /// whichever pass reads it.
+    /// </summary>
+    public static FileAttributes AttributesToSkip(IndexingOptions options)
+    {
+        // Starts from nothing. It started from FileAttributes.Normal, which is not "no attributes": it is
+        // the one attribute a file carries when it has no other (its archive bit cleared by a backup tool,
+        // a restore, some file systems), so every such file was skipped.
+        var skip = default(FileAttributes);
+
+        if (!options.IncludeHidden)
+            skip |= FileAttributes.Hidden;
+
+        if (!options.IncludeSystem)
+            skip |= FileAttributes.System;
+
+        return skip;
+    }
+
+    /// <summary>
     /// Whether <paramref name="file"/> belongs in an index built with <paramref name="options"/>.
     /// </summary>
     public static bool Admits(FileItem file, IndexingOptions options)

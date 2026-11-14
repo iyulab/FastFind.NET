@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+**The change-journal pass (an elevated Windows process) now indexes the same entries as the directory walk.** With hidden
+files off it used to admit each entry by its own attributes, so everything inside a hidden directory (`.git`, `AppData`,
+a hidden build-output folder) was indexed although the walk never enters one — the same folder gave a different index depending
+on whether the process was elevated (+1,335 entries in a 1,769-entry repository folder, +181,177 in a 2.2-million-entry one). A
+hidden directory, and with system files off a system directory, now takes everything beneath it out of the pass, as the walk
+does; only a directory *below* the location being indexed counts (a location that lies under `AppData` is still indexed), and
+the location itself is no longer listed as an entry of its own. An elevated process's index therefore loses what lay under such
+directories; ask for it with `IncludeHidden = true` / `IncludeSystem = true`. (Entries a monitor reports from inside a hidden
+directory are a separate gap, not changed here.)
+
 **These change what you get back:** `SearchResult.TotalMatches` is now the same thing on both engines — the number of
 matches found before the search stopped. When `HasMoreResults` is false it is the exact count; when it is true it is a
 lower bound, at least `MaxResults + 1`. The Windows engine used to report at most `MaxResults` and say "more" when the

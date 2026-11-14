@@ -194,9 +194,18 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
         var unresolved = new StrongBox<int>();
         var records = _mftReader.EnumerateFilesAsync(driveLetter, cancellationToken);
 
-        await foreach (var (record, fullPath) in MftPathResolver.ResolveAsync(records, driveRoot, unresolved, cancellationToken))
+        // What the walk does not read, this pass does not yield: everything beneath a hidden or system
+        // directory that lies below the location (not only an entry that is itself hidden), and the location itself.
+        var skipDirectories = IndexingAdmission.AttributesToSkip(options);
+        var locationDepths = locationFilters.Select(l => DirectoryDepth(l, driveRoot)).ToArray();
+
+        await foreach (var (record, fullPath, skippedDepth) in MftPathResolver.ResolveAsync(records, driveRoot, unresolved, skipDirectories, cancellationToken))
         {
-            if (!IsPathInLocations(fullPath, locationFilters))
+            var locationDepth = DeepestLocationDepth(fullPath, locationFilters, locationDepths);
+            if (locationDepth < 0 || IsLocationItself(fullPath, locationFilters))
+                continue;
+
+            if (skippedDepth > locationDepth)
                 continue;
 
             var fileItem = ConvertToFileItem(record, fullPath, options.CollectFileMetadata);
@@ -212,6 +221,49 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
                 "Drive {Drive}: {Count} entries skipped because an ancestor directory was not enumerated",
                 driveLetter, unresolved.Value);
         }
+    }
+
+    /// <summary>The number of segments a path has beneath a volume root: <c>D:\</c> is 0, <c>D:\a\b</c> is 2.</summary>
+    internal static int DirectoryDepth(string path, string driveRoot) =>
+        path.Length <= driveRoot.Length
+            ? 0
+            : path[driveRoot.Length..].Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries).Length;
+
+    /// <summary>
+    /// The depth of the deepest location that <paramref name="path"/> is at or beneath, or -1 when it is in none. With no
+    /// location at all the whole volume is wanted: depth 0.
+    /// </summary>
+    internal static int DeepestLocationDepth(string path, string[] locationFilters, int[] locationDepths)
+    {
+        if (locationFilters.Length == 0)
+            return 0;
+
+        var deepest = -1;
+        for (var i = 0; i < locationFilters.Length; i++)
+        {
+            if (locationDepths[i] > deepest
+                && SearchQueryEvaluator.IsUnder(path, locationFilters[i], includeSubdirectories: true))
+                deepest = locationDepths[i];
+        }
+
+        return deepest;
+    }
+
+    /// <summary>
+    /// Whether a path is one of the locations being indexed, not something beneath one. A pass lists what a location
+    /// <em>contains</em>: the directory walk never yields the folder it starts in, and this pass is read as the same
+    /// answer.
+    /// </summary>
+    internal static bool IsLocationItself(string path, string[] locationFilters)
+    {
+        var trimmed = path.TrimEnd('\\', '/');
+        foreach (var location in locationFilters)
+        {
+            if (string.Equals(trimmed, location.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.IO.Enumeration;
+using FastFind.Indexing;
 using FastFind.Models;
 
 namespace FastFind.Windows.Implementation;
@@ -40,7 +41,7 @@ internal sealed class DirectoryWalk(IndexingOptions options)
             IgnoreInaccessible = true,
             RecurseSubdirectories = false,
             ReturnSpecialDirectories = false,
-            AttributesToSkip = AttributesToSkip(_options),
+            AttributesToSkip = IndexingAdmission.AttributesToSkip(_options),
         };
 
         // How many levels below the root may be listed. The root is at depth 0 and a directory deeper than
@@ -114,22 +115,6 @@ internal sealed class DirectoryWalk(IndexingOptions options)
                 }
             }
         }
-    }
-
-    private static FileAttributes AttributesToSkip(IndexingOptions options)
-    {
-        // Starts from nothing. It started from FileAttributes.Normal, which is not "no attributes": it is
-        // the one attribute a file carries when it has no other (its archive bit cleared by a backup tool,
-        // a restore, some file systems), so every such file was skipped.
-        var skip = default(FileAttributes);
-
-        if (!options.IncludeHidden)
-            skip |= FileAttributes.Hidden;
-
-        if (!options.IncludeSystem)
-            skip |= FileAttributes.System;
-
-        return skip;
     }
 
     /// <summary>How many links in a row a followed walk may cross before it stops descending.</summary>

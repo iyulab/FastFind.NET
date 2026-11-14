@@ -120,10 +120,87 @@ public class MftPathResolverTests
         onD.Should().BeEquivalentTo([@"D:\data\a.txt", @"D:\data"]);
     }
 
+    [Fact]
+    public async Task Everything_Beneath_A_Hidden_Directory_Should_Be_Dropped_Whatever_Its_Own_Attributes_Or_Arrival_Order()
+    {
+        // .git is hidden; the files in it are not. A directory walk never enters it, so neither may this pass.
+        var records = new[]
+        {
+            File(500, parent: 400, "HEAD"),              // before its directories
+            File(501, parent: 402, "deep.pack"),
+            Directory(402, parent: 400, "objects"),      // not hidden itself, beneath one that is
+            Record(400, Root, ".git", FileAttributes.Directory | FileAttributes.Hidden),
+            Directory(200, parent: Root, "src"),
+            File(201, parent: 200, "kept.cs"),
+        };
+
+        var skipped = await ResolveAsync(records, skipDirectories: FileAttributes.Hidden);
+        var everything = await ResolveAsync(records);
+
+        skipped.Should().BeEquivalentTo([@"D:\.git", @"D:\src", @"D:\src\kept.cs"],
+            "the hidden directory is the pass's own entry to refuse (admission does); nothing beneath it is read");
+        everything.Should().Contain([@"D:\.git\HEAD", @"D:\.git\objects", @"D:\.git\objects\deep.pack"],
+            "with hidden entries wanted the same records are all kept");
+    }
+
+    [Fact]
+    public async Task A_Directory_Is_Skipped_Only_For_The_Attributes_The_Options_Refuse()
+    {
+        var records = new[]
+        {
+            Record(300, Root, "System Volume Information", FileAttributes.Directory | FileAttributes.System),
+            File(301, parent: 300, "tracking.log"),
+            Record(310, Root, ".cache", FileAttributes.Directory | FileAttributes.Hidden),
+            File(311, parent: 310, "a.bin"),
+        };
+
+        var onlySystem = await ResolveAsync(records, skipDirectories: FileAttributes.System);
+        onlySystem.Should().NotContain(@"D:\System Volume Information\tracking.log");
+        onlySystem.Should().Contain(@"D:\.cache\a.bin", "hidden entries were asked for");
+
+        var onlyHidden = await ResolveAsync(records, skipDirectories: FileAttributes.Hidden);
+        onlyHidden.Should().Contain(@"D:\System Volume Information\tracking.log");
+        onlyHidden.Should().NotContain(@"D:\.cache\a.bin");
+    }
+
+    [Fact]
+    public async Task A_Hidden_Directory_Above_The_Location_Should_Not_Hide_The_Location()
+    {
+        // D:\Users\me\AppData (hidden)\Local\Foo is where a temp folder lives. A walk of Foo does not look above Foo; the
+        // hidden directory counts only for what lies beneath the location.
+        var records = new[]
+        {
+            Directory(200, parent: Root, "Users"),
+            Directory(201, parent: 200, "me"),
+            Record(202, 201, "AppData", FileAttributes.Directory | FileAttributes.Hidden),
+            Directory(203, parent: 202, "Local"),
+            Directory(204, parent: 203, "Foo"),
+            File(205, parent: 204, "a.txt"),
+            Record(206, 204, ".git", FileAttributes.Directory | FileAttributes.Hidden),
+            File(207, parent: 206, "HEAD"),
+        };
+
+        var fooIsTheLocation = await ResolveAsync(records, skipDirectories: FileAttributes.Hidden, locationDepth: 5);
+        fooIsTheLocation.Should().Contain(@"D:\Users\me\AppData\Local\Foo\a.txt");
+        fooIsTheLocation.Should().NotContain(@"D:\Users\me\AppData\Local\Foo\.git\HEAD", "that one is beneath a hidden directory below the location");
+
+        var appDataIsTheLocation = await ResolveAsync(records, skipDirectories: FileAttributes.Hidden, locationDepth: 3);
+        appDataIsTheLocation.Should().Contain(@"D:\Users\me\AppData\Local\Foo\a.txt", "a location may itself be hidden");
+
+        var wholeVolume = await ResolveAsync(records, skipDirectories: FileAttributes.Hidden, locationDepth: 0);
+        wholeVolume.Should().NotContain(@"D:\Users\me\AppData\Local\Foo\a.txt");
+    }
+
     // --- helpers ---
 
-    private static async Task<List<string>> ResolveAsync(MftFileRecord[] records, StrongBox<int>? unresolved = null) =>
-        await MftPathResolver.ResolveAsync(Stream(records), @"D:\", unresolved ?? new StrongBox<int>())
+    /// <summary>
+    /// The paths a pass whose location lies <paramref name="locationDepth"/> segments below the volume root would read:
+    /// an entry beneath a skipped directory is read only if that directory is at or above the location.
+    /// </summary>
+    private static async Task<List<string>> ResolveAsync(
+        MftFileRecord[] records, StrongBox<int>? unresolved = null, FileAttributes skipDirectories = default, int locationDepth = 0) =>
+        await MftPathResolver.ResolveAsync(Stream(records), @"D:\", unresolved ?? new StrongBox<int>(), skipDirectories)
+            .Where(r => r.SkippedDepth <= locationDepth)
             .Select(r => r.Path)
             .ToListAsync();
 
