@@ -1,3 +1,4 @@
+using FastFind.Indexing;
 using FastFind.Models;
 using AwesomeAssertions;
 using FastFind.Unix.Linux;
@@ -102,5 +103,32 @@ public class SymlinkEnumerationTests : IDisposable
         var entries = await EntriesAsync(followSymlinks: true);
 
         entries.Should().Contain(["linkdir", "linkdir/inside.txt", "linkfile.txt"]);
+    }
+
+    [SymlinkFact]
+    public async Task A_Followed_Link_Back_To_An_Ancestor_Is_Entered_A_Bounded_Number_Of_Times()
+    {
+        // real/up -> the root: followed without a limit, the tree is walked again beneath itself until the
+        // operating system refuses the path (about forty crossings), forty times the work and as many duplicates.
+        Directory.CreateSymbolicLink(Path.Combine(_root, "real", "up"), _root);
+
+        var entries = await EntriesAsync(followSymlinks: true);
+
+        var deepest = entries.Max(e => e.Split('/').Count(segment => segment == "up"));
+        deepest.Should().Be(IndexingAdmission.MaxLinkHops + 1,
+            "the chain is listed one link past the limit and not entered beyond it");
+        entries.Should().OnlyHaveUniqueItems();
+        entries.Should().Contain("real/inside.txt", "what is not behind a link is untouched by the limit");
+    }
+
+    [SymlinkFact]
+    public async Task A_Link_Back_To_An_Ancestor_Is_Listed_Once_When_Links_Are_Not_Followed()
+    {
+        Directory.CreateSymbolicLink(Path.Combine(_root, "real", "up"), _root);
+
+        var entries = await EntriesAsync(followSymlinks: false);
+
+        entries.Should().Contain("real/up");
+        entries.Count(e => e.Contains("up")).Should().Be(1, "a link that is not followed is only listed");
     }
 }

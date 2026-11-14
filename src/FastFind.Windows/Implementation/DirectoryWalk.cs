@@ -108,7 +108,7 @@ internal sealed class DirectoryWalk(IndexingOptions options)
                     // A junction or symbolic link is an entry like any other, but what it points at is
                     // listed where it really is. Followed only on request, and then only so far: a link
                     // back to an ancestor would otherwise walk the tree again beneath itself for ever.
-                    if (entry.IsReparsePoint && (!followLinks || linkHops >= MaxLinkHops))
+                    if (entry.IsReparsePoint && (!followLinks || linkHops >= IndexingAdmission.MaxLinkHops))
                         continue;
 
                     pending.Enqueue((entry.Path, level + 1, entry.IsReparsePoint ? linkHops + 1 : linkHops));
@@ -116,9 +116,6 @@ internal sealed class DirectoryWalk(IndexingOptions options)
             }
         }
     }
-
-    /// <summary>How many links in a row a followed walk may cross before it stops descending.</summary>
-    private const int MaxLinkHops = 8;
 
     private readonly record struct Entry(string Path, bool IsDirectory, bool IsReparsePoint);
 }

@@ -1,6 +1,7 @@
 extern alias UnixPackage;
 
 using System.Diagnostics;
+using FastFind.Indexing;
 using FastFind.Interfaces;
 using FastFind.Models;
 using UnixLinux = UnixPackage::FastFind.Unix.Linux;
@@ -135,11 +136,9 @@ public class ProviderConformanceTests : IDisposable
     public Task MaxDepth_Reaches_The_Same_Level_On_Both(int maxDepth)
         => AssertAgreeAsync(Options(o => o.MaxDepth = maxDepth), $"MaxDepth {maxDepth}");
 
-    [Fact]
-    public async Task A_Junction_Is_Not_Entered_By_Either_Unless_Links_Are_Followed()
+    private void MakeJunction(string link, string target)
     {
-        var link = Path.Combine(_root, "link");
-        var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{Path.Combine(_root, "src")}\"")
+        var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
@@ -151,7 +150,27 @@ public class ProviderConformanceTests : IDisposable
             process.ExitCode.Should().Be(0, "the test needs a junction");
         }
         _links.Add(link);
+    }
+
+    [Fact]
+    public async Task A_Junction_Is_Not_Entered_By_Either_Unless_Links_Are_Followed()
+    {
+        MakeJunction(Path.Combine(_root, "link"), Path.Combine(_root, "src"));
 
         await AssertAgreeAsync(Options(), "FollowSymlinks is false by default");
+    }
+
+    [Fact]
+    public async Task A_Followed_Link_Back_To_An_Ancestor_Stops_After_The_Same_Crossings_On_Both()
+    {
+        MakeJunction(Path.Combine(_root, "src", "up"), _root);
+        var options = Options(o => o.FollowSymlinks = true);
+
+        await AssertAgreeAsync(options, "a followed chain of links stops after the same number of crossings");
+
+        using var windows = new WindowsFileSystemProvider(NullLogger<WindowsFileSystemProvider>.Instance);
+        var entries = await EntriesAsync(windows, options);
+        entries.Max(e => e.Split('\\').Count(segment => segment == "up"))
+            .Should().Be(IndexingAdmission.MaxLinkHops + 1, "the chain is listed one link past the limit and not entered beyond it");
     }
 }

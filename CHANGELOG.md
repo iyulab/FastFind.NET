@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+**The Linux and macOS providers bound a followed chain of links, as the Windows walk does.** With `FollowSymlinks` set, a link back to an ancestor
+was entered again beneath itself until the operating system refused the path (about forty crossings on Linux): forty times the work and as many
+duplicate entries for the same tree. A walk now stops descending after eight links in a row and still lists the link it does not enter; the limit
+is one definition shared by every provider, so the same tree gives the same entries on every platform.
+
 **A case-insensitive text query is answered with the runtime's ordinal-ignore-case search.** The query evaluator and
 `FastFileItem.MatchesName`, `MatchesPath` and `MatchesExtension` called `SIMDStringMatcher`, which measured 3.9 times slower than
 `string.Contains(OrdinalIgnoreCase)` on a long string. They now call the runtime. Measured end to end with the build before and

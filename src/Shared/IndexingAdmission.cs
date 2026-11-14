@@ -24,6 +24,15 @@ namespace FastFind.Indexing;
 internal static class IndexingAdmission
 {
     /// <summary>
+    /// How many links in a row a walk with <see cref="IndexingOptions.FollowSymlinks"/> may cross before it
+    /// stops descending: a link beyond the limit is listed, as any link is, and not entered. A link back to an
+    /// ancestor would otherwise walk the tree again beneath itself until the operating system refuses the path
+    /// (about forty crossings on Linux), which is forty times the work and as many duplicate entries. Every
+    /// walk applies the same limit, so the same tree gives the same entries on every platform.
+    /// </summary>
+    public const int MaxLinkHops = 8;
+
+    /// <summary>
     /// The attributes that make a directory one an indexing pass does not enter: with hidden files off a hidden
     /// directory is skipped <em>with everything beneath it</em> (<c>.git</c>, <c>AppData</c>, a macOS
     /// <c>~/Library</c>), and likewise a system directory with system files off. Every provider applies this

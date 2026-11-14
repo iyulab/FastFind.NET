@@ -119,7 +119,7 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
         _enumerationFailures.Clear();
 
         var maxParallelism = Math.Max(1, options.ParallelThreads);
-        var workChannel = Channel.CreateUnbounded<(string Path, int Depth)>(
+        var workChannel = Channel.CreateUnbounded<(string Path, int Depth, int LinkHops)>(
             new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
 
         var pendingWork = new int[] { 0 };
@@ -130,7 +130,7 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
             if (Directory.Exists(location))
             {
                 Interlocked.Increment(ref pendingWork[0]);
-                await workChannel.Writer.WriteAsync((location, 0), cancellationToken)
+                await workChannel.Writer.WriteAsync((location, 0, 0), cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -151,7 +151,7 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                 {
                     while (!cancellationToken.IsCancellationRequested)
                     {
-                        (string dirPath, int depth) item;
+                        (string dirPath, int depth, int linkHops) item;
                         try
                         {
                             // Try to read from work channel with a timeout to detect completion
@@ -173,7 +173,7 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
                         try
                         {
                             await ProcessDirectoryAsync(
-                                item.dirPath, item.depth, options, writer, workChannel.Writer, pendingWork, cancellationToken)
+                                item.dirPath, item.depth, item.linkHops, options, writer, workChannel.Writer, pendingWork, cancellationToken)
                                 .ConfigureAwait(false);
                         }
                         catch (OperationCanceledException)
@@ -234,9 +234,10 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
     private async Task ProcessDirectoryAsync(
         string dirPath,
         int depth,
+        int linkHops,
         IndexingOptions options,
         ChannelWriter<FileItem> output,
-        ChannelWriter<(string Path, int Depth)> workQueue,
+        ChannelWriter<(string Path, int Depth, int LinkHops)> workQueue,
         int[] pendingWork,
         CancellationToken cancellationToken)
     {
@@ -304,23 +305,27 @@ internal class MacOSFileSystemProvider : IFileSystemProvider
 
                     await output.WriteAsync(dirItem, cancellationToken).ConfigureAwait(false);
 
-                    // Listed, not entered
-                    if (isLink && !options.FollowSymlinks)
+                    // Listed, not entered: a link is entered only when following was asked for, and then only so
+                    // far - a link back to an ancestor would otherwise be walked again beneath itself until the
+                    // operating system refuses the path. The limit is IndexingAdmission's, as on Windows.
+                    if (isLink && (!options.FollowSymlinks || linkHops >= IndexingAdmission.MaxLinkHops))
                         continue;
+
+                    var subDirLinkHops = isLink ? linkHops + 1 : linkHops;
 
                     // Dispatch or inline traversal based on depth
                     if (depth <= 2)
                     {
                         // Dispatch to work queue for parallel processing
                         Interlocked.Increment(ref pendingWork[0]);
-                        await workQueue.WriteAsync((subDir.FullName, depth + 1), cancellationToken)
+                        await workQueue.WriteAsync((subDir.FullName, depth + 1, subDirLinkHops), cancellationToken)
                             .ConfigureAwait(false);
                     }
                     else
                     {
                         // Inline traversal for deeper directories
                         await ProcessDirectoryAsync(
-                            subDir.FullName, depth + 1, options, output, workQueue, pendingWork, cancellationToken)
+                            subDir.FullName, depth + 1, subDirLinkHops, options, output, workQueue, pendingWork, cancellationToken)
                             .ConfigureAwait(false);
                     }
                 }
