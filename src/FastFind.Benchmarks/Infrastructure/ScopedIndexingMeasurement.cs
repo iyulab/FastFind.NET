@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.Versioning;
 using FastFind.Models;
 using FastFind.Windows.Mft;
 
@@ -56,6 +57,7 @@ public static class ScopedIndexingMeasurement
         return true;
     }
 
+    [SupportedOSPlatform("windows")]
     private static async Task RunAsync(string[] folders)
     {
         if (!MftFileSystemProvider.IsMftAccessAvailable)
@@ -90,6 +92,7 @@ public static class ScopedIndexingMeasurement
         }
     }
 
+    [SupportedOSPlatform("windows")]
     private static async Task<(double Seconds, long Count)> Time(ProviderMode mode, string folder)
     {
         await using var provider = new HybridFileSystemProvider(mode);
