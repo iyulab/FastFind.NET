@@ -5,6 +5,7 @@ using FastFind.Indexing;
 using FastFind.Interfaces;
 using FastFind.Models;
 using UnixLinux = UnixPackage::FastFind.Unix.Linux;
+using UnixMacOS = UnixPackage::FastFind.Unix.MacOS;
 using FastFind.Windows.Implementation;
 using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -93,12 +94,17 @@ public class ProviderConformanceTests : IDisposable
     {
         using var windows = new WindowsFileSystemProvider(NullLogger<WindowsFileSystemProvider>.Instance);
         using var linux = new UnixLinux.LinuxFileSystemProvider();
+        using var macos = new UnixMacOS.MacOSFileSystemProvider();
 
         var fromWindows = await EntriesAsync(windows, options);
         var fromLinux = await EntriesAsync(linux, options);
+        var fromMacOS = await EntriesAsync(macos, options);
 
         fromLinux.Should().Equal(fromWindows,
             $"both providers should leave out the same things: {because}. Windows: [{string.Join(", ", fromWindows)}]");
+        // The macOS provider shares its enumeration with the Linux one (UnixFileSystemProvider); on this host it runs the
+        // same code over the same tree, which is the nearest thing to running it on a Mac that this suite can do.
+        fromMacOS.Should().Equal(fromLinux, $"the two Unix providers share one enumeration: {because}");
     }
 
     [Fact]
