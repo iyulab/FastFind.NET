@@ -40,41 +40,33 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
     /// message names the fix. Composing with a store is covered in
     /// <see cref="Core.EngineCompositionTests"/>.
     /// </remarks>
-    [Fact]
+    [LinuxFact]
     public async Task SaveIndexAsync_Without_A_Store_ShouldThrowInvalidOperation()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var act = () => _engine!.SaveIndexAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*no persistence store*");
     }
 
     /// <inheritdoc cref="SaveIndexAsync_Without_A_Store_ShouldThrowInvalidOperation"/>
-    [Fact]
+    [LinuxFact]
     public async Task LoadIndexAsync_Without_A_Store_ShouldThrowInvalidOperation()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var act = () => _engine!.LoadIndexAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*no persistence store*");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task OptimizeIndexAsync_ShouldNotThrow()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var act = () => _engine!.OptimizeIndexAsync();
         await act.Should().NotThrowAsync();
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task RefreshIndexAsync_ShouldReindexLocations()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
         var countBefore = _engine!.TotalIndexedFiles;
         countBefore.Should().BeGreaterThan(0);
@@ -85,11 +77,9 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         _engine!.TotalIndexedFiles.Should().BeGreaterThan(0);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task RefreshIndexAsync_NoLocations_ShouldDoNothing()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
         var countBefore = _engine!.TotalIndexedFiles;
 
@@ -98,11 +88,9 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         _engine!.TotalIndexedFiles.Should().Be(countBefore);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task SearchAsync_ByText_ShouldFindMatches()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
 
         var result = await _engine!.SearchAsync("file1");
@@ -115,22 +103,18 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         items.Should().Contain(i => i.Name == "file1.txt");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task SearchAsync_NoMatch_ShouldReturnEmpty()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
 
         var result = await _engine!.SearchAsync("nonexistent_xyz_12345");
         result.TotalMatches.Should().Be(0);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task SearchAsync_ByExtension_ShouldFilter()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
 
         var query = new SearchQuery { ExtensionFilter = ".txt" };
@@ -144,22 +128,18 @@ public class UnixSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispos
         items.Should().OnlyContain(i => i.Extension == ".txt");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task GetIndexingStatisticsAsync_AfterIndex_ShouldReturnStats()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         await EnsureIndexedAsync();
 
         var stats = await _engine!.GetIndexingStatisticsAsync();
         stats.TotalFiles.Should().BeGreaterThan(0);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task StopIndexingAsync_ShouldNotThrow()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var act = () => _engine!.StopIndexingAsync();
         await act.Should().NotThrowAsync();
     }

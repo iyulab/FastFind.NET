@@ -33,11 +33,9 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
         await _engine!.StartIndexingAsync(options);
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task SearchAsync_ByText_ShouldFindMatches()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         await EnsureIndexedAsync();
 
         var result = await _engine!.SearchAsync("file1");
@@ -50,22 +48,18 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
         items.Should().Contain(i => i.Name == "file1.txt");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task SearchAsync_NoMatch_ShouldReturnEmpty()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         await EnsureIndexedAsync();
 
         var result = await _engine!.SearchAsync("nonexistent_xyz_12345");
         result.TotalMatches.Should().Be(0);
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task SearchAsync_ByExtension_ShouldFilter()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         await EnsureIndexedAsync();
 
         var query = new SearchQuery { ExtensionFilter = ".txt" };
@@ -79,22 +73,18 @@ public class MacOSSearchEngineTests : IClassFixture<TestFileTreeFixture>, IDispo
         items.Should().OnlyContain(i => i.Extension == ".txt");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task GetIndexingStatisticsAsync_AfterIndex_ShouldReturnStats()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         await EnsureIndexedAsync();
 
         var stats = await _engine!.GetIndexingStatisticsAsync();
         stats.TotalFiles.Should().BeGreaterThan(0);
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task StopIndexingAsync_ShouldNotThrow()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         var act = () => _engine!.StopIndexingAsync();
         await act.Should().NotThrowAsync();
     }

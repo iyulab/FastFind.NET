@@ -16,11 +16,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         _fixture = fixture;
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldReturnAllFiles()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -35,11 +33,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().HaveCount(6);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldRespectExcludedExtensions()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.ExcludedExtensions = new List<string> { ".log" };
@@ -53,11 +49,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         items.Where(i => !i.IsDirectory).Should().NotContain(i => i.Extension == ".log");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldPopulateFields()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -75,11 +69,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         found.IsDirectory.Should().BeFalse();
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task GetFileInfoAsync_ExistingFile_ShouldReturnInfo()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var filePath = Path.Combine(_fixture.RootPath, "file1.txt");
 
@@ -88,41 +80,33 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         result!.Name.Should().Be("file1.txt");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task GetFileInfoAsync_NonExistent_ShouldReturnNull()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var result = await provider.GetFileInfoAsync("/nonexistent/path/file.txt");
         result.Should().BeNull();
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task GetAvailableLocationsAsync_ShouldReturnAtLeastRoot()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var locations = await provider.GetAvailableLocationsAsync();
         locations.Should().NotBeEmpty();
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task GetFileSystemTypeAsync_Root_ShouldReturnType()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var fsType = await provider.GetFileSystemTypeAsync("/");
         fsType.Should().NotBe("unknown");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldExcludeHiddenWhenNotRequested()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.IncludeHidden = false;
@@ -139,11 +123,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().NotContain(i => i.Name.StartsWith('.'));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldReturnDirectories()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -159,11 +141,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         dirs.Select(d => d.Name).Should().Contain(new[] { "sub1", "sub1a", "sub2" });
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldRespectExcludedPaths()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.ExcludedPaths = new List<string> { Path.Combine(_fixture.RootPath, "sub1") };
@@ -180,11 +160,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().NotContain(i => i.Name == "file4.log");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldExcludeABareNameAsAWholeSegment()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.ExcludedPaths = new List<string> { "sub1" };
@@ -201,11 +179,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().Contain(i => i.Name == "file1.txt", "the root itself is not excluded");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldNotExcludeADirectoryThatMerelyStartsWithTheEntry()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         // "sub" is a prefix of "sub1" and "sub2" but names neither: the comparison this replaces
@@ -222,11 +198,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().Contain(i => i.Name == "file3.txt");
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task EnumerateFilesAsync_ShouldRespectMaxFileSize()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.MaxFileSize = 200; // bytes
@@ -243,11 +217,9 @@ public class LinuxFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().NotContain(i => i.Name == "file5.pdf"); // 500 bytes
     }
 
-    [Fact]
+    [LinuxFact]
     public void IsAvailable_OnLinux_ShouldBeTrue()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var provider = CreateProvider();
         provider.IsAvailable.Should().BeTrue();
         provider.SupportedPlatform.Should().Be(PlatformType.Linux);

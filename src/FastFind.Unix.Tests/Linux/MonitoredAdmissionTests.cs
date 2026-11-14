@@ -3,15 +3,6 @@ using AwesomeAssertions;
 
 namespace FastFind.Unix.Tests.Linux;
 
-/// <summary>A test that needs a Linux host: reported as skipped, with the reason, anywhere else.</summary>
-public sealed class LinuxFactAttribute : FactAttribute
-{
-    public LinuxFactAttribute()
-    {
-        if (!OperatingSystem.IsLinux()) Skip = "Needs a Linux host (inotify).";
-    }
-}
-
 /// <summary>
 /// A file created after the pass meets the options the pass applied: the engine's monitored path used to
 /// index it with no check at all.

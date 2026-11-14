@@ -17,11 +17,9 @@ public sealed class RefreshScopeTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Refreshing_A_Directory_Should_Leave_A_Sibling_That_Shares_Its_Prefix()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         Directory.CreateDirectory(Path.Combine(_root, "app"));
         Directory.CreateDirectory(Path.Combine(_root, "app-tests"));
         File.WriteAllText(Path.Combine(_root, "app", "main.cs"), "x");
@@ -40,11 +38,9 @@ public sealed class RefreshScopeTests : IDisposable
         (await Names(engine)).Should().Contain(["main.cs", "main-tests.cs"]);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Overlapping_Locations_Should_Return_Each_Entry_Once()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         Directory.CreateDirectory(Path.Combine(_root, "a", "b"));
         File.WriteAllText(Path.Combine(_root, "a", "b", "leaf.cs"), "x");
 

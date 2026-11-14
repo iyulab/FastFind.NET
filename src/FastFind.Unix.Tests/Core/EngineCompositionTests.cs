@@ -52,11 +52,9 @@ public class EngineCompositionTests
             ? UnixSearchEngine.CreateMacOSSearchEngine(options)
             : UnixSearchEngine.CreateLinuxSearchEngine(options);
 
-    [Fact]
+    [PosixFact]
     public async Task An_Engine_Composed_With_A_Store_Should_Expose_That_Index()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var (store, dir) = await NewStoreAsync();
         try
         {
@@ -72,11 +70,9 @@ public class EngineCompositionTests
         }
     }
 
-    [Fact]
+    [PosixFact]
     public async Task A_Search_Should_Be_Answered_From_The_Store()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var (store, dir) = await NewStoreAsync();
         try
         {
@@ -111,11 +107,9 @@ public class EngineCompositionTests
         }
     }
 
-    [Fact]
+    [PosixFact]
     public async Task SaveIndexAsync_Should_Report_The_Item_Count_Rather_Than_Throwing()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var (store, dir) = await NewStoreAsync();
         try
         {
@@ -136,11 +130,9 @@ public class EngineCompositionTests
         }
     }
 
-    [Fact]
+    [PosixFact]
     public async Task SaveIndexAsync_Without_A_Store_Should_Say_How_To_Get_One()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         using var engine = CreateForThisPlatform(SearchEngineOptions.ForLogger(null));
 
         engine.Index.Should().BeNull("an engine created without a store keeps its index internally");
@@ -153,11 +145,9 @@ public class EngineCompositionTests
             .WithMessage("*CreateSearchEngine(persistence)*");
     }
 
-    [Fact]
+    [PosixFact]
     public void MirrorInMemory_Should_Still_Be_Rejected_Loudly()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         // This mode needs a shared in-memory ISearchIndex to mirror into, and this engine's
         // in-memory path is a dictionary rather than one. Accepting it and quietly not mirroring is
         // the failure mode this project has found in several places.

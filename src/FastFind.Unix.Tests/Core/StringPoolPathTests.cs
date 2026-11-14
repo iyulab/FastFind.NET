@@ -11,11 +11,9 @@ namespace FastFind.Unix.Tests.Core;
 [Trait("Category", "Functional")]
 public class StringPoolPathTests
 {
-    [Fact]
+    [PosixFact]
     public void InternPath_Should_Return_The_Path_Unchanged()
     {
-        if (OperatingSystem.IsWindows()) return; // POSIX-only semantics
-
         var path = "/var/lib/fastfind/data/report.txt";
 
         var retrieved = StringPool.GetString(StringPool.InternPath(path));
@@ -23,11 +21,9 @@ public class StringPoolPathTests
         retrieved.Should().Be(path, "an interned path must remain usable for I/O");
     }
 
-    [Fact]
+    [PosixFact]
     public void InternPath_Should_Treat_Backslash_As_A_Filename_Character()
     {
-        if (OperatingSystem.IsWindows()) return; // POSIX-only semantics
-
         // Legal POSIX filename. Folding it to a separator would rewrite the path to a different,
         // non-existent location.
         var path = "/tmp/fastfind-pool/odd" + '\\' + "name.txt";
@@ -37,11 +33,9 @@ public class StringPoolPathTests
         retrieved.Should().Be(path);
     }
 
-    [Fact]
+    [PosixFact]
     public void InternPath_Should_Keep_Case_Variant_Paths_Distinct()
     {
-        if (OperatingSystem.IsWindows()) return; // POSIX-only semantics
-
         // Two distinct files on a case-sensitive file system.
         var lower = "/tmp/fastfind-pool/alpha.txt";
         var upper = "/tmp/fastfind-pool/ALPHA.TXT";
@@ -54,11 +48,9 @@ public class StringPoolPathTests
         StringPool.GetString(upperId).Should().Be(upper);
     }
 
-    [Fact]
+    [PosixFact]
     public void FastFileItem_Should_Expose_Paths_Usable_For_IO()
     {
-        if (OperatingSystem.IsWindows()) return; // POSIX-only semantics
-
         var directory = "/home/user/docs";
         var fullPath = directory + "/File1.txt";
 

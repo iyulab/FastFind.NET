@@ -16,11 +16,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         _fixture = fixture;
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldReturnAllFiles()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -42,11 +40,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().HaveCount(6);
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldRespectExcludedExtensions()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.ExcludedExtensions = new List<string> { ".log" };
@@ -60,11 +56,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         items.Where(i => !i.IsDirectory).Should().NotContain(i => i.Extension == ".log");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldPopulateFields()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -82,11 +76,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         found.IsDirectory.Should().BeFalse();
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task GetFileInfoAsync_ExistingFile_ShouldReturnInfo()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var filePath = Path.Combine(_fixture.RootPath, "file1.txt");
 
@@ -95,41 +87,33 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         result!.Name.Should().Be("file1.txt");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task GetFileInfoAsync_NonExistent_ShouldReturnNull()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var result = await provider.GetFileInfoAsync("/nonexistent/path/file.txt");
         result.Should().BeNull();
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task GetAvailableLocationsAsync_ShouldReturnAtLeastRoot()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var locations = await provider.GetAvailableLocationsAsync();
         locations.Should().NotBeEmpty();
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task GetFileSystemTypeAsync_Root_ShouldReturnType()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var fsType = await provider.GetFileSystemTypeAsync("/");
         fsType.Should().NotBe("unknown");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldExcludeHiddenWhenNotRequested()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.IncludeHidden = false;
@@ -146,11 +130,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().HaveCount(5);
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldReturnDirectories()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
 
@@ -166,11 +148,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         dirs.Select(d => d.Name).Should().Contain(new[] { "sub1", "sub1a", "sub2" });
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldRespectExcludedPaths()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.ExcludedPaths = new List<string> { Path.Combine(_fixture.RootPath, "sub1") };
@@ -187,11 +167,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().NotContain(i => i.Name == "file4.log");
     }
 
-    [Fact]
+    [MacOSFact]
     public async Task EnumerateFilesAsync_ShouldRespectMaxFileSize()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         var options = CreateOptions();
         options.MaxFileSize = 200; // bytes
@@ -208,11 +186,9 @@ public class MacOSFileSystemProviderTests : IClassFixture<TestFileTreeFixture>
         files.Should().NotContain(i => i.Name == "file5.pdf"); // 500 bytes
     }
 
-    [Fact]
+    [MacOSFact]
     public void IsAvailable_OnMacOS_ShouldBeTrue()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         using var provider = CreateProvider();
         provider.IsAvailable.Should().BeTrue();
         provider.SupportedPlatform.Should().Be(PlatformType.MacOS);

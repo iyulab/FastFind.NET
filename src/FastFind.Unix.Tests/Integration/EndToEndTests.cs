@@ -23,11 +23,9 @@ public class EndToEndTests : IDisposable
         }
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task FullPipeline_Index_Search_ShouldWork()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         UnixRegistration.EnsureRegistered();
         using var engine = FastFinder.CreateSearchEngine();
 
@@ -55,11 +53,9 @@ public class EndToEndTests : IDisposable
         items.Should().AllSatisfy(i => i.Name.Should().Contain("test"));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Search_ByExtension_ShouldFilter()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
         var options = new IndexingOptions
         {
@@ -83,11 +79,9 @@ public class EndToEndTests : IDisposable
         items.Should().NotBeEmpty();
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task IndexingStatistics_AfterIndexing_ShouldBePopulated()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
         var options = new IndexingOptions
         {

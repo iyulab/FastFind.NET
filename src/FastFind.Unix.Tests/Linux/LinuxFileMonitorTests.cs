@@ -8,11 +8,9 @@ namespace FastFind.Unix.Tests.Linux;
 [Trait("OS", "Linux")]
 public class LinuxFileMonitorTests
 {
-    [Fact]
+    [LinuxFact]
     public async Task MonitorChangesAsync_ShouldDetectCreatedFile()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var testDir = Path.Combine(Path.GetTempPath(), $"fastfind-monitor-{Guid.NewGuid():N}");
         Directory.CreateDirectory(testDir);
 

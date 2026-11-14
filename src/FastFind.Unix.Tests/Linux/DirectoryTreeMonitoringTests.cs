@@ -18,11 +18,9 @@ public sealed class DirectoryTreeMonitoringTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Renaming_And_Deleting_Directories_Should_Carry_Their_Subtrees()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         Directory.CreateDirectory(Path.Combine(_root, "proj", "src", "deep"));
         Directory.CreateDirectory(Path.Combine(_root, "junk", "sub"));
         File.WriteAllText(Path.Combine(_root, "proj", "src", "deep", "leaf.cs"), "x");

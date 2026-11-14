@@ -17,11 +17,9 @@ public class MaxFileCountTests : IDisposable
 
     public void Dispose() => Directory.Delete(_tempDir, true);
 
-    [Fact]
+    [LinuxFact]
     public async Task StartIndexingAsync_WithMaxFileCount_StopsAtCap()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
 
         for (int i = 0; i < 20; i++)
@@ -46,11 +44,9 @@ public class MaxFileCountTests : IDisposable
         phaseReceived.Should().NotContain(IndexingPhase.Completed);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task StartIndexingAsync_WithoutMaxFileCount_IndexesAllFiles()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
 
         for (int i = 0; i < 10; i++)

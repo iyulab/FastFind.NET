@@ -16,11 +16,9 @@ namespace FastFind.Unix.Tests.Linux;
 [Trait("OS", "Linux")]
 public class MonitoringExclusionTests
 {
-    [Fact]
+    [LinuxFact]
     public async Task MonitorChangesAsync_ShouldNotReportChangesUnderAnExcludedPath()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var testDir = Path.Combine(Path.GetTempPath(), $"fastfind-monitor-excl-{Guid.NewGuid():N}");
         var excluded = Path.Combine(testDir, "excluded");
         var kept = Path.Combine(testDir, "kept");

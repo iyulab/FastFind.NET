@@ -7,31 +7,25 @@ namespace FastFind.Unix.Tests.MacOS;
 [Trait("OS", "macOS")]
 public class MacOSFactoryRegistrationTests
 {
-    [Fact]
+    [MacOSFact]
     public void EnsureRegistered_OnMacOS_ShouldRegisterFactory()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         UnixRegistration.EnsureRegistered();
         var platforms = FastFinder.GetAvailablePlatforms();
         platforms.Should().Contain(PlatformType.MacOS);
     }
 
-    [Fact]
+    [MacOSFact]
     public void CreateSearchEngine_OnMacOS_ShouldReturnEngine()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         UnixRegistration.EnsureRegistered();
         using var engine = FastFinder.CreateSearchEngine();
         engine.Should().NotBeNull();
     }
 
-    [Fact]
+    [MacOSFact]
     public void CreateMacOSSearchEngine_DirectCall_ShouldNotThrow()
     {
-        if (!OperatingSystem.IsMacOS()) return;
-
         var act = () => { using var e = UnixSearchEngine.CreateMacOSSearchEngine(); };
         act.Should().NotThrow();
     }

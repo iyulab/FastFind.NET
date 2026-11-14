@@ -29,11 +29,9 @@ public class RefreshExclusionTests : IClassFixture<TestFileTreeFixture>
         return names;
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task RefreshIndexAsync_ShouldKeepHonouringTheExclusionsTheIndexWasBuiltWith()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
 
         await engine.StartIndexingAsync(new IndexingOptions
