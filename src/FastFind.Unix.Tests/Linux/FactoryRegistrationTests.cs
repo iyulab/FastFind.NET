@@ -1,5 +1,5 @@
 using FastFind.Interfaces;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace FastFind.Unix.Tests.Linux;
 

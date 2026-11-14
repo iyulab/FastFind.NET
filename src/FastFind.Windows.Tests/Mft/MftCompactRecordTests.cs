@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FastFind.Models;
 using FastFind.Windows.Mft;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 using FastFind.Windows.Tests.Helpers;
 using Xunit.Abstractions;

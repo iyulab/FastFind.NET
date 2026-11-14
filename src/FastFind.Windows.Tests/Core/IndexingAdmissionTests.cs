@@ -1,6 +1,6 @@
 using FastFind.Indexing;
 using FastFind.Models;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 
 namespace FastFind.Windows.Tests.Core;

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using FastFind.Models;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 using Xunit.Abstractions;
 

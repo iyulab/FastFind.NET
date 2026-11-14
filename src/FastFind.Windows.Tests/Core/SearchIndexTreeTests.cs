@@ -2,7 +2,7 @@ using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.SQLite;
 using FastFind.Windows.Implementation;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

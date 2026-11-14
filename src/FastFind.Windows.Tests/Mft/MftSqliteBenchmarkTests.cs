@@ -1,7 +1,7 @@
 using FastFind.Models;
 using FastFind.SQLite;
 using FastFind.Windows.Mft;
-using FluentAssertions;
+using AwesomeAssertions;
 using System.Diagnostics;
 using Xunit;
 using FastFind.Windows.Tests.Helpers;

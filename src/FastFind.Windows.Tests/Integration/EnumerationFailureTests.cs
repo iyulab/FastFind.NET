@@ -3,7 +3,7 @@ using FastFind.Models;
 using FastFind.Windows.Implementation;
 using FastFind.Windows.Mft;
 using FastFind.Windows.Tests.Helpers;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

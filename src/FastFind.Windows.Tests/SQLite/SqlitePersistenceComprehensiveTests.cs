@@ -1,7 +1,7 @@
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.SQLite;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;

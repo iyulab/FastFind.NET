@@ -1,7 +1,7 @@
 using FastFind;
 using FastFind.Interfaces;
 using FastFind.Windows;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;

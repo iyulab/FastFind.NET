@@ -1,7 +1,7 @@
 using FastFind.Indexing;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 
 namespace FastFind.Windows.Tests.Core;

@@ -1,7 +1,7 @@
 using FastFind.Indexing;
 using FastFind.Models;
 using FastFind.Unix;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 
 namespace FastFind.Unix.Tests.Core;

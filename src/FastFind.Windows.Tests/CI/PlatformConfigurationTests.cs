@@ -1,7 +1,7 @@
 using FastFind;
 using FastFind.Interfaces;
 using FastFind.Windows;
-using FluentAssertions;
+using AwesomeAssertions;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Xunit;

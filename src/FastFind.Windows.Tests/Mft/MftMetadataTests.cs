@@ -5,7 +5,7 @@ using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
 using FastFind.Windows.Mft;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

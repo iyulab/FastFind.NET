@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using FastFind.Models;
 using FastFind.Windows.Mft;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Win32.SafeHandles;
 using Xunit;
 

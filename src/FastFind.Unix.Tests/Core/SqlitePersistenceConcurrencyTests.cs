@@ -1,6 +1,6 @@
 using FastFind.Models;
 using FastFind.SQLite;
-using FluentAssertions;
+using AwesomeAssertions;
 using System.Collections.Concurrent;
 using Xunit;
 

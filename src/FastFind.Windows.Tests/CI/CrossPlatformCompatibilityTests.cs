@@ -2,7 +2,7 @@ using FastFind;
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace FastFind.Windows.Tests.CI;
 

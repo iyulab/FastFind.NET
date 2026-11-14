@@ -2,7 +2,7 @@ using FastFind;
 using FastFind.Models;
 using FastFind.SQLite;
 using FastFind.Windows;
-using FluentAssertions;
+using AwesomeAssertions;
 using Xunit;
 
 namespace FastFind.Windows.Tests.SQLite;

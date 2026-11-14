@@ -1,5 +1,5 @@
 using FastFind.Models;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace FastFind.Windows.Tests;
 

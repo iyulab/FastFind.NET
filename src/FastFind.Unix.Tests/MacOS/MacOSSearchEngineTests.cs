@@ -1,6 +1,6 @@
 using FastFind.Models;
 using FastFind.Unix.Tests.TestFixtures;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace FastFind.Unix.Tests.MacOS;
 
