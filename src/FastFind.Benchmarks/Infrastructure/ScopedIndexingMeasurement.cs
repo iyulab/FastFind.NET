@@ -76,12 +76,14 @@ public static class ScopedIndexingMeasurement
             var walk = new List<double>();
             var journal = new List<double>();
             long walkCount = 0, journalCount = 0;
+            HashSet<string>? walkPaths = null, journalPaths = null;
 
             for (var i = 0; i < Repeats; i++)
             {
-                (var t, walkCount) = await Time(ProviderMode.Standard, folder);
+                var last = i == Repeats - 1;   // keep the paths of one run only, to say what differs
+                (var t, walkCount, walkPaths) = await Time(ProviderMode.Standard, folder, last);
                 walk.Add(t);
-                (t, journalCount) = await Time(ProviderMode.Mft, folder);
+                (t, journalCount, journalPaths) = await Time(ProviderMode.Mft, folder, last);
                 journal.Add(t);
             }
 
@@ -89,11 +91,19 @@ public static class ScopedIndexingMeasurement
                 ? walkCount.ToString("N0", CultureInfo.InvariantCulture)
                 : $"{walkCount:N0} / {journalCount:N0}";
             Console.WriteLine($"| {folder} | {entries} | {Runs(walk)} | {Runs(journal)} |");
+
+            if (walkPaths is not null && journalPaths is not null && !walkPaths.SetEquals(journalPaths))
+            {
+                foreach (var p in journalPaths.Except(walkPaths, StringComparer.OrdinalIgnoreCase).Take(5))
+                    Console.WriteLine($"  only the journal pass: {p}");
+                foreach (var p in walkPaths.Except(journalPaths, StringComparer.OrdinalIgnoreCase).Take(5))
+                    Console.WriteLine($"  only the walk: {p}");
+            }
         }
     }
 
     [SupportedOSPlatform("windows")]
-    private static async Task<(double Seconds, long Count)> Time(ProviderMode mode, string folder)
+    private static async Task<(double Seconds, long Count, HashSet<string>? Paths)> Time(ProviderMode mode, string folder, bool keepPaths)
     {
         await using var provider = new HybridFileSystemProvider(mode);
         var options = new IndexingOptions { SpecificDirectories = { folder } };
@@ -101,8 +111,14 @@ public static class ScopedIndexingMeasurement
         GC.Collect();
         var sw = Stopwatch.StartNew();
         long n = 0;
-        await foreach (var _ in provider.EnumerateFilesAsync([folder], options)) n++;
-        return (sw.Elapsed.TotalSeconds, n);
+        var paths = keepPaths ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
+        await foreach (var item in provider.EnumerateFilesAsync([folder], options))
+        {
+            n++;
+            paths?.Add(item.FullPath);
+        }
+
+        return (sw.Elapsed.TotalSeconds, n, paths);
     }
 
     private static string Runs(List<double> runs) =>
