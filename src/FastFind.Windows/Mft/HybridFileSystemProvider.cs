@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using FastFind.Indexing;
 using FastFind.Interfaces;
 using FastFind.Models;
 using FastFind.Windows.Implementation;
@@ -10,8 +12,34 @@ namespace FastFind.Windows.Mft;
 
 /// <summary>
 /// Hybrid file system provider that automatically selects the fastest available method.
-/// Uses MFT for maximum performance when admin+NTFS is available, falls back to standard enumeration otherwise.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Without administrator rights it is the directory walk. With them, <see cref="ProviderMode.Auto"/> is not simply
+/// the change-journal pass: that pass reads the whole volume whatever the location, a cost that is close to a constant
+/// per volume (7-13 s on the volumes measured, for a folder of 6 entries as for one of 2.2 million), while the walk costs
+/// per entry (about 25-100 microseconds). A folder of a few thousand entries takes 0.03 s to walk and 7 s to read from the
+/// journal; a folder of two million takes a minute to walk and 9 s from the journal. The crossover differs by volume and
+/// nobody can say in advance how many entries a location holds, so an enumeration <b>starts with the walk and, if it has not
+/// finished within a time budget, continues with the journal pass</b> for the locations still unread - at most about
+/// twice the better choice, where either fixed choice loses up to 200x or 6x. The entries the walk already gave are not
+/// given again.
+/// </para>
+/// <para>
+/// The two read the same entries, with one property of the journal worth knowing: it lists a file <em>once</em>, under one of
+/// its names, so a hard-linked file's other names (a few thousand under <c>C:\Program Files</c>, linked from <c>WinSxS</c>)
+/// are in the walk's answer and not in the journal pass's. A handed-over pass therefore differs from a walk of the same
+/// folder by those names, and by whatever changed while it ran.
+/// </para>
+/// <para>
+/// Only where the two give the same answer: when size or timestamps are collected (the journal pass would read each one
+/// anyway), a depth limit is set, or links are followed (the journal pass reads neither option), the walk is used on its
+/// own. Items of a pass that may hand over carry no size or times, as the journal pass's do, so the index is the same
+/// whichever pass produced an entry. A location that is a volume root, or on a volume the journal cannot read, is not
+/// timed. <see cref="ProviderMode.Mft"/> and <see cref="ProviderMode.Standard"/> are forced as before, and monitoring
+/// still uses the change journal.
+/// </para>
+/// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDisposable
 {
@@ -19,6 +47,17 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     private readonly IFileSystemProvider _activeProvider;
     private readonly ProviderMode _mode;
     private bool _disposed;
+
+    // Only in Auto mode where the journal pass is available: the walk that starts an enumeration, and the time it gets.
+    private readonly IFileSystemProvider? _walkProvider;
+    private readonly TimeSpan _walkBudget = DefaultWalkBudget;
+    private readonly TimeProvider _clock = TimeProvider.System;
+    private readonly Func<char, bool> _journalCovers = JournalCoversDrive;
+    private volatile bool _walkRan;
+    private volatile bool _journalRan;
+
+    /// <summary>How long the walk runs before the journal pass takes over (see the type's remarks).</summary>
+    internal static readonly TimeSpan DefaultWalkBudget = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Gets the current provider mode
@@ -40,8 +79,10 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
         // Automatic mode detection
         if (MftFileSystemProvider.IsMftAccessAvailable)
         {
-            _logger?.LogInformation("MFT access available - using high-performance MFT provider");
+            _logger?.LogInformation("MFT access available - the walk first, the change-journal provider for what it does not finish");
             _activeProvider = new MftFileSystemProvider(loggerFactory?.CreateLogger<MftFileSystemProvider>());
+            _walkProvider = new WindowsFileSystemProvider(
+                (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<WindowsFileSystemProvider>());
             _mode = ProviderMode.Mft;
         }
         else
@@ -83,6 +124,8 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
                 if (MftFileSystemProvider.IsMftAccessAvailable)
                 {
                     _activeProvider = new MftFileSystemProvider(loggerFactory?.CreateLogger<MftFileSystemProvider>());
+                    _walkProvider = new WindowsFileSystemProvider(
+                        (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<WindowsFileSystemProvider>());
                     _mode = ProviderMode.Mft;
                 }
                 else
@@ -97,6 +140,38 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
         _logger?.LogInformation("HybridFileSystemProvider initialized in {Mode} mode", _mode);
     }
 
+    /// <summary>
+    /// Automatic mode over the real providers with a chosen walk budget: zero hands every enumeration over after the first
+    /// entry, an hour never does. For the tests that compare what the two routes give on a real tree.
+    /// </summary>
+    internal HybridFileSystemProvider(TimeSpan walkBudget, ILoggerFactory? loggerFactory = null)
+        : this(ProviderMode.Auto, loggerFactory)
+    {
+        if (_walkProvider is null)
+            throw new InvalidOperationException("The hand-over needs the change-journal provider: administrator rights and an NTFS volume.");
+
+        _walkBudget = walkBudget;
+    }
+
+    /// <summary>
+    /// Automatic mode over the two given providers, a time budget, a clock and the set of drives the journal covers,
+    /// so the hand-over can be driven without a volume, elevation or a real wait.
+    /// </summary>
+    internal HybridFileSystemProvider(
+        IFileSystemProvider walk,
+        IFileSystemProvider journal,
+        TimeSpan walkBudget,
+        TimeProvider clock,
+        Func<char, bool> journalCovers)
+    {
+        _walkProvider = walk;
+        _activeProvider = journal;
+        _mode = ProviderMode.Mft;
+        _walkBudget = walkBudget;
+        _clock = clock;
+        _journalCovers = journalCovers;
+    }
+
     /// <inheritdoc/>
     public PlatformType SupportedPlatform => PlatformType.Windows;
 
@@ -104,10 +179,24 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     public bool IsAvailable => _activeProvider.IsAvailable;
 
     /// <inheritdoc/>
-    public bool ProvidesFileMetadata(IndexingOptions options) => _activeProvider.ProvidesFileMetadata(options);
+    /// <remarks>
+    /// Asked once before a pass, so it answers for the whole of it: a pass that may hand over reports what the journal pass
+    /// reports (nothing is collected, and its walked entries are made to match); a pass that is the walk alone reports the walk.
+    /// </remarks>
+    public bool ProvidesFileMetadata(IndexingOptions options) =>
+        _walkProvider is null || MayHandOver(options)
+            ? _activeProvider.ProvidesFileMetadata(options)
+            : _walkProvider.ProvidesFileMetadata(options);
 
     /// <inheritdoc/>
-    public IReadOnlyCollection<string> EnumerationFailures => _activeProvider.EnumerationFailures;
+    /// <remarks>Of the providers that took part in the last enumeration; the one that did not run holds an older pass's.</remarks>
+    public IReadOnlyCollection<string> EnumerationFailures =>
+        _walkProvider is null
+            ? _activeProvider.EnumerationFailures
+            : (_walkRan ? _walkProvider.EnumerationFailures : Array.Empty<string>())
+                .Concat(_journalRan ? _activeProvider.EnumerationFailures : Array.Empty<string>())
+                .Distinct()
+                .ToArray();
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<FileItem> EnumerateFilesAsync(
@@ -118,12 +207,139 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
         ThrowIfDisposed();
 
         _logger?.LogDebug("Enumerating files using {Mode} mode", _mode);
+        _walkRan = false;
+        _journalRan = false;
 
-        await foreach (var item in _activeProvider.EnumerateFilesAsync(locations, options, cancellationToken))
+        if (_walkProvider is null)
         {
-            yield return item;
+            await foreach (var item in _activeProvider.EnumerateFilesAsync(locations, options, cancellationToken))
+            {
+                yield return item;
+            }
+
+            yield break;
+        }
+
+        // The walk alone where the journal pass would not give the same answer.
+        if (!MayHandOver(options))
+        {
+            _walkRan = true;
+            await foreach (var item in _walkProvider.EnumerateFilesAsync(locations, options, cancellationToken))
+            {
+                yield return item;
+            }
+
+            yield break;
+        }
+
+        foreach (var group in locations.Where(l => !string.IsNullOrWhiteSpace(l)).GroupBy(DriveOf))
+        {
+            var volumeLocations = group.ToList();
+
+            // A volume the journal cannot read (not NTFS, a network share): only the walk can.
+            if (group.Key == NoDrive || !_journalCovers(group.Key))
+            {
+                _walkRan = true;
+                await foreach (var item in _walkProvider.EnumerateFilesAsync(volumeLocations, options, cancellationToken))
+                {
+                    yield return NotCollected(item);
+                }
+
+                continue;
+            }
+
+            // The whole volume: the journal pass reads exactly that, and a walk of it would be the slow way.
+            if (volumeLocations.Any(IsVolumeRoot))
+            {
+                _journalRan = true;
+                await foreach (var item in _activeProvider.EnumerateFilesAsync(volumeLocations, options, cancellationToken))
+                {
+                    yield return item;
+                }
+
+                continue;
+            }
+
+            // The walk, for as long as the budget lasts: one budget for all of a volume's locations, since the journal
+            // pass's cost is the volume's, not a location's.
+            var seen = new HashSet<string>(FileEntryTable.PathKeyComparer.Instance);
+            var unread = new List<string>(volumeLocations);
+            var started = _clock.GetTimestamp();
+            var handedOver = false;
+            _walkRan = true;
+
+            foreach (var location in volumeLocations)
+            {
+                // Disposing the enumerator cancels the walk and waits for its producer to end, before the journal pass starts.
+                await using var walk = _walkProvider.EnumerateFilesAsync([location], options, cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
+
+                // A walk that has ended is the pass whatever the clock says; only when there is more to read, and the
+                // budget is spent, does the journal pass take over (and give the entry just read, among the rest).
+                while (await walk.MoveNextAsync())
+                {
+                    if (_clock.GetElapsedTime(started) >= _walkBudget)
+                    {
+                        handedOver = true;
+                        break;
+                    }
+
+                    var item = NotCollected(walk.Current);
+                    seen.Add(item.FullPath);
+                    yield return item;
+                }
+
+                if (handedOver)
+                    break;
+
+                unread.Remove(location);
+            }
+
+            if (!handedOver)
+                continue;
+
+            _logger?.LogInformation(
+                "The walk read {Count} entries in {Elapsed:F1} s and has not finished: continuing with the change-journal pass for {Locations}",
+                seen.Count, _clock.GetElapsedTime(started).TotalSeconds, string.Join(", ", unread));
+
+            _journalRan = true;
+            await foreach (var item in _activeProvider.EnumerateFilesAsync(unread, options, cancellationToken))
+            {
+                if (!seen.Contains(item.FullPath))
+                    yield return item;
+            }
         }
     }
+
+    private const char NoDrive = '\0';
+
+    /// <summary>Options under which the journal pass gives the walk's answer, so an enumeration may switch between them.</summary>
+    internal static bool MayHandOver(IndexingOptions options) =>
+        !options.CollectFileMetadata && options.MaxDepth is null && !options.FollowSymlinks;
+
+    private static char DriveOf(string location)
+    {
+        var full = Path.GetFullPath(location);
+        return full.Length >= 2 && full[1] == ':' ? char.ToUpperInvariant(full[0]) : NoDrive;
+    }
+
+    private static bool IsVolumeRoot(string location)
+    {
+        var full = Path.GetFullPath(location);
+        return MftFileSystemProvider.DirectoryDepth(full, Path.GetPathRoot(full) ?? string.Empty) == 0;
+    }
+
+    private static bool JournalCoversDrive(char drive) => MftReader.GetNtfsDrives().Contains(drive);
+
+    /// <summary>
+    /// The item as the journal pass would have produced it: no size, no times ("not collected"). An enumeration that may
+    /// switch passes gives every entry this form, or a query by size would be right for the walked half of an index and
+    /// wrong for the rest.
+    /// </summary>
+    private static FileItem NotCollected(FileItem item) =>
+        item.Size == 0 && item.CreatedTime == default && item.ModifiedTime == default && item.AccessedTime == default
+            ? item
+            : item with { Size = 0, CreatedTime = default, ModifiedTime = default, AccessedTime = default };
 
     /// <inheritdoc/>
     public Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
@@ -222,6 +438,7 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     {
         if (!_disposed)
         {
+            _walkProvider?.Dispose();
             _activeProvider.Dispose();
             _disposed = true;
         }
@@ -231,6 +448,11 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     {
         if (!_disposed)
         {
+            if (_walkProvider is IAsyncDisposable asyncWalk)
+                await asyncWalk.DisposeAsync();
+            else
+                _walkProvider?.Dispose();
+
             if (_activeProvider is IAsyncDisposable asyncDisposable)
             {
                 await asyncDisposable.DisposeAsync();

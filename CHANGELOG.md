@@ -8,6 +8,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+**An elevated Windows process no longer pays the whole-volume read for a small folder.** With administrator rights the Auto
+provider always used the change-journal pass, which reads the entire volume whatever the location: 7-13 s on the volumes
+measured, for a folder of 6 entries as for one of 2.2 million. The directory walk costs per entry instead (about 25-100
+microseconds), so a folder of a few thousand entries takes 0.03 s to walk and 7 s to read from the journal, and a folder of
+two million takes about a minute to walk and 9 s from the journal; where the two cross differs by volume (about 130,000 entries
+on one, 280,000 on another). An indexing pass now **starts with the walk and, if it has not finished within 10 seconds, continues
+with the journal pass** for the locations still unread, giving no entry twice - at most about twice the better choice. Locations
+that are a volume root or on a volume the journal cannot read are not timed. The walk is used on its own when `CollectFileMetadata`,
+`MaxDepth` or `FollowSymlinks` is set: the journal pass reads none of the last two (an elevated process used to ignore them),
+and with the first it reads each entry as the walk does anyway. Entries of a pass that may hand over carry no size or timestamps,
+as the journal pass's always did, so an index is the same whichever pass produced an entry. `ProviderMode.Mft` and
+`ProviderMode.Standard` are forced as before, and monitoring still uses the change journal.
+
 **A change a monitor reports from inside a hidden directory is no longer indexed (both engines).** An indexing pass does not enter a
 hidden directory (or, with system files off, a system one), so it reads nothing beneath it; a monitored creation looked only at the
 changed file's own attributes, so a file created in `.git` (which is not hidden itself) was added to the index, and a file renamed into
