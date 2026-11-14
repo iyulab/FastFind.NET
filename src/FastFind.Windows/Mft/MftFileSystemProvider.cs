@@ -328,6 +328,13 @@ public sealed class MftFileSystemProvider : IFileSystemProvider, IAsyncDisposabl
     }
 
     /// <inheritdoc/>
+    public Task<FileAttributes?> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return Task.FromResult(DirectAttributes.Read(path));
+    }
+
+    /// <inheritdoc/>
     public async Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();

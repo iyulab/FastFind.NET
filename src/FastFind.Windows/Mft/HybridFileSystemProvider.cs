@@ -349,6 +349,13 @@ public sealed class HybridFileSystemProvider : IFileSystemProvider, IAsyncDispos
     }
 
     /// <inheritdoc/>
+    public Task<FileAttributes?> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return _activeProvider.GetAttributesAsync(path, cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public Task<IEnumerable<FastFind.Interfaces.DriveInfo>> GetAvailableLocationsAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();

@@ -6,7 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+**`IFileSystemProvider.GetAttributesAsync(path)`** — a path's attributes and nothing else, `null` when they cannot be read. The default
+implementation answers through `GetFileInfoAsync`, so a provider that has nothing cheaper (or a test double) needs no change; the Windows,
+change-journal, Linux and macOS providers read the attributes with one call.
+
 ### Changed
+
+**A monitored change costs less on Windows: the check for a hidden directory above it reads attributes, not whole file records.** A change a monitor
+reports is checked against every directory between the monitored location and the item (one attribute read each, so that a file created in `.git`
+is not indexed). The Windows engine made each of those reads through `GetFileInfoAsync`, which hops to the thread pool and makes several file-system
+calls to build a record of which one attribute was used. It now asks `GetAttributesAsync`. Measured on the same machine, a read of one directory
+through the old call took about 2.2 times what a direct read does; the cost of a change still grows with its depth (a path nine directories below the
+location costs about four times the change's own file-info call).
 
 **The Linux and macOS providers bound a followed chain of links, as the Windows walk does.** With `FollowSymlinks` set, a link back to an ancestor
 was entered again beneath itself until the operating system refused the path (about forty crossings on Linux): forty times the work and as many

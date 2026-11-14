@@ -63,6 +63,19 @@ public interface IFileSystemProvider : IDisposable
     Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets the attributes of a path, or <c>null</c> when they cannot be read (it is gone, or inaccessible).
+    /// </summary>
+    /// <remarks>
+    /// For a caller that needs the attributes and nothing else — the check of every directory above a changed item is
+    /// one read per directory, on every change a monitor reports. <see cref="GetFileInfoAsync"/> builds a whole
+    /// <see cref="FileItem"/>, which on the Windows provider costs a thread-pool hop and several file-system calls
+    /// where a single call answers this; measured, about four times the cost per read. The default answers through
+    /// <see cref="GetFileInfoAsync"/>, so a provider that has nothing cheaper (or a test double) needs no change.
+    /// </remarks>
+    async Task<FileAttributes?> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
+        => (await GetFileInfoAsync(path, cancellationToken).ConfigureAwait(false))?.Attributes;
+
+    /// <summary>
     /// Gets available drives or mount points
     /// </summary>
     /// <param name="cancellationToken">Cancellation token</param>

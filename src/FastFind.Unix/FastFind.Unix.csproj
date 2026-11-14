@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\DirectAttributes.cs" Link="Shared\DirectAttributes.cs" />
     <Compile Include="..\Shared\FileEntryTable.cs" Link="Shared\FileEntryTable.cs" />
     <Compile Include="..\Shared\IndexingAdmission.cs" Link="Shared\IndexingAdmission.cs" />
     <Compile Include="..\Shared\ResultCap.cs" Link="Shared\ResultCap.cs" />

@@ -349,6 +349,13 @@ internal class LinuxFileSystemProvider : IFileSystemProvider
     }
 
     /// <inheritdoc/>
+    public Task<FileAttributes?> GetAttributesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return Task.FromResult(DirectAttributes.Read(path));
+    }
+
+    /// <inheritdoc/>
     public Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();

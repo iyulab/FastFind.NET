@@ -953,7 +953,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         // A pass does not enter a hidden directory below its location, so nothing beneath one belongs to what it indexed.
         var beneathSkipped = await IndexingAdmission.IsBeneathSkippedDirectoryAsync(
             item.FullPath, options.GetEffectiveSearchLocations(), options,
-            async (directory, ct) => (await _fileSystemProvider.GetFileInfoAsync(directory, ct).ConfigureAwait(false))?.Attributes,
+            (directory, ct) => _fileSystemProvider.GetAttributesAsync(directory, ct),
             cancellationToken).ConfigureAwait(false);
 
         var outcome = await IndexingAdmission.IndexMonitoredAsync(
