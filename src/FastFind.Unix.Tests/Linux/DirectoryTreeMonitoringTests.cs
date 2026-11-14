@@ -41,11 +41,18 @@ public sealed class DirectoryTreeMonitoringTests : IDisposable
         Directory.Move(Path.Combine(_root, "proj"), Path.Combine(_root, "renamed"));
         Directory.Delete(Path.Combine(_root, "junk"), recursive: true);
 
+        // The rename and the deletion are reported separately and in no promised order, so wait for every effect
+        // the assertions below look at - waiting for the rename alone left the deletion's to chance.
         var movedLeaf = Path.Combine(_root, "renamed", "src", "deep", "leaf.cs");
-        await WaitUntilAsync(async () => (await Where(engine, "leaf.cs")).SequenceEqual([movedLeaf]));
+        var movedTop = Path.Combine(_root, "renamed", "top.cs");
+        await WaitUntilAsync(async () =>
+            (await Where(engine, "leaf.cs")).SequenceEqual([movedLeaf])
+            && (await Where(engine, "top.cs")).SequenceEqual([movedTop])
+            && (await Where(engine, "old.log")).Count == 0
+            && (await Where(engine, "sub")).Count == 0);
 
         (await Where(engine, "leaf.cs")).Should().Equal(movedLeaf);
-        (await Where(engine, "top.cs")).Should().Equal(Path.Combine(_root, "renamed", "top.cs"));
+        (await Where(engine, "top.cs")).Should().Equal(movedTop);
         (await Where(engine, "old.log")).Should().BeEmpty();
         (await Where(engine, "sub")).Should().BeEmpty();
     }
