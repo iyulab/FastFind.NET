@@ -65,8 +65,14 @@ internal sealed class ScriptedFileSystemProvider : IFileSystemProvider
             throw ThrowAfterItems;
     }
 
+    /// <summary>Every path <see cref="GetFileInfoAsync"/> (and so the default <c>GetAttributesAsync</c>) was asked about, in order.</summary>
+    public System.Collections.Concurrent.ConcurrentQueue<string> InfoRequests { get; } = new();
+
     public Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
-        => Task.FromResult(OnDisk.TryGetValue(filePath, out var item) ? item : null);
+    {
+        InfoRequests.Enqueue(filePath);
+        return Task.FromResult(OnDisk.TryGetValue(filePath, out var item) ? item : null);
+    }
 
     public Task<IEnumerable<DriveInfo>> GetAvailableLocationsAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<DriveInfo>>(Array.Empty<DriveInfo>());

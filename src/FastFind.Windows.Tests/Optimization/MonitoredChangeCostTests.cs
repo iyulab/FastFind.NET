@@ -102,4 +102,68 @@ public class MonitoredChangeCostTests : IDisposable
             _output.WriteLine($"{depth - 1,5} {check[iterations / 2],16:F1} {viaDirect[iterations / 2],10:F1} {own[iterations / 2],12:F1}");
         }
     }
+
+    /// <summary>
+    /// A burst: many changes in a few directories of a tree <c>depth</c> levels deep (an <c>npm install</c>), checked without
+    /// and with the cache, alternately, so that the machine's drift falls on both. Reports microseconds per change.
+    /// </summary>
+    [PerformanceTestFact]
+    public async Task Cost_Of_A_Burst_With_And_Without_The_Cache()
+    {
+        using var provider = new WindowsFileSystemProvider(NullLogger<WindowsFileSystemProvider>.Instance);
+        var options = new IndexingOptions
+        {
+            SpecificDirectories = { _root },
+            ExcludedPaths = new List<string>(),
+            ExcludedExtensions = new List<string>(),
+            IncludeHidden = false,
+            IncludeSystem = false,
+        };
+
+        Func<string, CancellationToken, Task<FileAttributes?>> attributesOf = (d, ct) => provider.GetAttributesAsync(d, ct);
+        const int changes = 5000;
+        _output.WriteLine($"{"depth",5} {"changes",8} {"no cache µs/change",20} {"cache µs/change",17} {"own file-info µs",18}");
+
+        foreach (var depth in new[] { 3, 9, 20 })
+        {
+            var directory = _root;
+            for (var level = 0; level < depth; level++)
+                directory = Path.Combine(directory, "n" + level);
+            var leaves = Enumerable.Range(0, 20).Select(i => Path.Combine(directory, "pkg" + i)).ToArray();
+            foreach (var leaf in leaves)
+                Directory.CreateDirectory(leaf);
+            var paths = Enumerable.Range(0, changes).Select(i => Path.Combine(leaves[i % leaves.Length], "f" + i + ".js")).ToArray();
+            foreach (var path in paths.Take(1000))
+                File.WriteAllText(path, "x"); // so that the change's own file-info call has a file to read
+
+            var withoutCache = new List<double>();
+            var withCache = new List<double>();
+            var own = new List<double>();
+            for (var round = 0; round < 3; round++)
+            {
+                var t0 = Stopwatch.GetTimestamp();
+                foreach (var path in paths)
+                    await IndexingAdmission.IsBeneathSkippedDirectoryAsync(path, [_root], options, attributesOf);
+                var t1 = Stopwatch.GetTimestamp();
+
+                var cache = new DirectoryAttributeCache();
+                foreach (var path in paths)
+                    await IndexingAdmission.IsBeneathSkippedDirectoryAsync(path, [_root], options, attributesOf, cache: cache);
+                var t2 = Stopwatch.GetTimestamp();
+
+                foreach (var path in paths.Take(1000))
+                    await provider.GetFileInfoAsync(path);
+                var t3 = Stopwatch.GetTimestamp();
+
+                withoutCache.Add((t1 - t0) * 1_000_000.0 / Stopwatch.Frequency / changes);
+                withCache.Add((t2 - t1) * 1_000_000.0 / Stopwatch.Frequency / changes);
+                own.Add((t3 - t2) * 1_000_000.0 / Stopwatch.Frequency / 1000);
+            }
+
+            withoutCache.Sort();
+            withCache.Sort();
+            own.Sort();
+            _output.WriteLine($"{depth,5} {changes,8} {withoutCache[1],20:F1} {withCache[1],17:F1} {own[1],18:F1}");
+        }
+    }
 }

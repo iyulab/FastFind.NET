@@ -234,6 +234,35 @@ queries, queries while indexing, regular-expression queries, a quiet machine, an
 
 ---
 
+## Monitored changes
+
+What a change the monitor reports costs the engine before it is indexed: it is checked against every directory between the
+monitored location and the item, one attribute read each, so that a file created inside a hidden directory (`.git`) is not
+indexed. Taken 2026-11-15 by `MonitoredChangeCostTests` (a performance test: `dotnet test --filter "Suite=MonitoredChangeCost"`),
+on this machine with its antivirus, a real temporary tree, a warm file-system cache. **The absolute figures drifted up to 5x
+between runs; the ratios held**, so every cell is the lowest to highest of three runs, and the comparison inside a run is what
+counts.
+
+A burst of 5,000 changes spread over 20 leaf directories, `depth` levels of directories below the location (so each change has
+`depth` + 1 directories above it); microseconds per change (median of three rounds inside a run; range over three runs):
+
+| depth | before: every read, through `GetFileInfoAsync` | after: attributes read directly, remembered | the change's own file-info call |
+|---:|---:|---:|---:|
+| 3 | 265 – 820 | 3 – 6 | 142 – 383 |
+| 9 | 541 – 1,764 | 4 – 9 | 89 – 392 |
+| 20 | 2,732 – 3,241 | 14 – 20 | 292 – 322 |
+
+Before, the cost grew with depth and passed the change's own file-info call from about three levels (a path nine levels deep
+cost about four times it; 20,000 changes at nine levels, an `npm install`, would add 11 to 35 seconds of processing).
+After, it does not depend on depth: each directory is read once per burst. The remembered attributes of a directory are dropped
+when the monitor reports a change to that path, expire after five seconds whatever was reported, and are never made of a read
+that failed. One direct read of a directory's attributes costs about 0.45 of the change's own file-info call.
+
+**Not measured:** a real monitor delivering a real burst end to end (the figures are the check's, read from a prepared tree), a cold
+file-system cache, a network volume, and any machine other than this one.
+
+---
+
 ## SIMD string matching
 
 `SIMDStringMatcher` dispatches on what the hardware offers:

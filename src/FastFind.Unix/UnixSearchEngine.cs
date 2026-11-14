@@ -136,6 +136,9 @@ internal class UnixSearchEngineImpl : ISearchEngine
     private volatile bool _isMonitoring;
     private long _totalIndexedFiles;
     private int _monitoringCapLogged;
+
+    // The attributes of the directories above the changes the monitor reports, so a burst reads each once.
+    private readonly DirectoryAttributeCache _directoryAttributes = new();
     // What the searches answered so far have measured: count, matches, and how long they took.
     private readonly SearchTimingTally _searchTiming = new();
     private TimeSpan _lastIndexingTime;
@@ -227,6 +230,7 @@ internal class UnixSearchEngineImpl : ISearchEngine
 
         _isIndexing = true;
         _currentIndexingOptions = options;
+        _directoryAttributes.Clear();
         _indexingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var linkedToken = _indexingCts.Token;
         var stopwatch = Stopwatch.StartNew();
@@ -758,6 +762,10 @@ internal class UnixSearchEngineImpl : ISearchEngine
     {
         try
         {
+            // What the monitor says about a path overrides what was remembered of it (a directory made hidden, removed, renamed).
+            _directoryAttributes.Invalidate(change.NewPath);
+            _directoryAttributes.Invalidate(change.OldPath);
+
             switch (change.ChangeType)
             {
                 case FileChangeType.Created:
@@ -872,7 +880,8 @@ internal class UnixSearchEngineImpl : ISearchEngine
                     // A pass does not enter a hidden directory below its location, so nothing beneath one belongs to what it indexed.
                     var beneathSkipped = await IndexingAdmission.IsBeneathSkippedDirectoryAsync(
                         item.FullPath, options.GetEffectiveSearchLocations(), options,
-                        (directory, _) => Task.FromResult(DirectoryAttributes(directory))).ConfigureAwait(false);
+                        (directory, _) => Task.FromResult(DirectAttributes.Read(directory)),
+                        cache: _directoryAttributes).ConfigureAwait(false);
 
                     var outcome = await IndexingAdmission.IndexMonitoredAsync(
                         _index, item, options, beneathSkippedDirectory: beneathSkipped).ConfigureAwait(false);
@@ -894,18 +903,6 @@ internal class UnixSearchEngineImpl : ISearchEngine
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Updating the index entry for {Path} failed; the index may disagree with the file system", path);
-        }
-    }
-
-    private static FileAttributes? DirectoryAttributes(string directory)
-    {
-        try
-        {
-            return new DirectoryInfo(directory).Attributes;
-        }
-        catch (Exception)
-        {
-            return null;
         }
     }
 

@@ -14,12 +14,14 @@ change-journal, Linux and macOS providers read the attributes with one call.
 
 ### Changed
 
-**A monitored change costs less on Windows: the check for a hidden directory above it reads attributes, not whole file records.** A change a monitor
-reports is checked against every directory between the monitored location and the item (one attribute read each, so that a file created in `.git`
-is not indexed). The Windows engine made each of those reads through `GetFileInfoAsync`, which hops to the thread pool and makes several file-system
-calls to build a record of which one attribute was used. It now asks `GetAttributesAsync`. Measured on the same machine, a read of one directory
-through the old call took about 2.2 times what a direct read does; the cost of a change still grows with its depth (a path nine directories below the
-location costs about four times the change's own file-info call).
+**A monitored change no longer costs more the deeper it is, on Windows and on Linux/macOS.** A change a monitor reports is checked against every
+directory between the monitored location and the item (one attribute read each, so that a file created in `.git` is not indexed). The Windows engine
+made each of those reads through `GetFileInfoAsync`, which hops to the thread pool and makes several file-system calls to build a record of which one
+attribute was used; it now asks `GetAttributesAsync` (about four times cheaper per read). Both engines also remember what they read of each directory
+for a few seconds and forget a directory when the monitor reports a change to it, so a burst reads each directory above its changes once. A directory
+whose attributes change without the monitor reporting it is believed for at most five seconds. Measured on a burst of 5,000 changes in 20 directories,
+per change, lowest to highest median of three runs: nine levels deep 541-1,764 microseconds before, 4-9 after; three levels 265-820 before, 3-6 after;
+twenty levels 2,732-3,241 before, 14-20 after (the change's own file-info call: 89-392). Ranges and method in `docs/BENCHMARKS.md`.
 
 **The Linux and macOS providers bound a followed chain of links, as the Windows walk does.** With `FollowSymlinks` set, a link back to an ancestor
 was entered again beneath itself until the operating system refused the path (about forty crossings on Linux): forty times the work and as many

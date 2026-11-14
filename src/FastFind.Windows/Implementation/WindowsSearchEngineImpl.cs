@@ -88,6 +88,9 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     private long _totalIndexedFiles = 0;
     private int _monitoringCapLogged;
 
+    // The attributes of the directories above the changes the monitor reports, so a burst reads each once.
+    private readonly DirectoryAttributeCache _directoryAttributes = new();
+
     public WindowsSearchEngineImpl(
         IFileSystemProvider fileSystemProvider,
         ISearchIndex searchIndex,
@@ -167,6 +170,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         }
 
         _currentIndexingOptions = options;
+        _directoryAttributes.Clear();
 
         // A search that arrives before the index has anything to say is answered from the disk; tell
         // the index what it is being built with, so that answer follows the same rules.
@@ -894,6 +898,10 @@ internal class WindowsSearchEngineImpl : ISearchEngine
 
     private async Task ProcessFileChangeAsync(FileChangeEventArgs change, CancellationToken cancellationToken)
     {
+        // What the monitor says about a path overrides what was remembered of it (a directory made hidden, removed, renamed).
+        _directoryAttributes.Invalidate(change.NewPath);
+        _directoryAttributes.Invalidate(change.OldPath);
+
         switch (change.ChangeType)
         {
             case FileChangeType.Created:
@@ -954,7 +962,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
         var beneathSkipped = await IndexingAdmission.IsBeneathSkippedDirectoryAsync(
             item.FullPath, options.GetEffectiveSearchLocations(), options,
             (directory, ct) => _fileSystemProvider.GetAttributesAsync(directory, ct),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, _directoryAttributes).ConfigureAwait(false);
 
         var outcome = await IndexingAdmission.IndexMonitoredAsync(
             _searchIndex, item, options, cancellationToken, beneathSkippedDirectory: beneathSkipped).ConfigureAwait(false);

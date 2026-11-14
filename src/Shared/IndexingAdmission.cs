@@ -100,12 +100,17 @@ internal static class IndexingAdmission
     /// <param name="options">The options of the pass.</param>
     /// <param name="attributesOf">A directory's attributes, or <c>null</c> when it cannot be read (gone since the event).</param>
     /// <param name="cancellationToken">Cancels the attribute reads.</param>
+    /// <param name="cache">
+    /// What the caller remembers of directories' attributes between changes (see <see cref="DirectoryAttributeCache"/>), or
+    /// <c>null</c> to read every directory every time. Only a read that succeeded is remembered.
+    /// </param>
     public static async Task<bool> IsBeneathSkippedDirectoryAsync(
         string path,
         IEnumerable<string> locations,
         IndexingOptions options,
         Func<string, CancellationToken, Task<FileAttributes?>> attributesOf,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DirectoryAttributeCache? cache = null)
     {
         var skip = AttributesToSkip(options);
         if (skip == 0)
@@ -131,7 +136,18 @@ internal static class IndexingAdmission
              !string.IsNullOrEmpty(directory) && !SearchQueryEvaluator.IsUnder(directory, location, includeSubdirectories: false);
              directory = Path.GetDirectoryName(directory))
         {
-            var attributes = await attributesOf(directory, cancellationToken).ConfigureAwait(false);
+            FileAttributes? attributes;
+            if (cache is not null && cache.TryGet(directory, out var remembered))
+            {
+                attributes = remembered;
+            }
+            else
+            {
+                attributes = await attributesOf(directory, cancellationToken).ConfigureAwait(false);
+                if (cache is not null && attributes is { } read)
+                    cache.Set(directory, read);
+            }
+
             if (attributes is { } found && (found & skip) != 0)
                 return true;
         }

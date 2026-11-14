@@ -285,4 +285,56 @@ public class MonitoredChangeAdmissionTests
         (await index.ContainsAsync(@"C:\scripted\src\a.cs")).Should().BeFalse();
         (await index.ContainsAsync(@"C:\scripted\.cache\a.cs")).Should().BeFalse("it is now beneath a hidden directory");
     }
+
+    // Consecutive changes of a burst share their directories: the engine remembers what it read of them, and forgets a
+    // directory when the monitor reports a change to it.
+
+    [Fact]
+    public async Task A_Burst_In_One_Directory_Should_Read_Each_Directory_Above_It_Once()
+    {
+        var provider = Provider(1);
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        await PassAsync(engine, Options(o => o.IncludeHidden = false));
+
+        string[] directories = [@"C:\scripted\a", @"C:\scripted\a\b", @"C:\scripted\a\b\c"];
+        foreach (var directory in directories) AddDirectory(provider, directory);
+        var changes = new List<FileChangeEventArgs>();
+        for (var i = 0; i < 20; i++)
+        {
+            var path = $@"C:\scripted\a\b\c\f{i}.txt";
+            Create(provider, path);
+            changes.Add(Created(path));
+        }
+        await ReportAsync(engine, provider, changes.ToArray());
+
+        for (var i = 0; i < 20; i++)
+            (await index.ContainsAsync($@"C:\scripted\a\b\c\f{i}.txt")).Should().BeTrue();
+        var requests = provider.InfoRequests.ToList();
+        foreach (var directory in directories)
+            requests.Count(r => string.Equals(r, directory, StringComparison.OrdinalIgnoreCase)).Should().Be(1, $"{directory} is read once for 20 changes");
+    }
+
+    [Fact]
+    public async Task A_Directory_Made_Hidden_Should_Be_Read_Again_After_The_Monitor_Reports_It()
+    {
+        var provider = Provider(1);
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        await PassAsync(engine, Options(o => o.IncludeHidden = false));
+
+        AddDirectory(provider, @"C:\scripted\a");
+        AddDirectory(provider, @"C:\scripted\a\b");
+        Create(provider, @"C:\scripted\a\b\one.txt");
+        await ReportAsync(engine, provider, Created(@"C:\scripted\a\b\one.txt"));
+        (await index.ContainsAsync(@"C:\scripted\a\b\one.txt")).Should().BeTrue("nothing above it is hidden yet");
+
+        AddDirectory(provider, @"C:\scripted\a", FileAttributes.Hidden);
+        Create(provider, @"C:\scripted\a\b\two.txt");
+        await ReportAsync(engine, provider,
+            new FileChangeEventArgs(FileChangeType.Modified, @"C:\scripted\a"),
+            Created(@"C:\scripted\a\b\two.txt"));
+
+        (await index.ContainsAsync(@"C:\scripted\a\b\two.txt")).Should().BeFalse("a is hidden now, and the monitor said so");
+    }
 }
