@@ -99,7 +99,7 @@ asserts a floor and never compares the two, so it says nothing about this.
 
 ## Query latency
 
-How long a query takes against an index that is already built. Taken 2026-11-06, after 2.4.0.
+How long a query takes against an index that is already built. Taken 2026-11-14, on the build after 2.5.0.
 
 ```bash
 dotnet run -c Release --project src/FastFind.Benchmarks -- --query-latency
@@ -107,7 +107,7 @@ dotnet run -c Release --project src/FastFind.Benchmarks -- --query-latency --tre
 ```
 
 Each query is timed over 20–500 calls (at least 5 for a real tree) after 5 warm-up calls, and asks for at most 100
-results. The corpus is synthetic and deterministic — names from a small vocabulary, a skewed extension mix, a hundred
+results, asked the way an engine asks: one match past the cap, and the search stops there. The corpus is synthetic and deterministic — names from a small vocabulary, a skewed extension mix, a hundred
 files to a directory — and a "rare" word is the same *fraction* of the corpus at every size. Each configuration runs in its
 own process. The Windows and Unix indexes are both measured on this Windows host: the structures are the same on every
 platform; a Linux disk is not part of this.
@@ -115,57 +115,54 @@ platform; a Linux disk is not part of this.
 **These figures are ranges, and the range is the finding.** The machine was shared with a long-running application and
 the antivirus while this ran, and the same code measured several times gave results that differ by a factor of two or more
 for the queries that read the whole corpus. Every cell below is the lowest and highest *median* (milliseconds) over the
-runs; a single run's median and 95th percentile can be read from the command above. The Windows rows are from four or five
-runs, the Unix rows from three. No run was left out.
+runs; a single run's median and 95th percentile can be read from the command above. Every row is from three runs taken
+that day, one after another; no run was left out.
 
 **Windows in-memory index** — median of a query, lowest to highest across runs
 
 | query | 100,000 | 300,000 | 1,000,000 |
 |---|---:|---:|---:|
-| name contains a rare word (~0.005% of files) | 21 – 37 | 61 – 192 | 213 – 310 |
-| name contains a word nothing has | 16 – 47 | 49 – 181 | 173 – 320 |
-| name contains a common word (~3% of files) | 0.6 – 0.7 | 0.5 – 1.4 | 0.6 – 0.8 |
-| extension only (.json, ~10% of files) | 0.1 – 0.2 | 0.1 – 0.2 | 0.1 – 0.1 |
-| common word + extension (.pdf) | 6.9 – 7.5 | 6.2 – 14.6 | 7.0 – 7.8 |
-| full path contains a rare directory name (~0.05% of directories) | 2.2 – 23.7 | 5.0 – 63.3 | 0.1 – 66.1 |
-| common word, scoped to one directory | 0.2 – 0.6 | 0.6 – 2.5 | 1.5 – 6.0 |
+| name contains a rare word (~0.005% of files) | 19 – 26 | 55 – 92 | 194 – 285 |
+| name contains a word nothing has | 15 – 23 | 46 – 145 | 162 – 511 |
+| name contains a common word (~3% of files) | 0.5 – 0.9 | 0.5 – 1.2 | 0.5 – 0.8 |
+| extension only (.json, ~10% of files) | 0.1 – 0.1 | 0.1 – 0.2 | 0.1 – 0.2 |
+| common word + extension (.pdf) | 6.5 – 10.4 | 5.2 – 9.8 | 4.6 – 14.1 |
+| full path contains a rare directory name (~0.05% of directories) | 24 – 35 | 49 – 75 | 29 – 139 |
+| common word, scoped to one directory | 0.1 – 0.4 | 0.4 – 0.7 | 1.6 – 5.3 |
 
-Matches returned, in row order — 100,000: 5, 0, 100, 100, 100, 100, 4 · 300,000: 15, 0, 100, 100, 100, 100, 4 ·
-1,000,000: 50, 0, 100, 100, 100, 100, 4 (the cap is 100).
+Matches returned, in row order (a query that has more than the cap stops at one past it, 101) — 100,000: 5, 0, 101, 101, 101,
+100, 4 · 300,000: 15, 0, 101, 101, 101, 101, 4 · 1,000,000: 50, 0, 101, 101, 101, 101, 4.
 
 **Unix engine's own index** (same corpus, same host, three runs)
 
 | query | 100,000 | 300,000 | 1,000,000 |
 |---|---:|---:|---:|
-| name contains a rare word | 20 – 25 | 59 – 67 | 223 – 485 |
-| name contains a word nothing has | 17 – 20 | 49 – 50 | 173 – 388 |
-| name contains a common word | 19 – 27 | 53 – 58 | 201 – 372 |
-| extension only (.json) | 9 – 9 | 26 – 28 | 90 – 272 |
-| common word + extension (.pdf) | 10 – 10 | 31 – 32 | 104 – 148 |
-| full path contains a rare directory name | 28 – 30 | 83 – 99 | 291 – 371 |
-| common word, scoped to one directory | 0.1 – 0.1 | 0.4 – 0.4 | 1.4 – 1.7 |
+| name contains a rare word | 19 – 27 | 56 – 204 | 204 – 345 |
+| name contains a word nothing has | 16 – 32 | 48 – 138 | 185 – 220 |
+| name contains a common word | 0.5 – 0.9 | 0.6 – 1.2 | 0.5 – 0.7 |
+| extension only (.json) | 0.05 – 0.11 | 0.06 – 0.15 | 0.05 – 0.08 |
+| common word + extension (.pdf) | 6.6 – 12.9 | 5.3 – 12.6 | 5.6 – 8.0 |
+| full path contains a rare directory name | 25 – 80 | 56 – 204 | 35 – 128 |
+| common word, scoped to one directory | 0.1 – 0.3 | 0.4 – 0.7 | 1.3 – 2.5 |
 
-The largest spread is at 1,000,000 entries, where these queries materialise tens of thousands of matches (below); the
-cause was not isolated, and collecting those lists is the likeliest.
-
-Matches the index produced, in row order — 100,000: 5, 0, 3,088, 9,984, 135, 100, 4 · 300,000: 15, 0, 9,265, 29,609, 469, 200, 4 ·
-1,000,000: 50, 0, 30,807, 99,706, 1,541, 500, 4.
+The spread is widest where a query reads the whole corpus (a rare word, a word nothing has, a rare directory name at 300,000):
+the cause was not isolated, the machine was shared, and the same query differed by a factor of two to three between runs.
 
 **What these say**
 
 - A query that finds its first 100 matches early answers in **about a millisecond or less at every size** measured
-  (a common word, an extension, a directory) on the Windows index.
+  (a common word, an extension, a directory) on either index; a few milliseconds when it also has to filter by extension.
 - A query that has to read the whole corpus — a rare word, or one nothing has — costs time in proportion to the corpus:
-  roughly **20–50 ms at 100,000 entries, 50–190 ms at 300,000, and 170–320 ms at 1,000,000** on the Windows index, about
-  0.2–0.3 µs an entry. For a text query nothing narrows the candidates before the text is compared; an extension or a
+  roughly **15–30 ms at 100,000 entries, 45–205 ms at 300,000, and 160–510 ms at 1,000,000**, on either index, about
+  0.2–0.3 µs an entry at the low end. For a text query nothing narrows the candidates before the text is compared; an extension or a
   directory does, which is why those rows are fast.
-- **The two engines now do the same work for a capped query; the Unix figures here predate that.** The Windows index
-  stops at the requested number of results; the Unix engine used to collect **every** match and truncate afterwards —
-  30,807 matches for a query that asked for 100, at 1,000,000 entries — which is why its common-word query measured
-  200–370 ms where the Windows one measured under two milliseconds. Both engines now ask for one match past the cap and
-  stop there, so `HasMoreResults` is exact and `TotalMatches` is the number found before the search stopped (the exact
-  count when nothing lies beyond the cap). **The Unix query-latency rows in this document were measured before that
-  change and have not been re-measured; read them as the cost of draining the index, not as the cost of a capped query.**
+- **The two engines do the same work for a capped query.** The Unix engine used to collect **every** match and truncate
+  afterwards — 30,807 matches for a query that asked for 100, at 1,000,000 entries — and the Unix rows of this page,
+  taken 2026-11-06, were the cost of that: a common word 200–370 ms where the Windows index answered in under two. Both
+  engines now ask for one match past the cap and stop there, so `HasMoreResults` is exact and `TotalMatches` is the number
+  found before the search stopped (the exact count when nothing lies beyond the cap). Measured again on 2026-11-14 the
+  Unix index's common-word query is **0.5–0.7 ms at 1,000,000 entries**, the same as the Windows one. (The harness used to
+  drain the index; it now stops where the engines do, which is the change that made the comparison fair.)
 - **Queries that stop at their cap are unpredictable.** Which 100 matches come first depends on the order the index
   enumerates its entries, which changes with each process: the rare-directory row above spans 0.1 to 66 ms at one size.
   Do not read a single figure for those rows.
@@ -184,7 +181,7 @@ query is cheap:
 | `C:\Windows\System32`, a word with 2 matches | 168.4 | 6.7 – 12.3 |
 | `C:\Windows` (306,838 entries), a word nothing has | 275.7 | 120 – 130 |
 
-Over a million-entry index the same ~130 ms is inside the machine's own spread (173–320 ms), so it is not claimed there.
+Over a million-entry index the same ~130 ms is inside the machine's own spread (160–510 ms), so it is not claimed there.
 
 That walk is no longer started because a query found few matches, or because the index is small: it runs only for a
 location the index has nothing under (a scope not indexed yet, an index that is still empty). The figures above stay
@@ -201,7 +198,9 @@ as the cost of the walk when it does run; they are not re-measured for the new r
 | extension only (.dll) | 0.16 – 0.24 | 0.19 – 0.20 |
 
 Indexing took 13–77 s: a change-journal pass reads the whole volume whichever folder was asked for, so the time is the
-volume's, not the folder's, and it varies with what else the volume is doing. These two folders exist on this machine
+volume's, not the folder's, and it varies with what else the volume is doing. **That is the behaviour before an elevated
+pass began with the directory walk (CHANGELOG, Unreleased): a folder this size is now walked first and handed to the journal
+pass only if the walk outlasts ten seconds; these indexing times were not re-taken.** These two folders exist on this machine
 only; `--tree` takes any folder.
 
 **Not measured:** a corpus of real file names (the vocabulary here is small and the names are short), concurrent

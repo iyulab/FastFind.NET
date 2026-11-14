@@ -279,8 +279,19 @@ public static class QueryLatencyMeasurement
 
             run = async query =>
             {
+                // What both engines do for a capped query (ResultCap): ask the index for one match past the cap, and stop
+                // consuming there. Draining the index instead measured the cost of collecting every match — tens of
+                // thousands for a query that asked for 100 — which no engine does any longer.
+                var cap = query.MaxResults ?? int.MaxValue;
+                var probe = query.Clone();
+                if (cap != int.MaxValue) probe.MaxResults = cap + 1;
+
                 var n = 0;
-                await foreach (var _ in index.SearchAsync(query)) n++;
+                await foreach (var _ in index.SearchAsync(probe))
+                {
+                    if (++n > cap) break;
+                }
+
                 return n;
             };
         }
