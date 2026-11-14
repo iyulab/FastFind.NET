@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-15
+
 ### Known limitations
 
 **With administrator rights, the entries of a folder in which files have several hard links can differ between runs.** An enumeration
