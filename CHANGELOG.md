@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-14
+
 ### Changed
 
 **An elevated Windows process no longer pays the whole-volume read for a small folder.** With administrator rights the Auto
