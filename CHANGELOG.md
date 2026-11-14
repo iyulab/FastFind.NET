@@ -27,6 +27,13 @@ with `MaxResults` on the Windows one, needs the new reading.
 
 ### Fixed
 
+- **The change-journal monitor read the whole journal ahead of a slow consumer.** `UsnJournalMonitor` handed
+  records to its readers through an unbounded channel, and a reader that looks up the file system for every record
+  (the monitored path of the Windows engine does) fell behind a burst of changes while the monitor kept queueing
+  them. The channel now holds at most 100,000 unread records; past that the monitor stops reading the journal until
+  the reader catches up — the journal keeps the changes — and logs one Warning per stall. A consumer of
+  `UsnJournalMonitor.Changes` must keep reading it while the monitor runs, including one that only uses the
+  `ChangeDetected` event: without a reader the monitor now pauses after 100,000 records instead of retaining them.
 - **A rename reported with a new path beneath its old one grew every indexed path under it, once per report.**
   `MoveTreeAsync` re-rooted each descendant under the new path, so applying the same pair again made every
   path one block longer; the grown paths were new strings that the string pool never frees, and a long-running

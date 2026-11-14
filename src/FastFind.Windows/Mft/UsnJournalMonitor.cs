@@ -44,23 +44,73 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
     /// <summary>
     /// Gets the async enumerable of file changes for streaming consumption
     /// </summary>
+    /// <remarks>
+    /// The channel holds at most <see cref="MaxPendingChanges"/> unread records. Past that the monitor stops reading
+    /// the journal until the reader catches up — the journal keeps the changes, so nothing is dropped and nothing
+    /// piles up in memory — and says so once at Warning. A reader that never reads therefore stalls the monitor
+    /// (and the <see cref="ChangeDetected"/> event with it) after that many records: drain <see cref="Changes"/>
+    /// whenever the monitor is started. If the journal itself wraps in the meantime the oldest changes are gone,
+    /// which is reported at Warning too.
+    /// </remarks>
     public ChannelReader<UsnChangeRecord> Changes => _changeChannel.Reader;
 
+    /// <summary>
+    /// How many records may wait for a reader of <see cref="Changes"/>. The journal polling loop can wait, so a
+    /// reader that falls behind slows it down rather than growing an unbounded queue (an unbounded channel read
+    /// the whole journal ahead of a reader that does a file-system lookup per record).
+    /// </summary>
+    internal const int MaxPendingChanges = 100_000;
+
+    private readonly int _pendingCapacity;
+    private int _readerBehind;
+
     public UsnJournalMonitor(ILogger<UsnJournalMonitor>? logger = null)
+        : this(logger, MaxPendingChanges)
+    {
+    }
+
+    internal UsnJournalMonitor(ILogger<UsnJournalMonitor>? logger, int pendingCapacity)
     {
         _logger = logger;
+        _pendingCapacity = pendingCapacity;
         _bufferPool = ArrayPool<byte>.Shared;
         _volumeHandles = new Dictionary<char, SafeFileHandle>();
         _journalData = new Dictionary<char, USN_JOURNAL_DATA_V0>();
         _monitoringCts = new CancellationTokenSource();
         _monitoringTasks = new List<Task>();
 
-        _changeChannel = Channel.CreateUnbounded<UsnChangeRecord>(
-            new UnboundedChannelOptions
+        _changeChannel = Channel.CreateBounded<UsnChangeRecord>(
+            new BoundedChannelOptions(pendingCapacity)
             {
+                FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = false,
                 SingleWriter = false
             });
+    }
+
+    /// <summary>
+    /// Hands one record to the readers of <see cref="Changes"/> and the <see cref="ChangeDetected"/> event. Waits
+    /// while the channel is full, and says so once per stall.
+    /// </summary>
+    internal async ValueTask PublishAsync(UsnChangeRecord record, char driveLetter, CancellationToken cancellationToken)
+    {
+        if (_changeChannel.Writer.TryWrite(record))
+        {
+            Volatile.Write(ref _readerBehind, 0);
+        }
+        else
+        {
+            if (Interlocked.Exchange(ref _readerBehind, 1) == 0)
+            {
+                _logger?.LogWarning(
+                    "USN change consumer is {Pending} records behind; reading drive {Drive} resumes when it catches up",
+                    _pendingCapacity, driveLetter);
+            }
+
+            await _changeChannel.Writer.WriteAsync(record, cancellationToken).ConfigureAwait(false);
+        }
+
+        OnChangeDetected(new UsnChangeEventArgs(driveLetter, record));
     }
 
     /// <summary>
@@ -271,11 +321,8 @@ public sealed class UsnJournalMonitor : IAsyncDisposable, IDisposable
                     {
                         recordsFound++;
 
-                        // Write to channel for streaming consumers
-                        await _changeChannel.Writer.WriteAsync(record, cancellationToken);
-
-                        // Raise event for event-based consumers
-                        OnChangeDetected(new UsnChangeEventArgs(driveLetter, record));
+                        // Channel for streaming consumers, then the event; waits while the channel is full
+                        await PublishAsync(record, driveLetter, cancellationToken);
                     }
 
                     if (recordsFound > 0)
