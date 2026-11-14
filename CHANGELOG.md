@@ -17,6 +17,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   moved, anything else leaves the index as it is — unless the old path is gone from the file system, in which
   case its subtree is removed — and the engine logs a warning. A rename that changes only the case of a path
   is still a move.
+- **A change the monitor reported skipped the indexing options (Windows).** The pass applied
+  `ExcludedExtensions`, `IncludeHidden`, `IncludeSystem`, `MaxFileSize` and `MaxFileCount`; a created, modified
+  or renamed item reached the index with none of them, so files the options refuse were added and an index
+  capped to bound memory kept growing after the pass. A monitored change now goes through the same admission
+  as a pass item, an entry that stops being admissible (it became hidden, was renamed to an excluded
+  extension) leaves the index, and `MaxFileCount` is a ceiling the index keeps: a new item is added only below
+  it, an item the index already holds may still change, and a deletion makes room. `TotalIndexedFiles`
+  follows the index after the pass instead of stopping at the pass's count.
+- **The watcher's queue of waiting events had no bound (Windows).** The engine's own channel is bounded and
+  makes the monitoring loop wait when processing falls behind, but the queue ahead of it grew without limit.
+  It holds at most 100,000 events; past that an event is dropped and counted, and a warning says how many.
+  A watcher error (for example an internal buffer overflow) is now logged as a warning too, since the index
+  has missed changes it will not hear about again.
 - **A change the engine could not apply was logged at `Debug`.** It is now a `Warning` naming the change type
   and path, so a consumer at its default log level can see that the index may disagree with the file system.
 

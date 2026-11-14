@@ -86,6 +86,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
     // What the searches answered so far have measured: count, matches, and how long they took.
     private readonly SearchTimingTally _searchTiming = new();
     private long _totalIndexedFiles = 0;
+    private int _monitoringCapLogged;
 
     public WindowsSearchEngineImpl(
         IFileSystemProvider fileSystemProvider,
@@ -898,7 +899,7 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 var fileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (fileItem != null)
                 {
-                    await _searchIndex.UpdateAsync(fileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+                    await IndexIfAdmittedAsync(fileItem, cancellationToken).ConfigureAwait(false);
                 }
                 break;
 
@@ -925,10 +926,55 @@ internal class WindowsSearchEngineImpl : ISearchEngine
                 var renamedFileItem = await _fileSystemProvider.GetFileInfoAsync(change.NewPath, cancellationToken).ConfigureAwait(false);
                 if (renamedFileItem != null)
                 {
-                    await _searchIndex.UpdateAsync(renamedFileItem.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
+                    await IndexIfAdmittedAsync(renamedFileItem, cancellationToken).ConfigureAwait(false);
                 }
                 break;
         }
+
+        // The statistic describes the index, which monitoring changes after the pass is over.
+        Interlocked.Exchange(ref _totalIndexedFiles, _searchIndex.Count);
+    }
+
+    /// <summary>
+    /// Puts an item a monitor reported into the index if the indexing pass would have admitted it.
+    /// </summary>
+    /// <remarks>
+    /// The pass applies <see cref="IndexingAdmission"/> and <see cref="IndexingOptions.MaxFileCount"/> to every
+    /// item it reads. A monitored change used to skip both, so files the options refuse were added, and an
+    /// index capped to bound memory grew with every file created after the pass. The cap is a ceiling the
+    /// index keeps: an item it already holds may still change, a new one is added only below it, and a
+    /// deletion makes room.
+    /// </remarks>
+    private async Task IndexIfAdmittedAsync(FileItem item, CancellationToken cancellationToken)
+    {
+        var options = _currentIndexingOptions;
+        if (options is not null)
+        {
+            if (!IndexingAdmission.Admits(item, options))
+            {
+                // Not admitted now (it became hidden, was renamed to an excluded extension, ...): the pass
+                // would not have indexed it, so an entry the index holds for it is stale.
+                await _searchIndex.RemoveAsync(item.FullPath, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (options.MaxFileCount is { } cap
+                && _searchIndex.Count >= cap
+                && !await _searchIndex.ContainsAsync(item.FullPath, cancellationToken).ConfigureAwait(false))
+            {
+                if (Interlocked.Exchange(ref _monitoringCapLogged, 1) == 0)
+                {
+                    _logger.LogWarning(
+                        "The index holds MaxFileCount ({MaxFileCount}) items; files created after the pass are not added until some are removed.",
+                        cap);
+                }
+                return;
+            }
+
+            Interlocked.Exchange(ref _monitoringCapLogged, 0);
+        }
+
+        await _searchIndex.UpdateAsync(item.ToFastFileItem(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

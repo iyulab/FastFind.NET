@@ -393,7 +393,7 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
     {
         ThrowIfDisposed();
 
-        var changeQueue = new ConcurrentQueue<FileChangeEventArgs>();
+        var changeQueue = new PendingChanges(MaxPendingChanges);
         var watchers = new List<FileSystemWatcher>();
 
         try
@@ -423,6 +423,11 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
                 if (options.MonitorRename)
                     watcher.Renamed += (s, e) => EnqueueRename(changeQueue, e.OldFullPath, e.FullPath);
 
+                // An overflowed or failed watcher has lost events the index will never see; say so.
+                watcher.Error += (s, e) => _logger.LogWarning(e.GetException(),
+                    "The file system watcher for {Location} reported an error; changes may have been missed and the index may disagree with the file system",
+                    location);
+
                 watcher.EnableRaisingEvents = true;
                 watchers.Add(watcher);
                 _watchers[location] = watcher;
@@ -441,6 +446,14 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
                 var currentTime = DateTime.Now;
                 if (currentTime - lastChangeTime < debounceInterval)
                     continue;
+
+                var dropped = changeQueue.TakeDropped();
+                if (dropped > 0)
+                {
+                    _logger.LogWarning(
+                        "{Dropped} file system changes were dropped because processing fell behind (more than {Limit} pending); the index may disagree with the file system",
+                        dropped, MaxPendingChanges);
+                }
 
                 while (changeQueue.TryDequeue(out var change))
                 {
@@ -614,14 +627,54 @@ internal class WindowsFileSystemProvider : IFileSystemProvider, IAsyncDisposable
         return filters;
     }
 
-    private static void EnqueueChange(ConcurrentQueue<FileChangeEventArgs> queue, FileChangeType changeType, string path)
+    /// <summary>
+    /// How many watcher events may wait for the monitoring loop. The engine's own channel is bounded and makes
+    /// the loop wait when processing falls behind; without a bound here that backpressure turned into an
+    /// unbounded queue of events in memory. Past the bound an event is dropped and counted, and the loop says so.
+    /// </summary>
+    internal const int MaxPendingChanges = 100_000;
+
+    private static void EnqueueChange(PendingChanges queue, FileChangeType changeType, string path)
     {
         queue.Enqueue(new FileChangeEventArgs(changeType, path));
     }
 
-    private static void EnqueueRename(ConcurrentQueue<FileChangeEventArgs> queue, string oldPath, string newPath)
+    private static void EnqueueRename(PendingChanges queue, string oldPath, string newPath)
     {
         queue.Enqueue(new FileChangeEventArgs(FileChangeType.Renamed, newPath, null, oldPath));
+    }
+
+    /// <summary>A queue of watcher events with a bound; events past it are counted, not kept.</summary>
+    internal sealed class PendingChanges
+    {
+        private readonly ConcurrentQueue<FileChangeEventArgs> _queue = new();
+        private readonly int _limit;
+        private int _pending;
+        private long _dropped;
+
+        public PendingChanges(int limit) => _limit = limit;
+
+        public void Enqueue(FileChangeEventArgs change)
+        {
+            if (Interlocked.Increment(ref _pending) > _limit)
+            {
+                Interlocked.Decrement(ref _pending);
+                Interlocked.Increment(ref _dropped);
+                return;
+            }
+
+            _queue.Enqueue(change);
+        }
+
+        public bool TryDequeue(out FileChangeEventArgs change)
+        {
+            if (!_queue.TryDequeue(out change!)) return false;
+            Interlocked.Decrement(ref _pending);
+            return true;
+        }
+
+        /// <summary>The number dropped since the last call.</summary>
+        public long TakeDropped() => Interlocked.Exchange(ref _dropped, 0);
     }
 
     private void ThrowIfDisposed()

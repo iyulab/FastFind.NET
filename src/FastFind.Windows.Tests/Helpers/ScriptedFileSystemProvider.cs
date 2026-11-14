@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using FastFind.Interfaces;
 using FastFind.Models;
 using DriveInfo = FastFind.Interfaces.DriveInfo;
@@ -35,6 +36,14 @@ internal sealed class ScriptedFileSystemProvider : IFileSystemProvider
     /// <summary>Lets a held enumeration begin.</summary>
     public void Release() => _gate.TrySetResult();
 
+    /// <summary>What is on "disk" now: <see cref="GetFileInfoAsync"/> and <see cref="ExistsAsync"/> answer from it.</summary>
+    public Dictionary<string, FileItem> OnDisk { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Channel<FileChangeEventArgs> _changes = Channel.CreateUnbounded<FileChangeEventArgs>();
+
+    /// <summary>Reports a change from the monitor; <see cref="MonitorChangesAsync"/> yields it.</summary>
+    public void Report(FileChangeEventArgs change) => _changes.Writer.TryWrite(change);
+
     public IReadOnlyCollection<string> EnumerationFailures => Failures;
 
     public PlatformType SupportedPlatform => PlatformType.Windows;
@@ -57,7 +66,7 @@ internal sealed class ScriptedFileSystemProvider : IFileSystemProvider
     }
 
     public Task<FileItem?> GetFileInfoAsync(string filePath, CancellationToken cancellationToken = default)
-        => Task.FromResult<FileItem?>(null);
+        => Task.FromResult(OnDisk.TryGetValue(filePath, out var item) ? item : null);
 
     public Task<IEnumerable<DriveInfo>> GetAvailableLocationsAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<DriveInfo>>(Array.Empty<DriveInfo>());
@@ -66,17 +75,17 @@ internal sealed class ScriptedFileSystemProvider : IFileSystemProvider
         IEnumerable<string> locations, MonitoringOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await Task.CompletedTask;
-        yield break;
+        await foreach (var change in _changes.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            yield return change;
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    public Task<bool> ExistsAsync(string path, CancellationToken cancellationToken = default) => Task.FromResult(OnDisk.ContainsKey(path));
     public Task<string> GetFileSystemTypeAsync(string path, CancellationToken cancellationToken = default) => Task.FromResult("NTFS");
     public ProviderPerformance GetPerformanceInfo() => new();
     public void Dispose() { }
 
     /// <summary>A file item at a path that need not exist.</summary>
-    public static FileItem File(string fullPath) => new()
+    public static FileItem File(string fullPath, FileAttributes attributes = FileAttributes.Archive) => new()
     {
         FullPath = fullPath,
         Name = Path.GetFileName(fullPath),
@@ -86,7 +95,7 @@ internal sealed class ScriptedFileSystemProvider : IFileSystemProvider
         CreatedTime = DateTime.UtcNow,
         ModifiedTime = DateTime.UtcNow,
         AccessedTime = DateTime.UtcNow,
-        Attributes = FileAttributes.Archive,
+        Attributes = attributes,
         DriveLetter = fullPath[0],
     };
 }
