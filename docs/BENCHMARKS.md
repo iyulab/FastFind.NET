@@ -167,6 +167,32 @@ the cause was not isolated, the machine was shared, and the same query differed 
   enumerates its entries, which changes with each process: the rare-directory row above spans 0.1 to 66 ms at one size.
   Do not read a single figure for those rows.
 
+**Moving the substring match off `SIMDStringMatcher`** (taken 2026-11-15, same harness and corpus). The query evaluator now answers
+a case-insensitive text query with `string.Contains(OrdinalIgnoreCase)`. The build before and the build after were run **alternately,
+three times each**, on the same machine in one sitting (before, after, before, after, …), because a measurement on this machine
+varies two- to four-fold from hour to hour and a before taken earlier proves nothing. Median of a query (ms), lowest to highest of
+the three runs, before → after; only the rows that read the whole corpus are shown, since the rows that stop at the cap are
+unpredictable (above) and moved within their own spread.
+
+| Windows index | 100,000 | 300,000 | 1,000,000 |
+|---|---:|---:|---:|
+| name contains a rare word | 26–48 → 13–23 | 69–158 → 40–92 | 234–1,108 → 143–236 |
+| name contains a word nothing has | 20–34 → 13–26 | 58–147 → 37–72 | 191–896 → 133–189 |
+| full path contains a rare directory name | 33–75 → 19–39 | 53–172 → 16–66 | 165–827 → 65–122 |
+
+| Unix engine's index | 100,000 | 300,000 | 1,000,000 |
+|---|---:|---:|---:|
+| name contains a rare word | 22–93 → 13–18 | 65–177 → 39–98 | 218–723 → 148–431 |
+| name contains a word nothing has | 18–73 → 13–32 | 54–140 → 38–87 | 188–464 → 135–459 |
+| full path contains a rare directory name | 29–256 → 19–41 | 55–197 → 49–114 | 129–220 → 37–96 |
+
+On the Windows index the median of every one of the nine cells fell, to between 0.34 and 0.87 of what it was (a full path, the
+longest string compared, gained most). On the Unix engine's index, which runs the same evaluator, the ranges overlap in most cells
+and the median rose in three of them (a word nothing has at 100,000 and 300,000, a rare directory at 100,000): three runs on a
+shared machine do not separate those from noise, and no gain is claimed there beyond the two cells whose new range lies wholly
+below the old one (a rare word at 100,000 and a rare directory at 1,000,000). The shipped string-matching figure is still the 3.9× on a 10,000-character haystack above; what
+this adds is the end-to-end effect, which is smaller and on file-name-length strings.
+
 **A query with fewer than five matches used to pay about 130 ms for a disk scan with nothing to scan.** The index treats
 "fewer than five matches" as a sign it may be incomplete and walks the disk to check. The workers of that walk decided it
 was finished by polling — ten 10 ms sleeps on an empty queue — so the walk could not take less than about 100 ms *even
@@ -230,6 +256,11 @@ It is **3.9× slower** than the BCL call it exists to beat, which is itself vect
 allocates where a test expects under 1,024 B. The likely cause is that its verification loop folds
 case one character at a time, outside the vector. Nothing has been changed on the strength of one
 measurement; whether the type is worth keeping in this form is open.
+
+The query evaluator and `FastFileItem.MatchesName`/`MatchesPath`/`MatchesExtension` no longer call it: they use
+`string.Contains(OrdinalIgnoreCase)`, which differs from the matcher's per-character fold on five compatibility
+characters only (the Kelvin, Angstrom and Ohm signs, capital sharp s, U+03F4). The type itself remains public and
+unchanged; `MatchesWildcard` still uses it.
 
 Earlier editions of this page published 1,877,459 operations/sec here. See below.
 

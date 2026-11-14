@@ -38,7 +38,7 @@ public interface ISearchEngine : IDisposable
 
 ### FastFileItem
 
-Ultra-optimized 61-byte struct with SIMD acceleration and string interning.
+Ultra-optimized 61-byte struct with string interning.
 
 ```csharp
 public readonly struct FastFileItem
@@ -49,7 +49,7 @@ public readonly struct FastFileItem
     public string DirectoryPath { get; }
     public string Extension { get; }
 
-    // SIMD-accelerated matching
+    // Case-insensitive substring tests (StringComparison.OrdinalIgnoreCase) and a wildcard test
     public bool MatchesName(ReadOnlySpan<char> searchTerm);
     public bool MatchesPath(ReadOnlySpan<char> searchTerm);
     public bool MatchesWildcard(ReadOnlySpan<char> pattern);

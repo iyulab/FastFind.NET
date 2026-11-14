@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+**A case-insensitive text query is answered with the runtime's ordinal-ignore-case search.** The query evaluator and
+`FastFileItem.MatchesName`, `MatchesPath` and `MatchesExtension` called `SIMDStringMatcher`, which measured 3.9 times slower than
+`string.Contains(OrdinalIgnoreCase)` on a long string. They now call the runtime. Measured end to end with the build before and
+the build after run alternately three times (ranges in `docs/BENCHMARKS.md`), the median of a Windows-index query that reads the
+whole corpus fell to 0.34-0.87 of what it was in every one of nine cells; the Unix engine's index, which runs the same evaluator, shows
+overlapping ranges in most cells and no gain that three runs can separate from noise in all but two. The two folds differ on five compatibility characters only (the Kelvin, Angstrom and Ohm signs, capital sharp
+s, U+03F4): a name containing U+212A is no longer matched by a query for `k`, as `OrdinalIgnoreCase` has always read it.
+`SIMDStringMatcher` itself is unchanged and still public; `MatchesWildcard` still uses it.
+
 ## [2.6.0] - 2026-11-14
 
 ### Changed
