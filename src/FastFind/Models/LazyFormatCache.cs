@@ -135,11 +135,12 @@ public static class LazyFormatCache
             unitIndex++;
         }
 
+        // unitIndex is how many thresholds the size crossed, which is the index of its unit: 0 bytes, 1 KB, 2 MB.
         return unitIndex == 0
             ? $"{bytes} {SizeUnits[unitIndex]}"
             : value < 10.0
-                ? $"{value:F1} {SizeUnits[unitIndex + 1]}"
-                : $"{value:F0} {SizeUnits[unitIndex + 1]}";
+                ? $"{value:F1} {SizeUnits[unitIndex]}"
+                : $"{value:F0} {SizeUnits[unitIndex]}";
     }
 
     public static void Cleanup()

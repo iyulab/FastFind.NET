@@ -50,6 +50,12 @@ documentation comments on `ISearchIndex.SearchAsync`, `IndexConfiguration.UseSIM
 and the feature list `FastFinder` reports no longer claim SIMD acceleration of search. `UseSIMD` and `EnableSIMDAcceleration` were never
 read by the library; they now say so (they remain, so code that sets them still compiles).
 
+### Fixed
+
+**`FastFileItem.SizeFormatted` wrote every size from a kilobyte up in a unit one step too large.** An 11,682-byte file was "11 MB", a 5 MB file
+"5.0 GB", and a size of a petabyte or more threw `IndexOutOfRangeException`: the unit was read at `index + 1` after the loop had already counted
+the thresholds crossed. The README's Quick Start prints this value. Present in every release since 1.3.3; there was no test of the formatter.
+
 ## [2.6.0] - 2026-11-14
 
 ### Changed
