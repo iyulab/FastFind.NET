@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Known limitations
+
+**With administrator rights, the entries of a folder in which files have several hard links can differ between runs.** An enumeration
+starts with the directory walk and hands over to the change-journal pass after ten seconds; the walk lists every hard-linked name, the
+journal pass lists a file once, so how many of those names are indexed depends on how far the walk got. A folder of a few thousand
+entries finishes in the walk and is the same every time. Measured on `C:\Windows\System32` (hard-link heavy, walked at about 360-730
+microseconds an entry on the test machine): 18,770, 21,769 and 22,769 entries in three runs.
+
 ### Added
 
 **`IFileSystemProvider.GetAttributesAsync(path)`** — a path's attributes and nothing else, `null` when they cannot be read. The default

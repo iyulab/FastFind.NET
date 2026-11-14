@@ -213,21 +213,32 @@ That walk is no longer started because a query found few matches, or because the
 location the index has nothing under (a scope not indexed yet, an index that is still empty). The figures above stay
 as the cost of the walk when it does run; they are not re-measured for the new rule.
 
-**Over a real tree** (the engine as this host configures it — the change-journal provider, elevated — then queried through
-`SearchAsync`; median, lowest – highest over three runs):
+**Over a real tree** (the engine as this host configures it — elevated, so the walk-first provider — then queried through
+`SearchAsync`; taken 2026-11-15, median, lowest – highest over three runs, on a machine that was not quiet):
 
-| query | `C:\Windows\System32` (27,149 entries) | `C:\Windows` (306,838 entries) |
+| query | `C:\Windows\System32` (18,770 – 22,769 entries) | `C:\Windows` (329,808 – 329,809 entries) |
 |---|---:|---:|
-| name contains a very common letter | 0.12 – 0.14 | 0.13 – 0.15 |
-| name contains an uncommon word (`kernel32`: 2 matches / 100) | 6.7 – 12.3 | 111 – 124 |
-| name contains a word nothing has | 6.7 – 11.0 | 120 – 130 |
-| extension only (.dll) | 0.16 – 0.24 | 0.19 – 0.20 |
+| name contains a very common letter | 0.15 – 0.31 | 0.32 – 0.46 |
+| name contains an uncommon word (`kernel32`) | 3.5 – 7.1 | 105 – 256 |
+| name contains a word nothing has | 3.7 – 9.7 | 125 – 256 |
+| extension only (.dll) | 0.33 – 0.64 | 0.23 – 1.05 |
 
-Indexing took 13–77 s: a change-journal pass reads the whole volume whichever folder was asked for, so the time is the
-volume's, not the folder's, and it varies with what else the volume is doing. **That is the behaviour before an elevated
-pass began with the directory walk (CHANGELOG, Unreleased): a folder this size is now walked first and handed to the journal
-pass only if the walk outlasts ten seconds; these indexing times were not re-taken.** These two folders exist on this machine
-only; `--tree` takes any folder.
+Indexing took **28 – 68 s** for `System32` (68, 61, 28 in run order) and **29 – 76 s** for `C:\Windows` (76, 52, 29); each folder
+got faster from run to run, which a warming file-system cache or the antivirus would explain and nothing here isolated.
+**Walking first did not make these two folders quick on this machine.** `--scoped-indexing C:\Windows\System32`, which times the
+two passes alone, three runs alternating: the directory walk took 10.9 – 21.9 s for 29,965 entries (360 – 730 µs an entry, about
+ten times the 25 – 100 µs measured on other folders; the cause was not isolated, the antivirus on this machine is the likely one) and the change-journal pass 17.1 – 26.9 s
+for 11,712 (it lists a hard-linked file once; the walk lists every name). A pass that hands over after ten seconds therefore ends at
+about ten seconds plus the journal pass, 27 – 37 s, against 11 – 22 s for the walk alone: the budget bounds the loss, it does not
+remove it, and the crossing point quoted in the CHANGELOG (130,000 – 280,000 entries) belongs to the volumes it was measured on.
+
+**The entries differ from run to run.** `System32` indexed to 18,770, 21,769 and 22,769 entries in three runs of the same
+engine (`C:\Windows` did not: 329,808, 329,809, 329,809). With the walk covering a different share of the folder before the
+handover each time, a different share of its names comes from the walk (every hard link) and the rest from the journal pass (one
+name per file); that is the likely cause and it was not isolated. The 27,149 entries of the 2026-11-14 table were read by the
+whole-volume journal pass, which also read beneath hidden and system directories; the engine no longer does.
+
+These two folders exist on this machine only; `--tree` takes any folder.
 
 **Not measured:** a corpus of real file names (the vocabulary here is small and the names are short), concurrent
 queries, queries while indexing, regular-expression queries, a quiet machine, and any machine other than this one.
