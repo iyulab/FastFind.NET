@@ -869,7 +869,13 @@ internal class UnixSearchEngineImpl : ISearchEngine
                 }
                 else
                 {
-                    var outcome = await IndexingAdmission.IndexMonitoredAsync(_index, item, options).ConfigureAwait(false);
+                    // A pass does not enter a hidden directory below its location, so nothing beneath one belongs to what it indexed.
+                    var beneathSkipped = await IndexingAdmission.IsBeneathSkippedDirectoryAsync(
+                        item.FullPath, options.GetEffectiveSearchLocations(), options,
+                        (directory, _) => Task.FromResult(DirectoryAttributes(directory))).ConfigureAwait(false);
+
+                    var outcome = await IndexingAdmission.IndexMonitoredAsync(
+                        _index, item, options, beneathSkippedDirectory: beneathSkipped).ConfigureAwait(false);
                     if (outcome != MonitoredOutcome.CapReached)
                     {
                         Interlocked.Exchange(ref _monitoringCapLogged, 0);
@@ -888,6 +894,18 @@ internal class UnixSearchEngineImpl : ISearchEngine
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Updating the index entry for {Path} failed; the index may disagree with the file system", path);
+        }
+    }
+
+    private static FileAttributes? DirectoryAttributes(string directory)
+    {
+        try
+        {
+            return new DirectoryInfo(directory).Attributes;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 

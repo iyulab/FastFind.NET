@@ -8,14 +8,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+**A change a monitor reports from inside a hidden directory is no longer indexed (both engines).** An indexing pass does not enter a
+hidden directory (or, with system files off, a system one), so it reads nothing beneath it; a monitored creation looked only at the
+changed file's own attributes, so a file created in `.git` (which is not hidden itself) was added to the index, and a file renamed into
+a hidden directory kept its entry under the new path. A change is now checked against the directories between the monitored location
+and the item (one attribute read each); only directories below the location count, as in a pass, so a location that lies under a
+hidden `AppData` still works. With `IncludeHidden = true` / `IncludeSystem = true` nothing changes.
+
 **The change-journal pass (an elevated Windows process) now indexes the same entries as the directory walk.** With hidden
 files off it used to admit each entry by its own attributes, so everything inside a hidden directory (`.git`, `AppData`,
 a hidden build-output folder) was indexed although the walk never enters one — the same folder gave a different index depending
-on whether the process was elevated (+1,335 entries in a 1,769-entry repository folder, +181,177 in a 2.2-million-entry one). A
+on whether the process was elevated (+1,335 entries in a 1,769-entry repository folder; in a 2.2-million-entry one the net difference was +181,177). A
 hidden directory, and with system files off a system directory, now takes everything beneath it out of the pass, as the walk
 does; only a directory *below* the location being indexed counts (a location that lies under `AppData` is still indexed), and
 the location itself is no longer listed as an entry of its own. An elevated process's index therefore loses what lay under such
-directories; ask for it with `IncludeHidden = true` / `IncludeSystem = true`. (Entries a monitor reports from inside a hidden
+directories; ask for it with `IncludeHidden = true` / `IncludeSystem = true`. One difference remains, and is the journal's own: it lists a file once, under one of its names, so the
+other names of a hard-linked file (build tools link their outputs; `WinSxS` links system files) are read by the walk and not by
+the journal pass. (Entries a monitor reports from inside a hidden
 directory are a separate gap, not changed here.)
 
 **These change what you get back:** `SearchResult.TotalMatches` is now the same thing on both engines — the number of

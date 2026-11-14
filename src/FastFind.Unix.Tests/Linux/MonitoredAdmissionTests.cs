@@ -49,6 +49,37 @@ public sealed class MonitoredAdmissionTests : IDisposable
         (await Where(engine, ".secret")).Should().BeEmpty("the pass would have skipped a hidden file");
     }
 
+    [LinuxFact]
+    public async Task A_Change_Beneath_A_Hidden_Directory_Should_Not_Be_Indexed_Though_The_File_Is_Not_Hidden()
+    {
+        // A pass does not enter .cache, so nothing beneath it is read; a file created there is not hidden itself.
+        Directory.CreateDirectory(Path.Combine(_root, ".cache", "objects"));
+        Directory.CreateDirectory(Path.Combine(_root, "src"));
+        File.WriteAllText(Path.Combine(_root, "f0.txt"), "x");
+
+        using var engine = UnixSearchEngine.CreateLinuxSearchEngine();
+        await engine.StartIndexingAsync(new IndexingOptions
+        {
+            SpecificDirectories = { _root },
+            EnableMonitoring = true,
+            IncludeHidden = false,
+            ExcludedExtensions = new List<string>(),
+            ExcludedPaths = new List<string>(),
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        while (engine.IsIndexing) await Task.Delay(20, timeout.Token);
+        await Task.Delay(500); // the watcher is armed once the pass has ended
+
+        File.WriteAllText(Path.Combine(_root, ".cache", "objects", "pack.bin"), "x");
+        File.WriteAllText(Path.Combine(_root, "src", "keep.cs"), "x");
+
+        await WaitUntil(async () => (await Where(engine, "keep.cs")).Count == 1);
+        await Task.Delay(500); // give the other event the same chance to arrive
+
+        (await Where(engine, "keep.cs")).Should().HaveCount(1, "a sibling directory is not hidden");
+        (await Where(engine, "pack.bin")).Should().BeEmpty("the pass would not have entered .cache");
+    }
+
     private async Task<List<string>> Where(Interfaces.ISearchEngine engine, string name)
     {
         var result = await engine.SearchAsync(new SearchQuery { SearchText = name, SearchFileNameOnly = true, BasePath = _root });

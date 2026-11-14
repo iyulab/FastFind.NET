@@ -950,7 +950,14 @@ internal class WindowsSearchEngineImpl : ISearchEngine
             return;
         }
 
-        var outcome = await IndexingAdmission.IndexMonitoredAsync(_searchIndex, item, options, cancellationToken).ConfigureAwait(false);
+        // A pass does not enter a hidden directory below its location, so nothing beneath one belongs to what it indexed.
+        var beneathSkipped = await IndexingAdmission.IsBeneathSkippedDirectoryAsync(
+            item.FullPath, options.GetEffectiveSearchLocations(), options,
+            async (directory, ct) => (await _fileSystemProvider.GetFileInfoAsync(directory, ct).ConfigureAwait(false))?.Attributes,
+            cancellationToken).ConfigureAwait(false);
+
+        var outcome = await IndexingAdmission.IndexMonitoredAsync(
+            _searchIndex, item, options, cancellationToken, beneathSkippedDirectory: beneathSkipped).ConfigureAwait(false);
         if (outcome == MonitoredOutcome.CapReached)
         {
             if (Interlocked.Exchange(ref _monitoringCapLogged, 1) == 0)

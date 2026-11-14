@@ -200,4 +200,89 @@ public class MonitoredChangeAdmissionTests
         await foreach (var item in index.GetByDirectoryAsync(@"C:\scripted", recursive: true)) paths.Add(item.FullPath);
         paths.Should().BeEquivalentTo(@"C:\scripted\a\b\c.txt");
     }
+
+    // A pass does not enter a hidden directory, and so reads nothing beneath it, whatever each entry's own attributes are.
+    // A monitored change looked only at the item: a file created in .git is not hidden itself, and was indexed.
+
+    private static void AddDirectory(ScriptedFileSystemProvider provider, string path, FileAttributes attributes = default) =>
+        provider.OnDisk[path] = ScriptedFileSystemProvider.File(path, FileAttributes.Directory | attributes);
+
+    [Fact]
+    public async Task A_Change_Beneath_A_Hidden_Directory_Should_Not_Be_Indexed_Though_The_File_Is_Not_Hidden()
+    {
+        var provider = Provider(1);
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        await PassAsync(engine, Options(o => o.IncludeHidden = false));
+
+        AddDirectory(provider, @"C:\scripted\.git", FileAttributes.Hidden);
+        AddDirectory(provider, @"C:\scripted\.git\objects");
+        AddDirectory(provider, @"C:\scripted\src");
+        Create(provider, @"C:\scripted\.git\objects\x.pack");
+        Create(provider, @"C:\scripted\src\a.cs");
+        await ReportAsync(engine, provider, Created(@"C:\scripted\.git\objects\x.pack"), Created(@"C:\scripted\src\a.cs"));
+
+        (await index.ContainsAsync(@"C:\scripted\src\a.cs")).Should().BeTrue("a sibling directory is not hidden");
+        (await index.ContainsAsync(@"C:\scripted\.git\objects\x.pack")).Should().BeFalse("a pass would not have entered .git");
+    }
+
+    [Fact]
+    public async Task A_Change_Beneath_A_Hidden_Directory_Should_Be_Indexed_When_Hidden_Files_Are_Included()
+    {
+        var provider = Provider(1);
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        await PassAsync(engine, Options(o => o.IncludeHidden = true));
+
+        AddDirectory(provider, @"C:\scripted\.git", FileAttributes.Hidden);
+        Create(provider, @"C:\scripted\.git\x.pack");
+        await ReportAsync(engine, provider, Created(@"C:\scripted\.git\x.pack"));
+
+        (await index.ContainsAsync(@"C:\scripted\.git\x.pack")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_Hidden_Directory_Above_The_Monitored_Location_Should_Not_Hide_What_Is_Beneath_It()
+    {
+        // The location itself lies under a hidden directory (a temp folder under AppData); a pass starts in the
+        // location and does not look above it.
+        var provider = new ScriptedFileSystemProvider();
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        AddDirectory(provider, @"C:\scripted\AppData", FileAttributes.Hidden);
+        AddDirectory(provider, @"C:\scripted\AppData\Local");
+        await PassAsync(engine, Options(o =>
+        {
+            o.SpecificDirectories.Clear();
+            o.SpecificDirectories.Add(@"C:\scripted\AppData\Local");
+            o.IncludeHidden = false;
+        }));
+
+        Create(provider, @"C:\scripted\AppData\Local\kept.txt");
+        await ReportAsync(engine, provider, Created(@"C:\scripted\AppData\Local\kept.txt"));
+
+        (await index.ContainsAsync(@"C:\scripted\AppData\Local\kept.txt")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_Rename_Into_A_Hidden_Directory_Should_Leave_Neither_Path_In_The_Index()
+    {
+        var provider = Provider(0);
+        AddDirectory(provider, @"C:\scripted\src");
+        AddDirectory(provider, @"C:\scripted\.cache", FileAttributes.Hidden);
+        var original = Create(provider, @"C:\scripted\src\a.cs");
+        provider.Items.Add(original);
+        var (engine, index) = EngineOver(provider);
+        using var _ = engine;
+        await PassAsync(engine, Options(o => o.IncludeHidden = false));
+        (await index.ContainsAsync(@"C:\scripted\src\a.cs")).Should().BeTrue();
+
+        provider.OnDisk.Remove(@"C:\scripted\src\a.cs");
+        Create(provider, @"C:\scripted\.cache\a.cs");
+        await ReportAsync(engine, provider,
+            new FileChangeEventArgs(FileChangeType.Renamed, @"C:\scripted\.cache\a.cs", null, @"C:\scripted\src\a.cs"));
+
+        (await index.ContainsAsync(@"C:\scripted\src\a.cs")).Should().BeFalse();
+        (await index.ContainsAsync(@"C:\scripted\.cache\a.cs")).Should().BeFalse("it is now beneath a hidden directory");
+    }
 }
