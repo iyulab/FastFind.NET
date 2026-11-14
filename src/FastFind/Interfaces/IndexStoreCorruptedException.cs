@@ -2,7 +2,9 @@ namespace FastFind.Interfaces;
 
 /// <summary>
 /// The file an index store was asked to open is not a usable index: it is not a database at all, or it
-/// has been cut short or otherwise damaged.
+/// has been cut short or otherwise damaged. Raised by opening the store, and also by an operation on a store
+/// that was fine when it was opened and has been damaged since (a read, a write or an enumeration that meets
+/// a page that is not what it was).
 /// </summary>
 /// <remarks>
 /// <para>

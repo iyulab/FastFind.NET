@@ -77,6 +77,40 @@ public sealed class SqlitePersistence : IIndexPersistence
     private static bool IsDamage(SqliteException exception) =>
         exception.SqliteErrorCode is SqliteCorrupt or SqliteNotADatabase;
 
+    private IndexStoreCorruptedException Damaged(SqliteException exception) => new(_config.StoragePath, exception);
+
+    /// <summary>
+    /// Maps damage met while an enumeration runs: the enumeration is an iterator, which cannot catch around its own
+    /// <c>yield</c>, so the public method hands out this guard over it.
+    /// </summary>
+    private async IAsyncEnumerable<T> GuardDamage<T>(
+        IAsyncEnumerable<T> source, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await using var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            bool more;
+            try
+            {
+                more = await enumerator.MoveNextAsync();
+            }
+            catch (SqliteException ex) when (IsDamage(ex))
+            {
+                throw Damaged(ex);
+            }
+
+            if (!more)
+                yield break;
+
+            yield return enumerator.Current;
+        }
+    }
+
+    /// <summary>The same mapping for a caller that holds only the persistence, such as a transaction.</summary>
+    internal static bool IsStoreDamage(SqliteException exception) => IsDamage(exception);
+
+    internal IndexStoreCorruptedException StoreDamaged(SqliteException exception) => Damaged(exception);
+
     /// <inheritdoc/>
     /// <exception cref="IndexStoreCorruptedException">
     /// The file at the store's path is not a database, or is damaged.
@@ -89,7 +123,7 @@ public sealed class SqlitePersistence : IIndexPersistence
         }
         catch (SqliteException ex) when (IsDamage(ex))
         {
-            throw new IndexStoreCorruptedException(_config.StoragePath, ex);
+            throw Damaged(ex);
         }
     }
 
@@ -179,7 +213,7 @@ public sealed class SqlitePersistence : IIndexPersistence
         catch (SqliteException ex) when (IsDamage(ex))
         {
             await connection.DisposeAsync();
-            throw new IndexStoreCorruptedException(_config.StoragePath, ex);
+            throw Damaged(ex);
         }
         catch
         {
@@ -293,171 +327,38 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <inheritdoc/>
     public async Task AddAsync(FastFileItem item, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        await using var lease = await LeaseAsync(cancellationToken);
-
-        // The existence check and the upsert decide together whether the count moves, so they have
-        // to be one atomic step: two concurrent adds of the same path would otherwise both read
-        // "absent" and both increment, leaving the count above the number of rows. The transaction
-        // is IMMEDIATE, so it takes the write lock before the check rather than after. Inside a
-        // caller's transaction that atomicity is already theirs.
-        var transaction = lease.IsAmbient
-            ? null
-            : (SqliteTransaction)await lease.Connection.BeginTransactionAsync(cancellationToken);
-
         try
         {
-            var existsBefore = await ExistsAsync(lease.Connection, item.FullPath, cancellationToken);
+            ThrowIfDisposed();
+            EnsureReady();
 
-            await using (var cmd = CreateInsertCommand(lease.Connection, item))
-            {
-                await cmd.ExecuteNonQueryAsync(cancellationToken);
-            }
-
-            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-
-            // Only increment count for actual INSERT, not UPDATE (UPSERT)
-            if (!existsBefore)
-            {
-                Interlocked.Increment(ref _count);
-            }
-        }
-        catch
-        {
-            if (transaction is not null)
-            {
-                try { await transaction.RollbackAsync(cancellationToken); } catch { /* ignore */ }
-            }
-            throw;
-        }
-        finally
-        {
-            if (transaction is not null) await transaction.DisposeAsync();
-        }
-    }
-
-    /// <inheritdoc/>
-    public async Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        var itemList = items as IList<FastFileItem> ?? items.ToList();
-        if (itemList.Count == 0) return 0;
-
-        // Use optimized bulk insert for large batches
-        if (itemList.Count >= 100)
-        {
-            return await AddBulkOptimizedAsync(itemList, cancellationToken);
-        }
-
-        // Standard batch insert for smaller batches
-        var count = 0;
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
-
-        try
-        {
-            // Reuse command with parameters for efficiency
-            await using var cmd = lease.Connection.CreateCommand();
-            cmd.CommandText = SqliteSchema.InsertFile;
-            cmd.Transaction = (SqliteTransaction)transaction;
-
-            var fullPathParam = cmd.Parameters.Add("@full_path", SqliteType.Text);
-            var nameParam = cmd.Parameters.Add("@name", SqliteType.Text);
-            var dirPathParam = cmd.Parameters.Add("@directory_path", SqliteType.Text);
-            var extParam = cmd.Parameters.Add("@extension", SqliteType.Text);
-            var sizeParam = cmd.Parameters.Add("@size", SqliteType.Integer);
-            var createdParam = cmd.Parameters.Add("@created_time", SqliteType.Integer);
-            var modifiedParam = cmd.Parameters.Add("@modified_time", SqliteType.Integer);
-            var accessedParam = cmd.Parameters.Add("@accessed_time", SqliteType.Integer);
-            var attrsParam = cmd.Parameters.Add("@attributes", SqliteType.Integer);
-            var driveParam = cmd.Parameters.Add("@drive_letter", SqliteType.Text);
-            var isDirParam = cmd.Parameters.Add("@is_directory", SqliteType.Integer);
-
-            foreach (var item in itemList)
-            {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                fullPathParam.Value = NormalizePath(item.FullPath);
-                nameParam.Value = item.Name;
-                dirPathParam.Value = NormalizePath(item.DirectoryPath);
-                extParam.Value = item.Extension;
-                sizeParam.Value = item.Size;
-                createdParam.Value = new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds();
-                modifiedParam.Value = new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds();
-                accessedParam.Value = new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds();
-                attrsParam.Value = (int)item.Attributes;
-                driveParam.Value = item.DriveLetter.ToString();
-                isDirParam.Value = item.IsDirectory ? 1 : 0;
-
-                await cmd.ExecuteNonQueryAsync(cancellationToken);
-                count++;
-            }
-
-            await transaction.CommitAsync(cancellationToken);
-
-            // Refresh count from DB to accurately reflect UPSERT behavior
-            Interlocked.Exchange(ref _count, await GetCountFromDbAsync(lease.Connection, cancellationToken));
-
-            _logger?.LogDebug("Batch inserted {Count} items", count);
-            return count;
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// High-performance bulk insert for MFT-level throughput (100K+ items)
-    /// Uses multi-value INSERT statements and optimized PRAGMA settings.
-    /// </summary>
-    public async Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        if (items.Count == 0) return 0;
-
-        const int batchSize = 500; // SQLite max variables / 11 params per row
-        var totalInserted = 0;
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-        // One connection for the whole bulk window. The transaction, the batch inserts and the
-        // bulk PRAGMAs all have to run on the same connection: a PRAGMA applies to the connection
-        // that issued it, and a statement outside the connection holding the transaction is not
-        // covered by it.
-        await _bulkOperationLock.WaitAsync(cancellationToken);
-        try
-        {
             await using var lease = await LeaseAsync(cancellationToken);
-            var connection = lease.Connection;
 
-            // Apply bulk loading optimizations
-            await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
-
-            // Insert data in transaction. Inside a caller's transaction the batches join it rather
-            // than opening a nested one, which SQLite does not support.
+            // The existence check and the upsert decide together whether the count moves, so they have
+            // to be one atomic step: two concurrent adds of the same path would otherwise both read
+            // "absent" and both increment, leaving the count above the number of rows. The transaction
+            // is IMMEDIATE, so it takes the write lock before the check rather than after. Inside a
+            // caller's transaction that atomicity is already theirs.
             var transaction = lease.IsAmbient
                 ? null
-                : (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+                : (SqliteTransaction)await lease.Connection.BeginTransactionAsync(cancellationToken);
 
             try
             {
-                for (var i = 0; i < items.Count; i += batchSize)
-                {
-                    if (cancellationToken.IsCancellationRequested) break;
+                var existsBefore = await ExistsAsync(lease.Connection, item.FullPath, cancellationToken);
 
-                    var batch = items.Skip(i).Take(batchSize).ToList();
-                    var inserted = await InsertBatchMultiValueAsync(connection, batch, transaction, cancellationToken);
-                    totalInserted += inserted;
+                await using (var cmd = CreateInsertCommand(lease.Connection, item))
+                {
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
 
                 if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+
+                // Only increment count for actual INSERT, not UPDATE (UPSERT)
+                if (!existsBefore)
+                {
+                    Interlocked.Increment(ref _count);
+                }
             }
             catch
             {
@@ -471,21 +372,175 @@ public sealed class SqlitePersistence : IIndexPersistence
             {
                 if (transaction is not null) await transaction.DisposeAsync();
             }
-
-            // Refresh count from DB to accurately reflect UPSERT behavior
-            Interlocked.Exchange(ref _count, await GetCountFromDbAsync(connection, cancellationToken));
-
-            stopwatch.Stop();
-            var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
-            _logger?.LogInformation(
-                "Bulk inserted {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
-                totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
-
-            return totalInserted;
         }
-        finally
+        catch (SqliteException ex) when (IsDamage(ex))
         {
-            _bulkOperationLock.Release();
+            throw Damaged(ex);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> AddBatchAsync(IEnumerable<FastFileItem> items, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
+
+            var itemList = items as IList<FastFileItem> ?? items.ToList();
+            if (itemList.Count == 0) return 0;
+
+            // Use optimized bulk insert for large batches
+            if (itemList.Count >= 100)
+            {
+                return await AddBulkOptimizedAsync(itemList, cancellationToken);
+            }
+
+            // Standard batch insert for smaller batches
+            var count = 0;
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
+
+            try
+            {
+                // Reuse command with parameters for efficiency
+                await using var cmd = lease.Connection.CreateCommand();
+                cmd.CommandText = SqliteSchema.InsertFile;
+                cmd.Transaction = (SqliteTransaction)transaction;
+
+                var fullPathParam = cmd.Parameters.Add("@full_path", SqliteType.Text);
+                var nameParam = cmd.Parameters.Add("@name", SqliteType.Text);
+                var dirPathParam = cmd.Parameters.Add("@directory_path", SqliteType.Text);
+                var extParam = cmd.Parameters.Add("@extension", SqliteType.Text);
+                var sizeParam = cmd.Parameters.Add("@size", SqliteType.Integer);
+                var createdParam = cmd.Parameters.Add("@created_time", SqliteType.Integer);
+                var modifiedParam = cmd.Parameters.Add("@modified_time", SqliteType.Integer);
+                var accessedParam = cmd.Parameters.Add("@accessed_time", SqliteType.Integer);
+                var attrsParam = cmd.Parameters.Add("@attributes", SqliteType.Integer);
+                var driveParam = cmd.Parameters.Add("@drive_letter", SqliteType.Text);
+                var isDirParam = cmd.Parameters.Add("@is_directory", SqliteType.Integer);
+
+                foreach (var item in itemList)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    fullPathParam.Value = NormalizePath(item.FullPath);
+                    nameParam.Value = item.Name;
+                    dirPathParam.Value = NormalizePath(item.DirectoryPath);
+                    extParam.Value = item.Extension;
+                    sizeParam.Value = item.Size;
+                    createdParam.Value = new DateTimeOffset(item.CreatedTime).ToUnixTimeSeconds();
+                    modifiedParam.Value = new DateTimeOffset(item.ModifiedTime).ToUnixTimeSeconds();
+                    accessedParam.Value = new DateTimeOffset(item.AccessedTime).ToUnixTimeSeconds();
+                    attrsParam.Value = (int)item.Attributes;
+                    driveParam.Value = item.DriveLetter.ToString();
+                    isDirParam.Value = item.IsDirectory ? 1 : 0;
+
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    count++;
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+
+                // Refresh count from DB to accurately reflect UPSERT behavior
+                Interlocked.Exchange(ref _count, await GetCountFromDbAsync(lease.Connection, cancellationToken));
+
+                _logger?.LogDebug("Batch inserted {Count} items", count);
+                return count;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
+    }
+
+    /// <summary>
+    /// High-performance bulk insert for MFT-level throughput (100K+ items)
+    /// Uses multi-value INSERT statements and optimized PRAGMA settings.
+    /// </summary>
+    public async Task<int> AddBulkOptimizedAsync(IList<FastFileItem> items, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
+
+            if (items.Count == 0) return 0;
+
+            const int batchSize = 500; // SQLite max variables / 11 params per row
+            var totalInserted = 0;
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            // One connection for the whole bulk window. The transaction, the batch inserts and the
+            // bulk PRAGMAs all have to run on the same connection: a PRAGMA applies to the connection
+            // that issued it, and a statement outside the connection holding the transaction is not
+            // covered by it.
+            await _bulkOperationLock.WaitAsync(cancellationToken);
+            try
+            {
+                await using var lease = await LeaseAsync(cancellationToken);
+                var connection = lease.Connection;
+
+                // Apply bulk loading optimizations
+                await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
+
+                // Insert data in transaction. Inside a caller's transaction the batches join it rather
+                // than opening a nested one, which SQLite does not support.
+                var transaction = lease.IsAmbient
+                    ? null
+                    : (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+                try
+                {
+                    for (var i = 0; i < items.Count; i += batchSize)
+                    {
+                        if (cancellationToken.IsCancellationRequested) break;
+
+                        var batch = items.Skip(i).Take(batchSize).ToList();
+                        var inserted = await InsertBatchMultiValueAsync(connection, batch, transaction, cancellationToken);
+                        totalInserted += inserted;
+                    }
+
+                    if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+                }
+                catch
+                {
+                    if (transaction is not null)
+                    {
+                        try { await transaction.RollbackAsync(cancellationToken); } catch { /* ignore */ }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (transaction is not null) await transaction.DisposeAsync();
+                }
+
+                // Refresh count from DB to accurately reflect UPSERT behavior
+                Interlocked.Exchange(ref _count, await GetCountFromDbAsync(connection, cancellationToken));
+
+                stopwatch.Stop();
+                var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
+                _logger?.LogInformation(
+                    "Bulk inserted {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
+                    totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
+
+                return totalInserted;
+            }
+            finally
+            {
+                _bulkOperationLock.Release();
+            }
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
         }
     }
 
@@ -553,59 +608,66 @@ public sealed class SqlitePersistence : IIndexPersistence
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        var buffer = new List<FastFileItem>(bufferSize);
-        var totalInserted = 0;
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-        // Like AddBulkOptimizedAsync, this is a bulk write window: one connection for its whole
-        // duration, and serialised against other bulk writers so they queue rather than contend.
-        await _bulkOperationLock.WaitAsync(cancellationToken);
         try
         {
-            await using var lease = await LeaseAsync(cancellationToken);
-            var connection = lease.Connection;
+            ThrowIfDisposed();
+            EnsureReady();
 
-            // Apply bulk loading optimizations
-            await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
+            var buffer = new List<FastFileItem>(bufferSize);
+            var totalInserted = 0;
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            // Stream and insert data
-            await foreach (var item in items.WithCancellation(cancellationToken))
+            // Like AddBulkOptimizedAsync, this is a bulk write window: one connection for its whole
+            // duration, and serialised against other bulk writers so they queue rather than contend.
+            await _bulkOperationLock.WaitAsync(cancellationToken);
+            try
             {
-                buffer.Add(item);
+                await using var lease = await LeaseAsync(cancellationToken);
+                var connection = lease.Connection;
 
-                if (buffer.Count >= bufferSize)
+                // Apply bulk loading optimizations
+                await ExecuteNonQueryAsync(connection, SqliteSchema.BulkLoadPragmas, cancellationToken);
+
+                // Stream and insert data
+                await foreach (var item in items.WithCancellation(cancellationToken))
+                {
+                    buffer.Add(item);
+
+                    if (buffer.Count >= bufferSize)
+                    {
+                        var inserted = await FlushBufferAsync(connection, lease.IsAmbient, buffer, cancellationToken);
+                        totalInserted += inserted;
+                        progress?.Report(totalInserted);
+                        buffer.Clear();
+                    }
+                }
+
+                // Flush remaining items
+                if (buffer.Count > 0)
                 {
                     var inserted = await FlushBufferAsync(connection, lease.IsAmbient, buffer, cancellationToken);
                     totalInserted += inserted;
                     progress?.Report(totalInserted);
-                    buffer.Clear();
                 }
-            }
 
-            // Flush remaining items
-            if (buffer.Count > 0)
+                Interlocked.Add(ref _count, totalInserted);
+
+                stopwatch.Stop();
+                var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
+                _logger?.LogInformation(
+                    "Stream insert completed: {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
+                    totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
+
+                return totalInserted;
+            }
+            finally
             {
-                var inserted = await FlushBufferAsync(connection, lease.IsAmbient, buffer, cancellationToken);
-                totalInserted += inserted;
-                progress?.Report(totalInserted);
+                _bulkOperationLock.Release();
             }
-
-            Interlocked.Add(ref _count, totalInserted);
-
-            stopwatch.Stop();
-            var rate = totalInserted / stopwatch.Elapsed.TotalSeconds;
-            _logger?.LogInformation(
-                "Stream insert completed: {Count:N0} items in {Time:F2}s ({Rate:N0} items/sec)",
-                totalInserted, stopwatch.Elapsed.TotalSeconds, rate);
-
-            return totalInserted;
         }
-        finally
+        catch (SqliteException ex) when (IsDamage(ex))
         {
-            _bulkOperationLock.Release();
+            throw Damaged(ex);
         }
     }
 
@@ -650,99 +712,134 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <inheritdoc/>
     public async Task<bool> RemoveAsync(string fullPath, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var cmd = lease.Connection.CreateCommand();
-        cmd.CommandText = SqliteSchema.DeleteFile;
-        cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
-
-        var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        if (affected > 0)
+        try
         {
-            Interlocked.Decrement(ref _count);
-            return true;
+            ThrowIfDisposed();
+            EnsureReady();
+
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = SqliteSchema.DeleteFile;
+            cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
+
+            var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            if (affected > 0)
+            {
+                Interlocked.Decrement(ref _count);
+                return true;
+            }
+            return false;
         }
-        return false;
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
     public async Task<int> RemoveBatchAsync(IEnumerable<string> fullPaths, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        var count = 0;
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
-
         try
         {
-            await using var cmd = lease.Connection.CreateCommand();
-            cmd.CommandText = SqliteSchema.DeleteFile;
-            cmd.Transaction = (SqliteTransaction)transaction;
-            var param = cmd.Parameters.Add("@full_path", SqliteType.Text);
+            ThrowIfDisposed();
+            EnsureReady();
 
-            foreach (var path in fullPaths)
+            var count = 0;
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var transaction = await lease.Connection.BeginTransactionAsync(cancellationToken);
+
+            try
             {
-                if (cancellationToken.IsCancellationRequested) break;
+                await using var cmd = lease.Connection.CreateCommand();
+                cmd.CommandText = SqliteSchema.DeleteFile;
+                cmd.Transaction = (SqliteTransaction)transaction;
+                var param = cmd.Parameters.Add("@full_path", SqliteType.Text);
 
-                param.Value = NormalizePath(path);
-                var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
-                if (affected > 0) count++;
+                foreach (var path in fullPaths)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    param.Value = NormalizePath(path);
+                    var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    if (affected > 0) count++;
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+                Interlocked.Add(ref _count, -count);
+                return count;
             }
-
-            await transaction.CommitAsync(cancellationToken);
-            Interlocked.Add(ref _count, -count);
-            return count;
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
         }
-        catch
+        catch (SqliteException ex) when (IsDamage(ex))
         {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
+            throw Damaged(ex);
         }
     }
 
     /// <inheritdoc/>
     public async Task<bool> UpdateAsync(FastFileItem item, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
 
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var cmd = CreateInsertCommand(lease.Connection, item);
-        var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        return affected > 0;
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var cmd = CreateInsertCommand(lease.Connection, item);
+            var affected = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            return affected > 0;
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
     public async Task<FastFileItem?> GetAsync(string fullPath, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var cmd = lease.Connection.CreateCommand();
-        cmd.CommandText = SqliteSchema.GetByPath;
-        cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
-
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
+        try
         {
-            return ReadFileItem(reader);
+            ThrowIfDisposed();
+            EnsureReady();
+
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = SqliteSchema.GetByPath;
+            cmd.Parameters.AddWithValue("@full_path", NormalizePath(fullPath));
+
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return ReadFileItem(reader);
+            }
+            return null;
         }
-        return null;
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
     public async Task<bool> ExistsAsync(string fullPath, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
 
-        await using var lease = await LeaseAsync(cancellationToken);
-        return await ExistsAsync(lease.Connection, fullPath, cancellationToken);
+            await using var lease = await LeaseAsync(cancellationToken);
+            return await ExistsAsync(lease.Connection, fullPath, cancellationToken);
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     private static async Task<bool> ExistsAsync(SqliteConnection connection, string fullPath, CancellationToken cancellationToken)
@@ -756,7 +853,10 @@ public sealed class SqlitePersistence : IIndexPersistence
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<FastFileItem> SearchAsync(SearchQuery query, CancellationToken cancellationToken = default) =>
+        GuardDamage(SearchCoreAsync(query, cancellationToken), cancellationToken);
+
+    private async IAsyncEnumerable<FastFileItem> SearchCoreAsync(SearchQuery query, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         EnsureReady();
@@ -871,7 +971,10 @@ public sealed class SqlitePersistence : IIndexPersistence
         return true;
     }
     /// <inheritdoc/>
-    public async IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<FastFileItem> GetByDirectoryAsync(string directoryPath, bool recursive = false, CancellationToken cancellationToken = default) =>
+        GuardDamage(GetByDirectoryCoreAsync(directoryPath, recursive, cancellationToken), cancellationToken);
+
+    private async IAsyncEnumerable<FastFileItem> GetByDirectoryCoreAsync(string directoryPath, bool recursive = false, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         EnsureReady();
@@ -903,7 +1006,10 @@ public sealed class SqlitePersistence : IIndexPersistence
     }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<FastFileItem> GetByExtensionAsync(string extension, CancellationToken cancellationToken = default) =>
+        GuardDamage(GetByExtensionCoreAsync(extension, cancellationToken), cancellationToken);
+
+    private async IAsyncEnumerable<FastFileItem> GetByExtensionCoreAsync(string extension, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         EnsureReady();
@@ -926,69 +1032,90 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <inheritdoc/>
     public async Task ClearAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
 
-        await using var lease = await LeaseAsync(cancellationToken);
-        await ExecuteNonQueryAsync(lease.Connection, $"DELETE FROM files; UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1;", cancellationToken);
+            await using var lease = await LeaseAsync(cancellationToken);
+            await ExecuteNonQueryAsync(lease.Connection, $"DELETE FROM files; UPDATE statistics SET total_items = 0, total_files = 0, total_directories = 0, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1;", cancellationToken);
 
-        _count = 0;
-        _logger?.LogInformation("Cleared all items from persistence");
+            _count = 0;
+            _logger?.LogInformation("Cleared all items from persistence");
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
     public async Task OptimizeAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
 
-        _logger?.LogInformation("Starting optimization...");
+            _logger?.LogInformation("Starting optimization...");
 
-        await using var lease = await LeaseAsync(cancellationToken);
+            await using var lease = await LeaseAsync(cancellationToken);
 
-        // Analyze tables for query optimization
-        await ExecuteNonQueryAsync(lease.Connection, "ANALYZE;", cancellationToken);
+            // Analyze tables for query optimization
+            await ExecuteNonQueryAsync(lease.Connection, "ANALYZE;", cancellationToken);
 
-        await ExecuteNonQueryAsync(
-            lease.Connection,
-            $"UPDATE statistics SET last_optimized = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
-            cancellationToken);
+            await ExecuteNonQueryAsync(
+                lease.Connection,
+                $"UPDATE statistics SET last_optimized = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
+                cancellationToken);
 
-        _logger?.LogInformation("Optimization complete");
+            _logger?.LogInformation("Optimization complete");
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
     public async Task<PersistenceStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
-
-        await using var lease = await LeaseAsync(cancellationToken);
-        await using var cmd = lease.Connection.CreateCommand();
-        cmd.CommandText = SqliteSchema.GetStatistics;
-
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-
-        if (await reader.ReadAsync(cancellationToken))
+        try
         {
-            var fileInfo = new FileInfo(_config.StoragePath);
+            ThrowIfDisposed();
+            EnsureReady();
+
+            await using var lease = await LeaseAsync(cancellationToken);
+            await using var cmd = lease.Connection.CreateCommand();
+            cmd.CommandText = SqliteSchema.GetStatistics;
+
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var fileInfo = new FileInfo(_config.StoragePath);
+                return new PersistenceStatistics
+                {
+                    TotalItems = reader.GetInt64(0),
+                    TotalFiles = reader.GetInt64(1),
+                    TotalDirectories = reader.GetInt64(2),
+                    UniqueExtensions = reader.GetInt32(3),
+                    StorageSizeBytes = fileInfo.Exists ? fileInfo.Length : 0
+                };
+            }
+
             return new PersistenceStatistics
             {
-                TotalItems = reader.GetInt64(0),
-                TotalFiles = reader.GetInt64(1),
-                TotalDirectories = reader.GetInt64(2),
-                UniqueExtensions = reader.GetInt32(3),
-                StorageSizeBytes = fileInfo.Exists ? fileInfo.Length : 0
+                TotalItems = 0,
+                TotalFiles = 0,
+                TotalDirectories = 0,
+                StorageSizeBytes = 0
             };
         }
-
-        return new PersistenceStatistics
+        catch (SqliteException ex) when (IsDamage(ex))
         {
-            TotalItems = 0,
-            TotalFiles = 0,
-            TotalDirectories = 0,
-            StorageSizeBytes = 0
-        };
+            throw Damaged(ex);
+        }
     }
 
     /// <inheritdoc/>
@@ -1038,21 +1165,28 @@ public sealed class SqlitePersistence : IIndexPersistence
     /// <inheritdoc/>
     public async Task VacuumAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureReady();
+        try
+        {
+            ThrowIfDisposed();
+            EnsureReady();
 
-        _logger?.LogInformation("Starting VACUUM...");
+            _logger?.LogInformation("Starting VACUUM...");
 
-        await using var lease = await LeaseAsync(cancellationToken);
+            await using var lease = await LeaseAsync(cancellationToken);
 
-        await ExecuteNonQueryAsync(lease.Connection, "VACUUM;", cancellationToken);
+            await ExecuteNonQueryAsync(lease.Connection, "VACUUM;", cancellationToken);
 
-        await ExecuteNonQueryAsync(
-            lease.Connection,
-            $"UPDATE statistics SET last_vacuumed = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
-            cancellationToken);
+            await ExecuteNonQueryAsync(
+                lease.Connection,
+                $"UPDATE statistics SET last_vacuumed = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}, updated_at = {DateTimeOffset.UtcNow.ToUnixTimeSeconds()} WHERE id = 1",
+                cancellationToken);
 
-        _logger?.LogInformation("VACUUM complete");
+            _logger?.LogInformation("VACUUM complete");
+        }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            throw Damaged(ex);
+        }
     }
 
     private static SqliteCommand CreateInsertCommand(SqliteConnection connection, FastFileItem item)
@@ -1230,7 +1364,14 @@ internal sealed class SqliteIndexTransaction : IIndexTransaction
     public async Task CommitAsync(CancellationToken cancellationToken = default)
     {
         if (_completed) return;
-        await _transaction.CommitAsync(cancellationToken);
+        try
+        {
+            await _transaction.CommitAsync(cancellationToken);
+        }
+        catch (SqliteException ex) when (SqlitePersistence.IsStoreDamage(ex))
+        {
+            throw _persistence.StoreDamaged(ex);
+        }
         Complete();
         // Refresh count from DB to ensure accuracy after commit
         await _persistence.RefreshCountAsync(cancellationToken);

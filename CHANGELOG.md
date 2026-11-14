@@ -21,6 +21,12 @@ and with the first it reads each entry as the walk does anyway. Entries of a pas
 as the journal pass's always did, so an index is the same whichever pass produced an entry. `ProviderMode.Mft` and
 `ProviderMode.Standard` are forced as before, and monitoring still uses the change journal.
 
+**Damage met after a store is open is `IndexStoreCorruptedException` too.** Only opening a store mapped a damaged file; a read,
+write or enumeration on an open store whose file had been damaged since raised the driver's own exception (`SQLITE_CORRUPT`,
+`SQLITE_NOTADB`), which a caller of `IIndexPersistence` could not catch without referencing the driver and whose message said nothing
+of what to do. The operations of the SQLite store, the enumerations while they run, and a transaction's commit now raise the same
+exception with the store's path and the driver's exception inside; a refused write, a lock or a cancellation stay what they were.
+
 **A change a monitor reports from inside a hidden directory is no longer indexed (both engines).** An indexing pass does not enter a
 hidden directory (or, with system files off, a system one), so it reads nothing beneath it; a monitored creation looked only at the
 changed file's own attributes, so a file created in `.git` (which is not hidden itself) was added to the index, and a file renamed into
