@@ -22,6 +22,10 @@ public class Program
         // sizes and a handful of queries timed against each, in a process of its own per configuration.
         if (Infrastructure.QueryLatencyMeasurement.TryHandle(args)) return;
 
+        // Which enumeration is faster for a scoped location is a wall-clock measurement of a whole pass,
+        // run against real folders; BenchmarkDotNet's repeated micro-iterations do not fit it.
+        if (Infrastructure.ScopedIndexingMeasurement.TryHandle(args)) return;
+
         // Ensure Windows factory is registered
         if (OperatingSystem.IsWindows())
         {
