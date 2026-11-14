@@ -41,6 +41,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   created or modified file with no check, so excluded extensions, hidden files and `MaxFileCount` held only
   during the pass. It now goes through the same admission and cap as the Windows engine, and an entry that
   stops being admissible leaves the index.
+- **On macOS a search scoped to a folder spelled in the other Unicode normalization form found nothing.** APFS
+  treats a name in form C and the same name in form D as one name, and a Finder-created folder is decomposed
+  where a shell-created one is not, so a `BasePath`, `SearchLocations` entry or `ExcludedPaths` entry spelled one
+  way matched nothing indexed the other way, and a name query typed in one form missed a name stored in the
+  other, with no error. Path and name comparison now reads both sides in form C **on macOS only** (on Linux
+  and Windows the two spellings are two names and stay so); stored paths are never rewritten, and a wildcard
+  pattern is built in form C. A regular expression you write is matched as written, against a composed name.
 - **A change the engine could not apply was logged at `Debug`.** It is now a `Warning` naming the change type
   and path, so a consumer at its default log level can see that the index may disagree with the file system.
 

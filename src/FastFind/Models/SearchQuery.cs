@@ -169,7 +169,9 @@ public class SearchQuery
         try
         {
             // Escape special regex characters except * and ?
-            var escaped = Regex.Escape(SearchText);
+            // macOS compares names in normalization form C (SearchQueryEvaluator), so the pattern is built in it.
+            var text = PathExclusion.FoldsNormalization ? SearchText.Normalize(System.Text.NormalizationForm.FormC) : SearchText;
+            var escaped = Regex.Escape(text);
             // Convert wildcards to regex
             var pattern = escaped.Replace(@"\*", ".*").Replace(@"\?", ".");
             

@@ -121,9 +121,22 @@ internal sealed class FileEntryTable
     /// <summary>Entries directly inside <paramref name="directory"/>.</summary>
     public IEnumerable<FastFileItem> InDirectory(string directory)
     {
-        return _directoryLookup.TryGetValue(TrimTrailingSeparators(directory), out var entries)
-            ? Values(entries)
-            : [];
+        var key = TrimTrailingSeparators(directory);
+        if (_directoryLookup.TryGetValue(key, out var entries)) return Values(entries);
+
+        // macOS keeps a directory under the spelling the file system gave it, composed or decomposed, and
+        // names both as one directory; the lookup is by exact key, so try the other spelling of the same name.
+        if (OperatingSystem.IsMacOS() && !System.Text.Ascii.IsValid(key))
+        {
+            var text = key.ToString();
+            foreach (var form in new[] { System.Text.NormalizationForm.FormC, System.Text.NormalizationForm.FormD })
+            {
+                var other = text.Normalize(form);
+                if (other != text && _directoryLookup.TryGetValue(other, out entries)) return Values(entries);
+            }
+        }
+
+        return [];
     }
 
     private static IEnumerable<FastFileItem> Values(ConcurrentDictionary<string, FastFileItem> entries)

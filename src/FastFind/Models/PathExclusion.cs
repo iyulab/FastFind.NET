@@ -34,6 +34,22 @@ public static class PathExclusion
     private static readonly bool FoldsSeparatorsAndCase = OperatingSystem.IsWindows();
 
     /// <summary>
+    /// macOS only: the file system treats a name spelled in Unicode normalization form C and the same name in
+    /// form D as one name (a Finder-created <c>문서</c> is decomposed, a shell-created one is not), so a path
+    /// compared as text would miss the folder the caller means. Elsewhere the two spellings are two names.
+    /// </summary>
+    internal static readonly bool FoldsNormalization = OperatingSystem.IsMacOS();
+
+    /// <summary>
+    /// Whether either text is not in normalization form C — the only case in which folding changes an answer.
+    /// ASCII is always form C, so the common path allocates nothing.
+    /// </summary>
+    private static bool NeedsFolding(ReadOnlySpan<char> left, ReadOnlySpan<char> right) =>
+        !left.IsNormalized(System.Text.NormalizationForm.FormC) || !right.IsNormalized(System.Text.NormalizationForm.FormC);
+
+    private static string Canonical(ReadOnlySpan<char> text) => text.ToString().Normalize(System.Text.NormalizationForm.FormC);
+
+    /// <summary>
     /// Whether <paramref name="path"/> is excluded by any of <paramref name="excludedPaths"/>.
     /// </summary>
     public static bool IsExcluded(string path, IList<string> excludedPaths) =>
@@ -56,13 +72,19 @@ public static class PathExclusion
     /// Whether <paramref name="path"/> is excluded by the single entry
     /// <paramref name="excludedPath"/>.
     /// </summary>
-    public static bool Matches(ReadOnlySpan<char> path, ReadOnlySpan<char> excludedPath)
+    public static bool Matches(ReadOnlySpan<char> path, ReadOnlySpan<char> excludedPath) =>
+        Matches(path, excludedPath, FoldsNormalization);
+
+    internal static bool Matches(ReadOnlySpan<char> path, ReadOnlySpan<char> excludedPath, bool foldNormalization)
     {
         if (path.IsEmpty || excludedPath.IsEmpty || excludedPath.IsWhiteSpace()) return false;
 
+        if (foldNormalization && NeedsFolding(path, excludedPath))
+            return Matches(Canonical(path), Canonical(excludedPath), foldNormalization: false);
+
         if (Path.IsPathFullyQualified(excludedPath))
         {
-            return IsAtOrUnder(path, excludedPath);
+            return IsAtOrUnder(path, excludedPath, foldNormalization: false);
         }
 
         var run = TrimSeparators(excludedPath);
@@ -76,8 +98,14 @@ public static class PathExclusion
     /// An empty <paramref name="scopeRoot"/> is the file system root itself, so every rooted path is
     /// under it. Both are compared as the host spells paths; neither is rewritten.
     /// </remarks>
-    internal static bool IsAtOrUnder(ReadOnlySpan<char> path, ReadOnlySpan<char> scopeRoot)
+    internal static bool IsAtOrUnder(ReadOnlySpan<char> path, ReadOnlySpan<char> scopeRoot) =>
+        IsAtOrUnder(path, scopeRoot, FoldsNormalization);
+
+    internal static bool IsAtOrUnder(ReadOnlySpan<char> path, ReadOnlySpan<char> scopeRoot, bool foldNormalization)
     {
+        if (foldNormalization && NeedsFolding(path, scopeRoot))
+            return IsAtOrUnder(Canonical(path), Canonical(scopeRoot), foldNormalization: false);
+
         var subject = TrimTrailingSeparators(path);
         var root = TrimTrailingSeparators(scopeRoot);
 
@@ -92,7 +120,15 @@ public static class PathExclusion
     /// Whether two paths name the same location, ignoring a trailing separator.
     /// </summary>
     internal static bool SamePath(ReadOnlySpan<char> left, ReadOnlySpan<char> right) =>
-        PathEquals(TrimTrailingSeparators(left), TrimTrailingSeparators(right));
+        SamePath(left, right, FoldsNormalization);
+
+    internal static bool SamePath(ReadOnlySpan<char> left, ReadOnlySpan<char> right, bool foldNormalization)
+    {
+        if (foldNormalization && NeedsFolding(left, right))
+            return SamePath(Canonical(left), Canonical(right), foldNormalization: false);
+
+        return PathEquals(TrimTrailingSeparators(left), TrimTrailingSeparators(right));
+    }
 
     /// <summary>
     /// Whether <paramref name="path"/> contains <paramref name="run"/> as a run of whole segments.

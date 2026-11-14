@@ -214,8 +214,25 @@ public static class SearchQueryEvaluator
             static (path, state) => MatchesText(path, state.searchText, state.CaseSensitive, state.textMatcher));
     }
 
-    private static bool MatchesText(ReadOnlySpan<char> target, string searchText, bool caseSensitive, Regex? textMatcher)
+    private static bool MatchesText(ReadOnlySpan<char> target, string searchText, bool caseSensitive, Regex? textMatcher) =>
+        MatchesText(target, searchText, caseSensitive, textMatcher, PathExclusion.FoldsNormalization);
+
+    /// <remarks>
+    /// On macOS a name is the same name spelled decomposed (Finder) or composed (a shell); both the target and the
+    /// text are read in form C, and a wildcard pattern is built in form C too (<see cref="SearchQuery.GetWildcardRegex"/>).
+    /// A regular expression the caller wrote is theirs and is matched as written, against a composed target.
+    /// </remarks>
+    internal static bool MatchesText(ReadOnlySpan<char> target, string searchText, bool caseSensitive, Regex? textMatcher, bool foldNormalization)
     {
+        if (foldNormalization
+            && (!target.IsNormalized(System.Text.NormalizationForm.FormC) || !searchText.IsNormalized(System.Text.NormalizationForm.FormC)))
+        {
+            return MatchesText(
+                target.ToString().Normalize(System.Text.NormalizationForm.FormC),
+                searchText.Normalize(System.Text.NormalizationForm.FormC),
+                caseSensitive, textMatcher, foldNormalization: false);
+        }
+
         if (textMatcher is not null) return textMatcher.IsMatch(target);
 
         if (caseSensitive) return target.Contains(searchText.AsSpan(), StringComparison.Ordinal);
